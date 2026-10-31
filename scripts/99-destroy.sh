@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/lib.sh"
 
-for c in $CLUSTERS; do
+# Yalnızca aktif olanlar değil, clusters/ altında tanımlı tüm cluster'lar (ör. kapalı cluster-b)
+for f in "$ROOT_DIR"/clusters/*.yaml; do
+  c=$(basename "$f" .yaml)
+  kind get clusters 2>/dev/null | grep -qx "$c" || [[ -n "$(docker ps -aq --filter "label=io.x-k8s.kind.cluster=$c")" ]] || continue
   log "Siliniyor: $c"
   kind delete cluster --name "$c" || true
   # Docker Desktop bazen container'ı zamanında durduramıyor ("did not receive an exit event");

@@ -1,0 +1,17 @@
+# Yalnızca cluster-b aktifken uygulanır; loadgen'e api-b'yi ekler.
+# 40-loadgen.yaml'dan önce uygulanması için 39 numaralı.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: loadgen
+  labels:
+    zone: dmz
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen-targets
+  namespace: loadgen
+data:
+  LOADGEN_HOSTS: "api-a.apps.example.local api-b.apps.example.local"

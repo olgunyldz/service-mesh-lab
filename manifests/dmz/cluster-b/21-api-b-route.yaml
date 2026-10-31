@@ -1,0 +1,18 @@
+# Yalnızca cluster-b aktifken uygulanır (bkz. scripts/06-deploy-manifests.sh).
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: api-b
+  namespace: istio-ingress
+spec:
+  hosts:
+    - api-b.apps.example.local
+  gateways:
+    - public-gateway
+  http:
+    - route:
+        - destination:
+            host: cluster-b.internal.mesh
+            port:
+              number: 443
+      timeout: 10s

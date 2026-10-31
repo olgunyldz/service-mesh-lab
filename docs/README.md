@@ -20,7 +20,7 @@ Ana [README](../README.md) ortamın güncel ve toplu halini anlatır. Bu klasör
 | # | Adım | Branch | Durum |
 |---|------|--------|-------|
 | 00 | [Temel kurulum](00-setup.md) | `setup` | ✅ Tamamlandı |
-| 01 | [Gözlemlenebilirlik: Kiali, Prometheus, Grafana](01-kiali.md) | `kiali` | ✅ Tamamlandı |
+| 01 | [Gözlemlenebilirlik: Kiali, Prometheus, Grafana](01-kiali.md) | `kiali` | ✅ Tamamlandı (tek node, cluster-b kapalı) |
 
 ## Diğer dokümanlar
 

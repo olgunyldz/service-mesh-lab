@@ -27,32 +27,4 @@ spec:
     tls:
       mode: ISTIO_MUTUAL
       sni: api-a.apps.example.local
----
-apiVersion: networking.istio.io/v1
-kind: ServiceEntry
-metadata:
-  name: cluster-b-gateway
-  namespace: istio-ingress
-spec:
-  hosts:
-    - cluster-b.internal.mesh
-  location: MESH_EXTERNAL
-  resolution: STATIC
-  ports:
-    - number: 443
-      name: http-mtls
-      protocol: HTTP
-  endpoints:
-    - address: __NET_PREFIX__.202.10
----
-apiVersion: networking.istio.io/v1
-kind: DestinationRule
-metadata:
-  name: cluster-b-gateway
-  namespace: istio-ingress
-spec:
-  host: cluster-b.internal.mesh
-  trafficPolicy:
-    tls:
-      mode: ISTIO_MUTUAL
-      sni: api-b.apps.example.local
+# cluster-b gateway'i: cluster-b/31-cluster-b-gateway.yaml (yalnızca cluster-b aktifken uygulanır)

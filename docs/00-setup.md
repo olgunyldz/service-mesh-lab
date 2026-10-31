@@ -24,7 +24,7 @@ flowchart LR
 
 | Adım | Script | Ne yapar |
 |------|--------|----------|
-| 1 | `01-create-clusters.sh` | 3 kind cluster'ı (her biri 1 control-plane + 1 worker) ve Gateway API CRD'leri (v1.6.0) |
+| 1 | `01-create-clusters.sh` | 3 kind cluster'ı (her biri 1 control-plane + 1 worker; `01-kiali` adımında RAM nedeniyle tek node'a geçildi) ve Gateway API CRD'leri (v1.6.0) |
 | 2 | `02-install-metallb.sh` | MetalLB v0.16.1; dmz `172.18.200.x`, cluster-a `.201.x`, cluster-b `.202.x` |
 | 3 | `03-generate-certs.sh` | Ortak root CA ve her cluster için intermediate CA; `istio-system/cacerts` secret'ı |
 | 4 | `04-install-istio.sh` | Istio 1.30.7 ambient: base, istiod, istio-cni (nftables), ztunnel |

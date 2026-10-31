@@ -12,6 +12,15 @@ export MSYS_NO_PATHCONV=1
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
+# Cluster aktif mi? (CLUSTERS listesinde mi)
+has_cluster() { [[ " $CLUSTERS " == *" $1 "* ]]; }
+
+# Internal cluster'lar (dmz dışındakiler)
+internal_clusters() {
+  local c
+  for c in $CLUSTERS; do [[ $c == dmz ]] || echo "$c"; done
+}
+
 # URL'nin HTTP durum kodunu yazar. Git Bash'teki curl Windows programı olduğu için
 # MSYS_NO_PATHCONV açıkken /dev/null'a yazamıyor (exit 23); bu çağrıda kapatılır.
 http_code() {

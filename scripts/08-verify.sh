@@ -7,11 +7,16 @@ H="apps.example.local"
 log "1) İnternet -> edge-lb -> DMZ gw -> cluster-a gw -> waypoint -> api-a"
 curl -s -H "Host: api-a.$H" http://localhost:8080/ | head -20
 
-log "2) İnternet -> edge-lb -> DMZ gw -> cluster-b gw -> waypoint -> api-b"
-curl -s -H "Host: api-b.$H" http://localhost:8080/ | head -20
+if has_cluster cluster-b; then
+  log "2) İnternet -> edge-lb -> DMZ gw -> cluster-b gw -> waypoint -> api-b"
+  curl -s -H "Host: api-b.$H" http://localhost:8080/ | head -20
 
-log "3) api-a -> egress gw (cluster-a) -> cluster-b gw -> api-b"
-curl -s -X POST -H "Host: api-a.$H" -d 'merhaba' http://localhost:8080/api/echo
+  log "3) api-a -> egress gw (cluster-a) -> cluster-b gw -> api-b"
+  curl -s -X POST -H "Host: api-a.$H" -d 'merhaba' http://localhost:8080/api/echo
+else
+  log "2-3) cluster-b kapalı; Akış 2 ve 3 atlandı. api-a echo (backend yok):"
+  curl -s -X POST -H "Host: api-a.$H" -d 'merhaba' http://localhost:8080/api/echo
+fi
 
 log "4) api-a -> egress gw -> httpbin.org"
 kubectl --context "$(ctx cluster-a)" -n api-a exec deploy/api-a -- \

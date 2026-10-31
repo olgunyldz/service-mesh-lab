@@ -1,26 +1,8 @@
 # Egress akışı:
-#   api-a pod -> ztunnel -> waypoint (api-a ns) -> istio-egressgateway --mTLS--> cluster-b ingress gw
 #   api-a pod -> ztunnel -> waypoint (api-a ns) -> istio-egressgateway -> httpbin.org
-# __NET_PREFIX__ scriptte doldurulur.
+# cluster-b aktifken api-b'ye çıkış: cluster-b/51-egress-cluster-b.yaml
 
-# --- Dış hedefler (api-a namespace'inde; waypoint bunları işler) ---
-apiVersion: networking.istio.io/v1
-kind: ServiceEntry
-metadata:
-  name: api-b-remote
-  namespace: api-a
-  labels:
-    istio.io/use-waypoint: waypoint
-spec:
-  hosts:
-    - api-b.apps.example.local
-  location: MESH_EXTERNAL
-  resolution: DNS
-  ports:
-    - number: 80
-      name: http
-      protocol: HTTP
----
+# --- Dış hedef (api-a namespace'inde; waypoint bunu işler) ---
 apiVersion: networking.istio.io/v1
 kind: ServiceEntry
 metadata:
@@ -38,7 +20,7 @@ spec:
       name: http
       protocol: HTTP
 ---
-# Waypoint: dış hedefleri egress gateway'e yönlendir
+# Waypoint: dış hedefi egress gateway'e yönlendir
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
@@ -46,7 +28,6 @@ metadata:
   namespace: api-a
 spec:
   hosts:
-    - api-b.apps.example.local
     - httpbin.org
   http:
     - route:
@@ -90,35 +71,6 @@ spec:
 apiVersion: networking.istio.io/v1
 kind: ServiceEntry
 metadata:
-  name: cluster-b-gateway
-  namespace: istio-egress
-spec:
-  hosts:
-    - cluster-b.internal.mesh
-  location: MESH_EXTERNAL
-  resolution: STATIC
-  ports:
-    - number: 443
-      name: http-mtls
-      protocol: HTTP
-  endpoints:
-    - address: __NET_PREFIX__.202.10
----
-apiVersion: networking.istio.io/v1
-kind: DestinationRule
-metadata:
-  name: cluster-b-gateway
-  namespace: istio-egress
-spec:
-  host: cluster-b.internal.mesh
-  trafficPolicy:
-    tls:
-      mode: ISTIO_MUTUAL
-      sni: api-b.apps.example.local
----
-apiVersion: networking.istio.io/v1
-kind: ServiceEntry
-metadata:
   name: httpbin-ext
   namespace: istio-egress
 spec:
@@ -134,27 +86,15 @@ spec:
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
-  name: egress-routes
+  name: egress-httpbin
   namespace: istio-egress
 spec:
   hosts:
-    - api-b.apps.example.local
     - httpbin.org
   gateways:
     - egress
   http:
-    - match:
-        - authority:
-            exact: api-b.apps.example.local
-      route:
-        - destination:
-            host: cluster-b.internal.mesh
-            port:
-              number: 443
-    - match:
-        - authority:
-            exact: httpbin.org
-      route:
+    - route:
         - destination:
             host: httpbin.org
             port:

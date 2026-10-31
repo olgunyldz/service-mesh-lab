@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Branch** | `kiali` (açıldığı yer: `setup`) |
-| **Durum** | ✅ Tamamlandı, sıfırdan kurulumla doğrulandı |
+| **Durum** | ✅ Tamamlandı. İki kez sıfırdan doğrulandı: önce 3 cluster × 2 node, sonra tek node + cluster-b kapalı |
 
 ## Amaç
 
@@ -14,10 +14,22 @@ Mesh trafiğini görsel olarak izlemek: hangi servis kimi çağırıyor, istek/s
 - Her cluster'a Istio'nun **Prometheus** ve **Grafana** addon'ları kuruldu (Istio 1.30 `samples/addons`).
 - Her cluster'a **Kiali 2.26.0** kuruldu (Istio 1.30 addon'undaki sürüm). Kimlik doğrulama `anonymous`, Prometheus ve Grafana bağlantıları yapılandırıldı.
 - Kiali (NodePort 30201) ve Grafana (NodePort 30300), kind `extraPortMappings` ile host'a açıldı.
-- DMZ'ye sürekli trafik üreten bir **loadgen** eklendi. Her saniye Akış 1, 2 ve 3'ü tetikliyor, her 10 turda bir `api-b /status/500` çağırıyor.
+- DMZ'ye sürekli trafik üreten bir **loadgen** eklendi. Her saniye Akış 1, 2 ve 3'ü tetikliyor, her 10 turda bir `api-b /status/500` çağırıyor. (cluster-b kapatıldıktan sonra hedefler `LOADGEN_HOSTS` ile belirleniyor; varsayılan yalnızca api-a.)
 - Doğrulama script'i `08-verify.sh` olarak yeniden adlandırıldı ve Kiali/Grafana erişim kontrolü eklendi.
 - **Registry önbelleği (pull-through cache)** eklendi. Her cluster image'ları internetten ayrı ayrı çektiği için gözlemlenebilirlik kurulumu zaman aşımına düşüyordu (bkz. sorun 3). Docker'da cluster'lardan bağımsız 3 kalıcı registry container'ı çalışıyor (`cache-docker-io`, `cache-quay-io`, `cache-ghcr-io`) ve kind node'larındaki containerd image'ları bunlardan çekiyor. Önbellek sıfırlamalarda silinmediği için her image internetten yalnızca bir kez iniyor.
 - `99-destroy.sh`, kind silemediği container'ları artık doğrudan kaldırıyor (bkz. sorun 4).
+- **cluster-b şimdilik kapatıldı** (ara düzeltme, bkz. sorun 9). Aktif cluster'lar `dmz` ve `cluster-a`; mgmt 04. adımda, cluster-b yol haritasının son adımında (17) gelecek. Geri eklemeyi kolaylaştırmak için cluster-b'ye bağlı tanımlar ayrı klasörlere taşındı ve yalnızca `CLUSTERS` listesinde cluster-b varken uygulanıyor:
+
+  | Taşınan | Nereden | Nereye |
+  |---------|---------|--------|
+  | DMZ'deki api-b rotası (VirtualService) | `dmz/20-public-gateway.yaml` | `dmz/cluster-b/21-api-b-route.yaml` |
+  | DMZ → cluster-b gateway (ServiceEntry + DestinationRule) | `dmz/30-internal-clusters.yaml` | `dmz/cluster-b/31-cluster-b-gateway.yaml` |
+  | loadgen'in api-b hedefi | `dmz/40-loadgen.yaml` (sabit) | `dmz/cluster-b/39-loadgen-targets.yaml` (`LOADGEN_HOSTS` ConfigMap) |
+  | api-a'nın backend adresi | `cluster-a/10-api-a.yaml` (`--backend-url`) | `cluster-a/cluster-b/05-api-a-backend.yaml` (`PODINFO_BACKEND_URL` ConfigMap, `envFrom optional`) |
+  | api-a → egress → cluster-b | `cluster-a/50-egress.yaml` | `cluster-a/cluster-b/51-egress-cluster-b.yaml` |
+
+  `06-deploy-manifests.sh` ana klasörle `cluster-b/` alt klasörünü dosya numaralarına göre birlikte sıralar (ör. `05-api-a-backend.yaml`, `10-api-a.yaml`'dan önce uygulanır). `05-install-gateways.sh` ve `08-verify.sh` de cluster listesine bağlı hale getirildi.
+- **Tek node'lu cluster'lara geçildi** (ara düzeltme, bkz. sorun 9). İlk doğrulamadan sonra makinenin belleği tükendi; her cluster'dan worker node kaldırıldı, `zone` ve `node-role` etiketleri control-plane'e taşındı. kind, worker yoksa control-plane taint'ini kaldırdığı için tüm pod'lar o node'da çalışıyor. Kaynak yeterli olduğunda 2 node'a çıkılacak.
 
 ```mermaid
 flowchart LR
@@ -63,12 +75,18 @@ flowchart LR
 | Dosya | Değişiklik |
 |-------|------------|
 | `config.env` | `KIALI_VERSION=2.26.0`; `kiali_port()` ve `grafana_port()` yardımcıları; `REGISTRY_IMAGE`, `REGISTRY_MIRRORS` |
-| `clusters/dmz.yaml` | `extraPortMappings`: 30201→20001, 30300→3001; `containerdConfigPatches` (registry `config_path`) |
-| `clusters/cluster-a.yaml` | `extraPortMappings`: 30201→20002, 30300→3002; `containerdConfigPatches` |
-| `clusters/cluster-b.yaml` | `extraPortMappings`: 30201→20003, 30300→3003; `containerdConfigPatches` |
-| `scripts/lib.sh` | `start_registry_caches`, `configure_node_mirrors`, `cache_name`, `http_code` |
+| `clusters/dmz.yaml` | `extraPortMappings`: 30201→20001, 30300→3001; `containerdConfigPatches` (registry `config_path`); worker kaldırıldı, `node-role: infra` control-plane'e |
+| `clusters/cluster-a.yaml` | `extraPortMappings`: 30201→20002, 30300→3002; `containerdConfigPatches`; worker kaldırıldı, `node-role: worker` control-plane'e |
+| `clusters/cluster-b.yaml` | `extraPortMappings`: 30201→20003, 30300→3003; `containerdConfigPatches`; worker kaldırıldı, `node-role: worker` control-plane'e |
+| `scripts/lib.sh` | `start_registry_caches`, `configure_node_mirrors`, `cache_name`, `http_code`, `has_cluster`, `internal_clusters` |
 | `scripts/01-create-clusters.sh` | Cluster'lardan sonra önbellek container'larını başlatır, node'lara mirror tanımlarını yazar |
-| `scripts/99-destroy.sh` | kind silemezse kalan container'ları doğrudan siler; `--cache` ile önbelleği de siler |
+| `scripts/02-install-metallb.sh` | IP havuzu, MetalLB webhook'u hazır olana kadar yeniden deneniyor (sorun 10) |
+| `scripts/05-install-gateways.sh` | Internal gateway'ler sabit liste yerine `internal_clusters` ile |
+| `scripts/06-deploy-manifests.sh` | `cluster-b/` alt klasörleri yalnızca cluster-b aktifken, numara sırasıyla |
+| `scripts/08-verify.sh` | Akış 2 ve 3 yalnızca cluster-b aktifken |
+| `scripts/99-destroy.sh` | kind silemezse kalan container'ları doğrudan siler; `--cache` ile önbelleği de siler; `clusters/` altında tanımlı tüm cluster'ları (kapalı olanlar dahil) siler |
+| `config.env` | `CLUSTERS="dmz cluster-a"` |
+| `manifests/dmz/*`, `manifests/cluster-a/*` | cluster-b'ye bağlı kısımlar `cluster-b/` alt klasörlerine taşındı (yukarıdaki tablo) |
 | `istio/values/kiali.yaml` | **Yeni.** Kiali Helm değerleri (anonymous, NodePort, Prometheus/Grafana URL'leri) |
 | `istio/values/{istiod,cni,ztunnel}.yaml` | `hub: docker.io/istio` (registry.istio.io yerine; önbellek uyumu) |
 | `infra/observability/grafana-nodeport.yaml` | **Yeni.** Grafana için NodePort servisi (addon ClusterIP geliyor) |
@@ -110,6 +128,8 @@ Okurken dikkat edilecekler:
 | 6 | `cache-docker-io` Istio kurulduktan sonra da boş | Istio 1.30 image'larını varsayılan olarak **`registry.istio.io`**'dan çekiyor. Bu registry için önbellek eklendi, ancak `registry:2` proxy'si onun yanıtlarında `Content-Length` olmadığı için blob'ları önbelleğe yazamadı | Istio image'ları **`docker.io/istio`**'dan çekiliyor (aynı image'lar orada da yayınlanıyor): `global.hub` (istiod, cni) ve `hub` (ztunnel). Gateway ve waypoint proxy'leri istiod'nin hub'ını kullanıyor | `istio/values/{istiod,cni,ztunnel}.yaml`, `config.env` |
 | 7 | 07. adım `exit 23` ile durdu | Git Bash'teki `curl` yerel bir Windows programı (`/mingw64/bin/curl`). `MSYS_NO_PATHCONV=1` yüzünden `mktemp`'in verdiği `/tmp/...` yolu çevrilmedi, curl dosyayı yazamadı | Geçici klasör `pwd -W` ile Windows biçiminde alınıyor | `07-install-observability.sh` |
 | 8 | `08-verify.sh` 6. testte `exit 23` | Aynı sebep: curl `-o /dev/null` yoluna yazamadı | `http_code` yardımcısı curl'ü `env -u MSYS_NO_PATHCONV` ile çalıştırıyor | `lib.sh`, `08-verify.sh` |
+| 9 | Doğrulamadan ~2 saat sonra Kiali/Grafana 5-10 sn'de yanıt veriyor, zaman aşımına düşüyor; cluster-b'nin kube-apiserver'ı çöküp yeniden başladı | **Bellek tükendi.** Fiziksel RAM 15,7 GB, WSL'e 12 GB ayrılmış; Windows'ta 0,2 GB, Docker VM'inde ~0,2 GB boş kaldı. CPU ~%1100. 6 kind node'u + Docker Desktop'ın kendi Kubernetes'i (eski bir Istio ile) + cluster başına Prometheus/Grafana/Kiali + loadgen | Tek node'lu cluster'lar; **cluster-b şimdilik kapatıldı** (yol haritasının sonunda geri gelecek); Docker Desktop Kubernetes'inin kapatılması önerildi (kullanıcı yapar). README'ye "Kaynak kısıtları" bölümü eklendi | `clusters/*.yaml`, `config.env`, `manifests/`, `scripts/`, `README.md` |
+| 10 | Tek node'la ilk kurulumda MetalLB IP havuzu oluşturulamadı: `failed calling webhook "ipaddresspoolvalidationwebhook.metallb.io"` | Image'lar önbellekten hızlı gelince controller `Available` oldu ama webhook henüz istek kabul etmiyordu (yarış durumu) | IP havuzu uygulaması 60 sn'ye kadar 2 sn aralıklarla yeniden deneniyor | `02-install-metallb.sh` |
 
 ## Doğrulama
 
@@ -136,7 +156,25 @@ Süreler (önbellek ilk kez dolarken):
 | Adım 1-6 (cluster'lar → uygulamalar) | 20 dk |
 | Adım 7 (Prometheus, Grafana, Kiali; image'lar ilk kez iniyor) | 15 dk |
 
-Sonraki sıfırlamalarda image'lar önbellekten geleceği için sürenin kısalması bekleniyor.
+### İkinci doğrulama: tek node + cluster-b kapalı
+
+Sorun 9 ve 10'un düzeltmelerinden sonra yeniden sıfırdan kurulum (`99-destroy.sh` → `setup.sh`, tek seferde, elle müdahale yok). Docker Desktop'ın kendi Kubernetes'i de kapatılmıştı.
+
+| Test | Sonuç |
+|------|-------|
+| Akış 1: `localhost:8080` → api-a | ✅ `api-a @ cluster-a` |
+| Akış 2 ve 3 | ⏸️ cluster-b kapalı, atlandı. api-a `/api/echo` backend olmadan yanıt veriyor ✅ |
+| Akış 4: api-a → egress → httpbin.org | ✅ |
+| Kiali (20001 / 20002), Grafana (3001 / 3002) | ✅ 200, ~0,2 sn |
+| Kiali graph'ları | ✅ dmz: `dmz-ingressgateway → cluster-a-gateway`; cluster-a: `istio-ingressgateway → waypoint → api-a` (mTLS) |
+
+| Ölçüm | İlk doğrulama (3 cluster × 2 node) | İkinci doğrulama (2 cluster × 1 node) |
+|-------|-----------------------------------|---------------------------------------|
+| Kurulum süresi | 20 dk + 15 dk (önbellek ilk kez doluyordu) | **7 dk** (önbellekten) |
+| kind node'larının belleği | ~5,6 GB | ~4,6 GB (gözlemlenebilirlik dahil; 2 node) |
+| Docker VM'inde kullanılabilir bellek | ~4 GB (0,2 GB boş) | ~6,7 GB |
+| Docker CPU | ~%1100 | ~%42 |
+| Kiali/Grafana yanıt süresi | 5-10 sn, zaman aşımı | ~0,2 sn |
 
 ## Bilinen kısıtlar
 

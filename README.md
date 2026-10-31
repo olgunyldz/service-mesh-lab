@@ -4,6 +4,9 @@ Bu proje, kurumsal bir OpenShift yapısını yerelde **kind** ile simüle eder:
 
 - **DMZ cluster**: dış dünyaya açık tek katman. Edge load balancer ve public Istio ingress gateway burada çalışır.
 - **cluster-a** ve **cluster-b**: internal cluster'lar. API'ler burada çalışır, dışarıdan doğrudan erişilemez.
+- **mgmt** *(04. adımda gelecek)*: paylaşılan ürünler (veri, Keycloak, Vault, merkezi gözlemlenebilirlik).
+
+> **Şu an aktif cluster'lar: `dmz` ve `cluster-a`** (her biri tek node). **cluster-b RAM kısıtı nedeniyle şimdilik kapalı** ve yol haritasının son adımında (17 · `cluster-b`) geri gelecek. Bu README'deki mimari ve akış anlatımları cluster-b dahil hedef tasarımı gösterir; cluster-b'ye bağlı kısımlar *(cluster-b kapalı)* olarak işaretlidir. Bkz. [Kaynak kısıtları](#kaynak-kısıtları).
 - **Istio Ambient Mesh**: sidecar yoktur. L4 mTLS'i **ztunnel**, L7 politikaları **waypoint** üstlenir. Giriş trafiği **ingress gateway**, çıkış trafiği **egress gateway** üzerinden geçer.
 
 > **Adım adım geçmiş:** Her yol haritası maddesinin ayrıntılı dokümanı (yapılanlar, değişen dosyalar, sorunlar, doğrulama) [docs/](docs/README.md) altındadır.
@@ -15,8 +18,8 @@ Ortam kuruldu ve aşağıdaki akışların hepsi uçtan uca doğrulandı (`scrip
 | # | Akış | Sonuç |
 |---|------|-------|
 | 1 | İnternet → DMZ → cluster-a → api-a | ✅ |
-| 2 | İnternet → DMZ → cluster-b → api-b | ✅ |
-| 3 | api-a → cluster-a egress → cluster-b → api-b (cluster'lar arası) | ✅ |
+| 2 | İnternet → DMZ → cluster-b → api-b | ⏸️ cluster-b kapalı (`01-kiali` ilk doğrulamasında ✅ idi) |
+| 3 | api-a → cluster-a egress → cluster-b → api-b (cluster'lar arası) | ⏸️ cluster-b kapalı (`01-kiali` ilk doğrulamasında ✅ idi) |
 | 4 | api-a → egress gateway → httpbin.org (internete çıkış) | ✅ |
 | – | Mesh dışından internal gateway'e doğrudan erişim | ✅ reddediliyor (istemci sertifikası yok; `00-setup` adımında test edildi) |
 | – | Kiali (20001-20003) ve Grafana (3001-3003) erişimi, Kiali graph'larının dolu gelmesi | ✅ (bkz. [Gözlemlenebilirlik](#gözlemlenebilirlik-kiali-prometheus-grafana)) |
@@ -27,7 +30,7 @@ Kullanılan sürümler:
 
 | Bileşen | Sürüm | Not |
 |---------|-------|-----|
-| kind / Kubernetes | 0.33.0 / v1.36.4 | Her cluster 1 control-plane + 1 worker |
+| kind / Kubernetes | 0.33.0 / v1.36.4 | Her cluster **tek node** (control-plane, pod'lar da burada çalışır). RAM kısıtı nedeniyle; ileride 2 node'a çıkılacak (bkz. [Kaynak kısıtları](#kaynak-kısıtları)) |
 | Istio (kontrol düzlemi) | 1.30.7 | 1.31 GA chart'ları helm reposunda yok. Image'lar `docker.io/istio`'dan (registry önbelleği uyumu) |
 | istioctl | 1.31.3 | n-1 kontrol düzlemi desteği |
 | Istio dataplane modu | ambient + **native nftables** | WSL2 kernel'inde iptables CONNMARK yok |
@@ -48,7 +51,7 @@ Kullanılan sürümler:
 
 ### Fiziksel yapı
 
-Üç kind cluster'ı da Docker Desktop (WSL2) üzerinde, aynı `kind` docker ağında birer container olarak çalışır. Host'a yalnızca DMZ'nin portu açıktır.
+Üç kind cluster'ı da Docker Desktop (WSL2) üzerinde, aynı `kind` docker ağında çalışır. Her cluster şimdilik **tek node**'dur, yani tek bir container (bkz. [Kaynak kısıtları](#kaynak-kısıtları)). Host'a uygulama trafiği için yalnızca DMZ'nin portu, yönetim için Kiali ve Grafana portları açıktır.
 
 ```mermaid
 flowchart LR
@@ -57,16 +60,16 @@ flowchart LR
     subgraph docker["Docker Desktop · WSL2 · docker ağı kind 172.18.0.0/16"]
         direction LR
         subgraph dmz["kind-dmz · pod 10.10/16 · svc 10.110/16"]
-            dmzcp["dmz-control-plane<br/>hostPort 8080→30080<br/>hostPort 8443→30443"]
-            dmzw["dmz-worker<br/>node-role=infra"]
+            dmzcp["dmz-control-plane · node-role=infra<br/>hostPort 8080→30080 · 8443→30443<br/>20001→Kiali · 3001→Grafana"]
         end
         subgraph ca["kind-cluster-a · pod 10.20/16 · svc 10.120/16"]
-            cacp["cluster-a-control-plane"]
-            caw["cluster-a-worker<br/>node-role=worker"]
+            cacp["cluster-a-control-plane · node-role=worker<br/>20002→Kiali · 3002→Grafana"]
         end
-        subgraph cb["kind-cluster-b · pod 10.30/16 · svc 10.130/16"]
-            cbcp["cluster-b-control-plane"]
-            cbw["cluster-b-worker<br/>node-role=worker"]
+        subgraph cb["kind-cluster-b · ŞİMDİLİK KAPALI · pod 10.30/16 · svc 10.130/16"]
+            cbcp["cluster-b-control-plane · node-role=worker<br/>20003→Kiali · 3003→Grafana"]
+        end
+        subgraph caches["registry önbelleği · kalıcı"]
+            rc["cache-docker-io<br/>cache-quay-io<br/>cache-ghcr-io"]
         end
         lbd(["MetalLB VIP<br/>172.18.200.10"])
         lba(["MetalLB VIP<br/>172.18.201.10"])
@@ -77,6 +80,7 @@ flowchart LR
     lbd -.- dmz
     lba -.- ca
     lbb -.- cb
+    dmz & ca & cb -.->|"image çekme"| caches
 ```
 
 Her cluster'da `istio-system` altında aynı Istio bileşenleri çalışır:
@@ -120,7 +124,7 @@ flowchart TB
         awp -->|"mTLS :443"| aeg
     end
 
-    subgraph B["cluster-b · kind-cluster-b"]
+    subgraph B["cluster-b · kind-cluster-b · şimdilik kapalı"]
         direction TB
         bgw["istio-ingressgateway<br/>LB 172.18.202.10<br/>AuthZ: dmz + egressgateway"]
         subgraph nsb["ns api-b · ambient"]
@@ -213,11 +217,11 @@ sequenceDiagram
 | 9 | waypoint → hedef node'daki ztunnel | HBONE `:15008` | **mTLS** | [manifests/cluster-a/20-waypoint.yaml](manifests/cluster-a/20-waypoint.yaml) |
 | 10 | ztunnel → api-a pod | `:9898` HTTP (pod ağ namespace'i içinde) | – | [manifests/cluster-a/10-api-a.yaml](manifests/cluster-a/10-api-a.yaml) |
 
-**Akış 2 (İnternet → api-b)** aynı yolu izler. Farklar: Host `api-b.apps.example.local`, hedef `172.18.202.10:443` ve kaynaklar `manifests/cluster-b/` altında.
+**Akış 2 (İnternet → api-b)** *(cluster-b kapalı)* aynı yolu izler. Farklar: Host `api-b.apps.example.local`, hedef `172.18.202.10:443` ve kaynaklar `manifests/cluster-b/` altında.
 
-### Akış 3: api-a → api-b (cluster'lar arası, egress gateway üzerinden)
+### Akış 3: api-a → api-b (cluster'lar arası, egress gateway üzerinden) *(cluster-b kapalı)*
 
-Tetikleyici: `POST /api/echo` isteği api-a'ya gelir. podinfo bu isteği `--backend-url=http://api-b.apps.example.local/echo` adresine iletir.
+Tetikleyici: `POST /api/echo` isteği api-a'ya gelir. podinfo bu isteği `PODINFO_BACKEND_URL=http://api-b.apps.example.local/echo` adresine iletir. Bu ayar ve akışın tüm tanımları `manifests/*/cluster-b/` klasörlerinde durur ve yalnızca cluster-b aktifken uygulanır; cluster-b kapalıyken api-a yalnızca echo yapar.
 
 ```mermaid
 sequenceDiagram
@@ -237,9 +241,9 @@ sequenceDiagram
     A->>ZA: POST http://api-b.apps.example.local/echo
     Note over ZA: DNS proxy → ServiceEntry api-b-remote VIP<br/>use-waypoint etiketi
     ZA->>WA: HBONE :15008
-    Note over WA: VirtualService via-egress<br/>hedef → istio-egressgateway:443
+    Note over WA: VirtualService via-egress-api-b<br/>hedef → istio-egressgateway:443
     WA->>E: mTLS ISTIO_MUTUAL :443
-    Note over E: Gateway egress hosts *<br/>VirtualService egress-routes · authority api-b
+    Note over E: Gateway egress hosts *<br/>VirtualService egress-api-b
     E->>G: mTLS ISTIO_MUTUAL → 172.18.202.10:443
     Note over G: AuthZ allow-dmz-and-egress<br/>kaynak = istio-egressgateway
     G->>WB: HBONE :15008
@@ -249,12 +253,12 @@ sequenceDiagram
 
 | Adım | Nereden → Nereye | Port / Protokol | Şifreleme | Tanımlayan kaynak |
 |------|------------------|-----------------|-----------|-------------------|
-| 1 | api-a: `api-b.apps.example.local` DNS sorgusu | ztunnel DNS proxy, ServiceEntry için otomatik VIP | – | [manifests/cluster-a/50-egress.yaml](manifests/cluster-a/50-egress.yaml) `ServiceEntry api-b-remote` |
+| 1 | api-a: `api-b.apps.example.local` DNS sorgusu | ztunnel DNS proxy, ServiceEntry için otomatik VIP | – | [manifests/cluster-a/cluster-b/51-egress-cluster-b.yaml](manifests/cluster-a/cluster-b/51-egress-cluster-b.yaml) `ServiceEntry api-b-remote` |
 | 2 | api-a → ztunnel → waypoint | HBONE `:15008` | **mTLS** | ServiceEntry'deki `istio.io/use-waypoint: waypoint` etiketi |
-| 3 | waypoint: hedefi egress gateway'e çevir | `VirtualService via-egress` | – | 50-egress.yaml |
-| 4 | waypoint → istio-egressgateway | `:443` | **mTLS** (`ISTIO_MUTUAL`) | `DestinationRule egressgateway` |
-| 5 | egress gw: TLS'i kabul et | Gateway server `hosts: ["*"]`. Waypoint, Istio'nun iç SNI'ını (`outbound_.443_._.istio-egressgateway...`) gönderdiği için host listesi kısıtlanamaz | – | `Gateway egress` |
-| 6 | egress gw: Host'a göre yönlendir | `authority: api-b.apps.example.local` | – | `VirtualService egress-routes` |
+| 3 | waypoint: hedefi egress gateway'e çevir | `VirtualService via-egress-api-b` | – | 51-egress-cluster-b.yaml |
+| 4 | waypoint → istio-egressgateway | `:443` | **mTLS** (`ISTIO_MUTUAL`) | `DestinationRule egressgateway` (50-egress.yaml) |
+| 5 | egress gw: TLS'i kabul et | Gateway server `hosts: ["*"]`. Waypoint, Istio'nun iç SNI'ını (`outbound_.443_._.istio-egressgateway...`) gönderdiği için host listesi kısıtlanamaz | – | `Gateway egress` (50-egress.yaml) |
+| 6 | egress gw: Host'a göre yönlendir | `authority: api-b.apps.example.local` | – | `VirtualService egress-api-b` |
 | 7 | egress gw → cluster-b ingress gw | `172.18.202.10:443` | **mTLS** (`ISTIO_MUTUAL`, SNI `api-b.apps.example.local`) | `ServiceEntry` + `DestinationRule cluster-b-gateway` (istio-egress ns) |
 | 8 | cluster-b ingress gw: kimlik kontrolü | `corp.mesh/ns/istio-egress/sa/istio-egressgateway` izinli | – | [manifests/cluster-b/30-internal-gateway.yaml](manifests/cluster-b/30-internal-gateway.yaml) |
 | 9 | → waypoint → ztunnel → api-b | Akış 1'in 7-10. adımlarıyla aynı | **mTLS** | manifests/cluster-b/ |
@@ -275,17 +279,17 @@ sequenceDiagram
     A->>Z: GET http://httpbin.org/headers
     Z->>W: HBONE :15008 · ServiceEntry httpbin-ext
     W->>E: mTLS ISTIO_MUTUAL :443
-    Note over E: VirtualService egress-routes<br/>authority httpbin.org
+    Note over E: VirtualService egress-httpbin
     E->>X: HTTP :80 · resolution DNS
     X-->>A: 200 · X-Envoy-Peer-Metadata-Id = istio-egressgateway
 ```
 
 1. ServiceEntry `httpbin-ext` (api-a ns, waypoint etiketli) dış hedefi mesh'e tanıtır.
 2. Waypoint `VirtualService via-egress` ile trafiği `istio-egressgateway:443` adresine mTLS ile yollar.
-3. Egress gateway'deki `VirtualService egress-routes`, `authority: httpbin.org` eşleşmesiyle isteği `ServiceEntry httpbin-ext` (istio-egress ns, `resolution: DNS`) üzerinden `httpbin.org:80` adresine düz HTTP olarak çıkarır.
+3. Egress gateway'deki `VirtualService egress-httpbin` isteği `ServiceEntry httpbin-ext` (istio-egress ns, `resolution: DNS`) üzerinden `httpbin.org:80` adresine düz HTTP olarak çıkarır.
 4. Yanıttaki `X-Envoy-Peer-Metadata-Id: router~...istio-egressgateway...` header'ı, isteğin egress gateway'den çıktığını gösterir.
 
-cluster-b'de de aynı yapı var (yalnızca httpbin.org için): [manifests/cluster-b/50-egress.yaml](manifests/cluster-b/50-egress.yaml).
+*(cluster-b kapalı)* cluster-b'de de aynı yapı var (yalnızca httpbin.org için): [manifests/cluster-b/50-egress.yaml](manifests/cluster-b/50-egress.yaml).
 
 ### Şifreleme özeti
 
@@ -357,7 +361,7 @@ Her cluster'da kendi Prometheus, Grafana ve Kiali'si çalışır. Cluster'lar ay
 |---------|-------|---------|
 | dmz | http://localhost:20001/kiali | http://localhost:3001 |
 | cluster-a | http://localhost:20002/kiali | http://localhost:3002 |
-| cluster-b | http://localhost:20003/kiali | http://localhost:3003 |
+| cluster-b *(kapalı)* | http://localhost:20003/kiali | http://localhost:3003 |
 
 ```mermaid
 flowchart LR
@@ -380,21 +384,22 @@ flowchart LR
 
 - **Erişim:** Kiali ve Grafana NodePort ile açılır, kind `extraPortMappings` ile host'a bağlanır (bkz. [clusters/](clusters/)). Internal cluster'lar uygulama trafiği için host'a kapalıdır; açık olan yalnızca bu yönetim araçlarıdır.
 - **Kimlik doğrulama:** Kiali `anonymous`, Grafana anonim admin kullanır. Bu ayar lab içindir; gerçek ortamda OpenID veya OpenShift OAuth kullanılmalıdır.
-- **Sürekli trafik:** DMZ'deki `loadgen` ([manifests/dmz/40-loadgen.yaml](manifests/dmz/40-loadgen.yaml)) her saniye Akış 1, 2 ve 3'ü tetikler, her 10 turda bir de `api-b /status/500` çağırır. Böylece grafiklerde hata oranı da görünür. Akış 4 (httpbin.org) dış servisi yormamak için loadgen'e eklenmedi; elle tetiklenir.
+- **Sürekli trafik:** DMZ'deki `loadgen` ([manifests/dmz/40-loadgen.yaml](manifests/dmz/40-loadgen.yaml)) her saniye Akış 1'i (cluster-b aktifse 2 ve 3'ü de; hedefler `LOADGEN_HOSTS` ile) tetikler, her 10 turda bir de `/status/500` çağırır. Böylece grafiklerde hata oranı da görünür. Akış 4 (httpbin.org) dış servisi yormamak için loadgen'e eklenmedi; elle tetiklenir.
 
-Kiali'de görülen graph (workload görünümü, loadgen çalışırken ölçüldü):
+Kiali'de görülen graph (workload görünümü, loadgen çalışırken ölçüldü; cluster-b kapalı):
 
 | Cluster | Kenarlar |
 |---------|----------|
-| dmz | `dmz-ingressgateway` → `cluster-a-gateway` (~1.4 rps) · `dmz-ingressgateway` → `cluster-b-gateway` (~0.75 rps, ~%9 hata) |
-| cluster-a | `istio-ingressgateway` → `waypoint` → `api-a` (mTLS) · `api-a` → `waypoint` (TCP, ztunnel) · `api-a` → `istio-egressgateway` (HTTP, mTLS) · `istio-egressgateway` → `cluster-b-gateway` |
-| cluster-b | `istio-ingressgateway` → `waypoint` → `api-b` (mTLS, ~%5 hata) |
+| dmz | `dmz-ingressgateway` → `cluster-a-gateway` (~2 rps, ~%5 hata) |
+| cluster-a | `istio-ingressgateway` → `waypoint` → `api-a` (mTLS, ~%5 hata) · `waypoint` → `api-a` (TCP, ztunnel) |
+
+cluster-b aktifken ek olarak görülenler (`01-kiali` ilk doğrulaması): dmz'de `dmz-ingressgateway` → `cluster-b-gateway`; cluster-a'da `api-a` → `istio-egressgateway` (HTTP, mTLS) → `cluster-b-gateway`; cluster-b'de `istio-ingressgateway` → `waypoint` → `api-b`.
 
 Graph'ı okurken dikkat edilecekler:
 - **Cluster'lar arası hedefler ServiceEntry adıyla görünür** (`cluster-a-gateway`, `cluster-b-gateway`). Kiali bu kenarlarda mTLS kilidi göstermez, ama trafik `ISTIO_MUTUAL` ile şifrelidir.
 - **Gateway'e gelen trafiğin kaynağı görünmez.** Gateway'ler yalnızca kendi giden trafiğini raporlar. Bu yüzden DMZ'de HAProxy düğümü yoktur; cluster-b'de de trafiğin bir kısmının cluster-a egress'inden geldiği ayrıca görünmez.
 - **Aynı çağrı iki katmanda görünür:** ztunnel L4 (`api-a → waypoint`, TCP bayt/sn), waypoint ise L7 (`api-a → istio-egressgateway`, HTTP istek/sn) olarak raporlar.
-- **Hata oranı** loadgen'in `api-b /status/500` çağrısından gelir (her 10 turda bir).
+- **Hata oranı** loadgen'in her 10 turda bir yaptığı `/status/500` çağrısından gelir (son hedef host'a; cluster-b kapalıyken api-a).
 
 ---
 
@@ -435,16 +440,18 @@ service-mesh/
 │   │   ├── 00-namespaces.yaml
 │   │   ├── 10-edge-lb.yaml             # HAProxy
 │   │   ├── 20-public-gateway.yaml      # Gateway + VirtualService (Host bazlı)
-│   │   ├── 30-internal-clusters.yaml   # ServiceEntry + DestinationRule (mTLS)
-│   │   └── 40-loadgen.yaml             # Kiali için sürekli trafik
+│   │   ├── 30-internal-clusters.yaml   # ServiceEntry + DestinationRule (mTLS) → cluster-a
+│   │   ├── 40-loadgen.yaml             # Kiali için sürekli trafik
+│   │   └── cluster-b/                  # yalnızca cluster-b aktifken: api-b rotası, gateway'i, loadgen hedefi
 │   ├── cluster-a/
 │   │   ├── 00-namespaces.yaml          # ambient + waypoint etiketleri
-│   │   ├── 10-api-a.yaml               # podinfo, backend = api-b
+│   │   ├── 10-api-a.yaml               # podinfo (backend opsiyonel, ConfigMap'ten)
 │   │   ├── 20-waypoint.yaml            # waypoint + seccomp ConfigMap
 │   │   ├── 30-internal-gateway.yaml    # ISTIO_MUTUAL gateway + AuthZ
 │   │   ├── 40-security.yaml            # PeerAuthentication STRICT + L7 AuthZ
-│   │   └── 50-egress.yaml              # ServiceEntry → waypoint → egress gw
-│   └── cluster-b/                      # aynı yapı (api-b, sadece httpbin egress)
+│   │   ├── 50-egress.yaml              # ServiceEntry → waypoint → egress gw → httpbin.org
+│   │   └── cluster-b/                  # yalnızca cluster-b aktifken: api-a backend, api-b'ye egress
+│   └── cluster-b/                      # cluster-b'nin kendisi (şimdilik kapalı): api-b, httpbin egress
 ├── scripts/
 │   ├── setup.sh                # hepsini sırayla çalıştırır
 │   ├── lib.sh                  # ortak yardımcılar (__NET_PREFIX__ doldurma vb.)
@@ -474,13 +481,13 @@ kind docker ağı genelde `172.18.0.0/16` olur. Scriptler bunu otomatik tespit e
 |---------|----------|--------------|----------------|---------------|
 | dmz | 10.10.0.0/16 | 10.110.0.0/16 | 172.18.200.10-50 | 172.18.200.10 |
 | cluster-a | 10.20.0.0/16 | 10.120.0.0/16 | 172.18.201.10-50 | 172.18.201.10 |
-| cluster-b | 10.30.0.0/16 | 10.130.0.0/16 | 172.18.202.10-50 | 172.18.202.10 |
+| cluster-b *(kapalı, ayrılmış)* | 10.30.0.0/16 | 10.130.0.0/16 | 172.18.202.10-50 | 172.18.202.10 |
 
 > Windows/Docker Desktop'ta MetalLB IP'lerine host'tan erişilemez. Bu IP'ler yalnızca cluster'lar arasında (aynı docker ağında) kullanılır. Host'tan giriş noktası `localhost:8080` adresidir.
 
 ## Gereksinimler
 
-- Docker Desktop (en az 8 GB RAM önerilir; 3 cluster × 2 node çalışır)
+- Docker Desktop. WSL'e en az 8 GB RAM ayrılmalı (bkz. aşağıdaki kaynak kısıtları)
 - `kind`, `kubectl`, `helm`, `istioctl`, `openssl`
 - Git Bash (scriptler bash ile yazılmıştır)
 
@@ -488,6 +495,27 @@ kind docker ağı genelde `172.18.0.0/16` olur. Scriptler bunu otomatik tespit e
 winget install Kubernetes.kind Helm.Helm
 # istioctl: https://github.com/istio/istio/releases
 ```
+
+### Kaynak kısıtları
+
+Lab, 15,7 GB fiziksel RAM'li ve 16 çekirdekli bir makinede geliştiriliyor. WSL'e 12 GB ayrılmış (`%USERPROFILE%\.wslconfig`: `memory=12GB`, `swap=4GB`).
+
+`01-kiali` adımında 3 cluster × 2 node + cluster başına Prometheus/Grafana/Kiali + loadgen ile şu ölçüldü:
+
+| Ölçüm | Değer |
+|-------|-------|
+| Windows'ta boş RAM | 0,2 GB |
+| Docker VM'inde boş RAM | ~0,2 GB (4 GB önbellek) |
+| Docker CPU kullanımı | ~%1100 (16 çekirdeğin ~11'i) |
+| Etki | cluster-b'nin kube-apiserver'ı çöküp yeniden başladı; Kiali/Grafana 5-10 sn'de yanıt verdi |
+
+Bu yüzden:
+- **cluster-b şimdilik kapalı.** Aktif cluster'lar `dmz` ve `cluster-a`; `mgmt` 04. adımda eklenecek. cluster-b, yol haritasının son adımında (17) geri gelecek. cluster-b'ye bağlı tanımlar `manifests/*/cluster-b/` klasörlerinde duruyor ve `CLUSTERS` listesinde cluster-b varsa otomatik uygulanıyor.
+- **Her cluster şimdilik tek node.** Her node kendi kubelet, containerd, ztunnel, istio-cni ve kindnet'ini çalıştırdığı için node başına birkaç yüz MB tasarruf olur. kind, worker yoksa control-plane taint'ini kaldırır; tüm pod'lar o node'da çalışır. Zone ayrımı aynen korunur.
+- **2 node'a çıkış** kaynak yeterli olduğunda yapılacak: her cluster dosyasına `- role: worker` eklenir.
+- **Docker Desktop'ın kendi Kubernetes'i kapatılmalı** (Settings → Kubernetes); kapatıldı. Lab bunu kullanmaz, ama bellek ve CPU tüketir.
+- `mgmt` adımında cluster başına Kiali/Grafana tek kopyaya indirilecek.
+- Ek tasarruf gerekirse: loadgen yalnızca izlerken açık tutulur (`kubectl --context kind-dmz -n loadgen scale deploy/loadgen --replicas=0`), uygulama kopyaları 1'e indirilir.
 
 ## Kurulum
 
@@ -519,7 +547,7 @@ curl -X POST -H "Host: api-a.apps.example.local" -d 'selam' http://localhost:808
 Faydalı komutlar:
 
 ```bash
-kubectl config get-contexts                                   # kind-dmz, kind-cluster-a, kind-cluster-b
+kubectl config get-contexts                                   # kind-dmz, kind-cluster-a (cluster-b kapalı)
 istioctl --context kind-cluster-a ztunnel-config workloads     # ambient'e alınmış pod'lar
 istioctl --context kind-cluster-a waypoint list -n api-a
 kubectl --context kind-dmz -n istio-ingress logs deploy/dmz-ingressgateway -f
@@ -742,11 +770,13 @@ Her adım ayrı bir branch'te yapılır; her branch bir önceki biten branch'ten
 | 13 | `secrets` | mgmt'te **HashiCorp Vault Community**: PKI (cert-manager + istio-csr ile Istio CA'nın Vault'a taşınması, root CA anahtarı diskten kalkar), KV v2 + External Secrets, Database motoru ile servis başına kısa ömürlü DB kullanıcıları, audit log. Cluster'lar Vault'a JWT/OIDC auth ile bağlanır | ⏳ |
 | 14 | `pci-zone` | mgmt içinde sıkı izole namespace'ler olarak kart zone'u (CDE): yalnızca belirli servise mTLS ile erişim, default-deny AuthZ + NetworkPolicy, Vault Transit ile PAN tokenizasyonu (Enterprise'daki Transform yerine) | ⏳ |
 | 15 | `ci` | GitHub Actions: Trivy (image + IaC), gitleaks, Semgrep, SBOM; branch protection | ⏳ |
-| 16 | `gitops` | mgmt'te Argo CD; dört cluster'ın repo'dan yönetimi; isteğe bağlı Argo Rollouts ile otomatik canary | ⏳ |
+| 16 | `gitops` | mgmt'te Argo CD; cluster'ların repo'dan yönetimi; isteğe bağlı Argo Rollouts ile otomatik canary | ⏳ |
+| 17 | `cluster-b` | cluster-b'nin geri eklenmesi: `config.env` → `CLUSTERS`'a eklenir, `manifests/*/cluster-b/` otomatik uygulanır (Akış 2 ve 3). Önceki adımlarda cluster-a'ya eklenen her şeyin (hardening, policy, token, logging, tracing vb.) cluster-b'ye de uygulanması. RAM yeterliyse | ⏳ |
 
 **Tehdit modelleme (sürekli):** `zones` adımından itibaren her adım dokümanına bir STRIDE bölümü eklenir. Mevcut dört akışın STRIDE analizi `zones` dokümanında yapılır.
 
 Adımların gerekçesi ve kapattıkları güvenlik maddeleri: [Güvenlik boşluk analizi](docs/security-gap-analysis.md).
 
 Sonraki adaylar:
+- [ ] Cluster'ları 2 node'a çıkarmak (kaynak yeterli olduğunda; bkz. [Kaynak kısıtları](#kaynak-kısıtları))
 - [ ] *(En son, opsiyonel)* Ambient multicluster (east-west gateway): cluster-a ve cluster-b'yi tek mesh'te birleştirmek, DMZ'yi izole tutmak. Mevcut tasarım bilerek multicluster değildir; her cluster bağımsız bir mesh'tir ve cluster'lar yalnızca gateway'ler üzerinden konuşur

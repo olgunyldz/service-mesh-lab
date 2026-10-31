@@ -30,7 +30,7 @@ install_egress() {
 
 install_ingress dmz dmz-ingressgateway
 
-for c in cluster-a cluster-b; do
+for c in $(internal_clusters); do
   install_ingress "$c" istio-ingressgateway
   install_egress "$c"
 done

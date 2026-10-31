@@ -36,21 +36,4 @@ spec:
       retries:
         attempts: 2
         perTryTimeout: 4s
----
-apiVersion: networking.istio.io/v1
-kind: VirtualService
-metadata:
-  name: api-b
-  namespace: istio-ingress
-spec:
-  hosts:
-    - api-b.apps.example.local
-  gateways:
-    - public-gateway
-  http:
-    - route:
-        - destination:
-            host: cluster-b.internal.mesh
-            port:
-              number: 443
-      timeout: 10s
+# api-b rotası: cluster-b/21-api-b-route.yaml (yalnızca cluster-b aktifken uygulanır)
