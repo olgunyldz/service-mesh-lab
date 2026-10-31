@@ -138,11 +138,31 @@ check "api-a pod'ları ambient'te (HBONE)" "HBONE" \
 check "api-a servisi waypoint kullanıyor" "waypoint" \
   "$(istioctl --context "$(ctx cluster-a)" ztunnel-config services 2>/dev/null | grep -E '^api-a +api-a ' | head -1 || true)"
 
-log "6) Gözlemlenebilirlik (Kiali / Grafana)"
+log "6) Merkezi gözlemlenebilirlik (mgmt)"
+check "Kiali http://localhost:$KIALI_PORT/kiali" "200" "$(http_code "http://localhost:$KIALI_PORT/kiali/api/status")"
+check "Grafana http://localhost:$GRAFANA_PORT" "200" "$(http_code "http://localhost:$GRAFANA_PORT/api/health")"
+
+# Merkezi Prometheus'ta her cluster'ın Istio metrikleri var mı (remote_write egress -> mgmt üzerinden)
+prom_q() {
+  kubectl --context "$(ctx mgmt)" -n istio-system exec deploy/prometheus -c prometheus-server -- \
+    wget -qO- "http://localhost:9090/api/v1/query?query=$1" 2>/dev/null || true
+}
 for c in $CLUSTERS; do
-  check "$c Kiali http://localhost:$(kiali_port "$c")/kiali" "200" "$(http_code "http://localhost:$(kiali_port "$c")/kiali/api/status")"
-  check "$c Grafana http://localhost:$(grafana_port "$c")" "200" "$(http_code "http://localhost:$(grafana_port "$c")/api/health")"
+  [[ $c == mgmt ]] && continue
+  check "Merkezi Prometheus'ta $c metrikleri var" "\"cluster\":\"$c\"" \
+    "$(prom_q "count(up)by(cluster)")"
 done
+check "Merkezi Prometheus'ta mesh trafik metrikleri (istio_requests_total, cluster-a)" "cluster-a" \
+  "$(prom_q "count(istio_requests_total)by(source_cluster)")"
+
+kiali_clusters=$(env -u MSYS_NO_PATHCONV curl -s --max-time 10 "http://localhost:$KIALI_PORT/kiali/api/config" || true)
+for c in $CLUSTERS; do
+  check "Kiali $c cluster'ını görüyor" "\"$c\"" "$kiali_clusters"
+done
+
+check "mgmt girişine mesh sertifikası olmadan erişilemiyor" "000" \
+  "$(MSYS_NO_PATHCONV=1 docker run --rm --network kind "$LOADGEN_IMAGE" curl -sk -o /dev/null -w '%{http_code}' --max-time 5 \
+     --resolve "$METRICS_HOST:443:$(detect_net_prefix).$(lb_octet mgmt).10" "https://$METRICS_HOST/api/v1/write" 2>/dev/null || true)"
 
 log "Sonuç: $PASS başarılı, $FAIL başarısız"
 [[ $FAIL -eq 0 ]]

@@ -1,0 +1,27 @@
+# Management cluster: paylaşılan ürünler (merkezi gözlemlenebilirlik; ileride veri, Keycloak, Vault).
+# Uygulama trafiğine dışarıya kapalı; dmz ve internal cluster'lar ona kendi egress gateway'leri
+# üzerinden mTLS ile ulaşır. Host'a yalnızca yönetim arayüzleri (tek Kiali, tek Grafana) açılır.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: mgmt
+# Registry mirror tanımlarını /etc/containerd/certs.d altından oku (bkz. scripts/lib.sh configure_node_mirrors)
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
+networking:
+  podSubnet: 10.40.0.0/16
+  serviceSubnet: 10.140.0.0/16
+# Tek node (bkz. dmz.yaml)
+nodes:
+  - role: control-plane
+    labels:
+      zone: mgmt
+      node-role: infra
+    extraPortMappings:
+      - containerPort: 30201   # Kiali
+        hostPort: 20001
+        protocol: TCP
+      - containerPort: 30300   # Grafana
+        hostPort: 3001
+        protocol: TCP

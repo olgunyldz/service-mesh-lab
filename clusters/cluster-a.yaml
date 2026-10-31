@@ -1,5 +1,4 @@
 # Internal cluster A: uygulama trafiği için dışarıya port açmaz, sadece DMZ'den erişilir.
-# Host'a yalnızca yönetim araçları (Kiali / Grafana) açılır.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: cluster-a
@@ -17,10 +16,3 @@ nodes:
     labels:
       zone: internal
       node-role: worker
-    extraPortMappings:
-      - containerPort: 30201
-        hostPort: 20002
-        protocol: TCP
-      - containerPort: 30300
-        hostPort: 3002
-        protocol: TCP

@@ -1,16 +1,23 @@
-# kiali/kiali-server chart. Grafana external_url scriptte cluster'a göre verilir.
+# kiali/kiali-server chart — mgmt'teki tek Kiali. Grafana external_url scriptte verilir.
+# Diğer cluster'lar "kiali.io/multiCluster=true" etiketli kubeconfig secret'larıyla otomatik eklenir
+# (bkz. scripts/07-install-observability.sh).
 auth:
   strategy: anonymous   # lab ortamı; gerçek ortamda openid / openshift
 deployment:
   service_type: NodePort
+  view_only_mode: true  # arayüzden Istio yapılandırması değiştirilemez
 server:
-  node_port: 30201      # kind extraPortMappings -> host 20001/20002/20003
+  node_port: 30201      # kind extraPortMappings -> host 20001 (clusters/mgmt.yaml)
   web_root: /kiali
 external_services:
   prometheus:
-    url: http://prometheus.istio-system:9090
+    url: http://prometheus.istio-system:9090   # merkezi Prometheus: tüm cluster'ların metrikleri
   grafana:
     enabled: true
     internal_url: http://grafana.istio-system:3000
   tracing:
     enabled: false
+clustering:
+  autodetect_secrets:
+    enabled: true
+    label: "kiali.io/multiCluster=true"

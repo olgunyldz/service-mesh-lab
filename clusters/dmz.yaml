@@ -1,5 +1,5 @@
 # DMZ cluster (iç DMZ): internet paketini doğrudan almaz; yalnızca edge-waf'tan gelen trafiği alır.
-# Host'a uygulama portu açmaz (8080/8443 edge-lb container'ında, bkz. scripts/06b-deploy-edge.sh).
+# Host'a hiç port açmaz (8080/8443 edge-lb container'ında; Kiali/Grafana mgmt cluster'ında).
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: dmz
@@ -19,11 +19,3 @@ nodes:
     labels:
       zone: dmz
       node-role: infra   # node-role.kubernetes.io/* kubelet tarafından eklenemez
-    extraPortMappings:
-      # Yalnızca yönetim araçları: Kiali / Grafana NodePort
-      - containerPort: 30201
-        hostPort: 20001
-        protocol: TCP
-      - containerPort: 30300
-        hostPort: 3001
-        protocol: TCP

@@ -1,0 +1,17 @@
+# Mesh içi zorunlu mTLS
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT
+---
+# mgmt egress gateway şimdilik kullanılmıyor: varsayılan reddet (ALLOW kuralı yok = hepsi reddedilir)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-nothing
+  namespace: istio-egress
+spec: {}
