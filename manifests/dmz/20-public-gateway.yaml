@@ -9,10 +9,16 @@ spec:
   selector:
     istio: dmz-ingressgateway
   servers:
+    # Yalnızca karşılıklı TLS: istemci sertifikası Edge-DMZ Zone CA'sından olmalı (yalnızca edge-waf'ta var).
+    # Düz HTTP (80) sunucusu yok. Secret: dmz-ingress-mtls (tls.crt, tls.key, ca.crt; 05-install-gateways.sh)
     - port:
-        number: 80
-        name: http
-        protocol: HTTP
+        number: 443
+        name: https-mtls
+        protocol: HTTPS
+      tls:
+        mode: MUTUAL
+        credentialName: dmz-ingress-mtls
+        minProtocolVersion: TLSV1_2
       hosts:
         - "*.apps.example.local"
 ---

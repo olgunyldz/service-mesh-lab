@@ -1,0 +1,11 @@
+# DMZ'de de mesh içi zorunlu mTLS (internal cluster'larla tutarlı).
+# Not: gateway'lerin Gateway sunucuları (ör. 443 MUTUAL) bundan bağımsızdır; bu politika
+# mesh workload'larının gelen trafiğini kapsar.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT

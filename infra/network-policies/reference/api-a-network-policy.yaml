@@ -1,0 +1,114 @@
+# REFERANS — BU LAB'DA UYGULANMAZ VE DOĞRULANMAMIŞTIR.
+#
+# Neden uygulanmıyor: kindnet NetworkPolicy uygulamıyor; denenen kube-network-policies ise Docker Desktop'ın
+# WSL2 kernel'inde nftables "queue" desteği (CONFIG_NFT_QUEUE) olmadığı için çalışmadı (bkz. docs/03-hardening.md).
+# Gerçek ortamda (OpenShift / OVN-Kubernetes, Calico, Cilium) bu politika uygulanır.
+#
+# Amaç: Istio AuthorizationPolicy'nin altında ikinci bir (L3/L4) duvar. Özellikle ambient'te
+# REGISTRY_ONLY pod'ların doğrudan internete çıkışını engellemediği için egress default-deny gereklidir.
+#
+# Ambient için dikkat: pod'lara gelen mesh trafiği HBONE (TCP 15008) üzerinden gelir; kubelet sağlık
+# kontrolleri ambient'te 169.254.7.127 adresinden SNAT'lanır.
+
+# 1) Varsayılan reddet: api-a namespace'inde gelen ve giden her şey
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: api-a
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# 2) Tüm pod'lar: DNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: api-a
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# 3) Tüm pod'lar: mesh trafiği (HBONE) giriş ve çıkış — cluster içinde
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-hbone
+  namespace: api-a
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: 15008 }
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - { protocol: TCP, port: 15008 }
+---
+# 4) api-a pod'ları: ambient kubelet sağlık kontrolleri
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ambient-probes
+  namespace: api-a
+spec:
+  podSelector:
+    matchLabels:
+      app: api-a
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 169.254.7.127/32
+      ports:
+        - { protocol: TCP, port: 9898 }
+---
+# 5) waypoint: istiod (xDS), egress gateway, Prometheus scrape
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-waypoint
+  namespace: api-a
+spec:
+  podSelector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: waypoint
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+      ports:
+        - { protocol: TCP, port: 15020 }   # Prometheus
+        - { protocol: TCP, port: 15090 }
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+          podSelector:
+            matchLabels:
+              app: istiod
+      ports:
+        - { protocol: TCP, port: 15012 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-egress
+      ports:
+        - { protocol: TCP, port: 443 }

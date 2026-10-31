@@ -11,3 +11,11 @@ service:
 autoscaling:
   enabled: false
 replicaCount: 1
+# Pod Security "restricted" için seccomp. securityContext verildiğinde chart'ın varsayılan
+# sysctl'i (80/443'e root olmadan bağlanma) düştüğü için birlikte tanımlanır.
+securityContext:
+  seccompProfile:
+    type: RuntimeDefault
+  sysctls:
+    - name: net.ipv4.ip_unprivileged_port_start
+      value: "0"

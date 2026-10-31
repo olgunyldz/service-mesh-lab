@@ -58,6 +58,24 @@ limited=$(docker exec loadgen sh -c "ip=\$(getent hosts edge-lb | cut -d' ' -f1)
   | grep -c 429" || true)
 check "Ani 150 istekte 429 dönüyor" "yes" "$([[ ${limited:-0} -gt 0 ]] && echo yes || echo "no (429 sayısı: ${limited:-0})")"
 
+log "Edge: bilgi sızması"
+resp=$(edge api-a /status/500 -D -)
+check "5xx gövdesi tek tip (iç ayrıntı yok)" '{"error":"internal_error"}' "$resp"
+check "Yanıtta Server / x-envoy header'ı yok" "yok" \
+  "$(echo "$resp" | grep -qiE '^(server|x-envoy-upstream-service-time):' && echo var || echo yok)"
+
+log "Edge -> DMZ: karşılıklı TLS"
+dmz_probe() {  # kind ağından DMZ ingress'e (edge'i atlayarak) istek
+  MSYS_NO_PATHCONV=1 docker run --rm --network kind -v "$ROOT_DIR/certs/edge-dmz:/c:ro" "$LOADGEN_IMAGE" \
+    sh -c "curl -s -o /dev/null -w '%{http_code}' --max-time 5 $* || true" 2>/dev/null
+}
+DMZ_IP="$(detect_net_prefix).$(lb_octet dmz).10"
+check "Sertifikasız HTTPS reddediliyor" "000" \
+  "$(dmz_probe --cacert /c/ca.pem --resolve api-a.$H:443:$DMZ_IP https://api-a.$H/)"
+check "Düz HTTP (80) kapalı" "000" "$(dmz_probe -H "'Host: api-a.$H'" http://$DMZ_IP/)"
+check "WAF istemci sertifikasıyla kabul ediliyor" "200" \
+  "$(dmz_probe --cacert /c/ca.pem --cert /c/waf-client.crt --key /c/waf-client.key --resolve api-a.$H:443:$DMZ_IP https://api-a.$H/)"
+
 log "Zone geçişi: tek kapı"
 apply_rendered "$(ctx dmz)" "$ROOT_DIR/tests/zone-direct-path.yaml" >/dev/null
 sleep 5
@@ -81,9 +99,44 @@ log "4) api-a -> egress gw -> httpbin.org"
 check "Çıkış egress gateway'den yapılıyor" "istio-egressgateway" \
   "$(kubectl --context "$(ctx cluster-a)" -n api-a exec deploy/api-a -- wget -qO- -T 10 http://httpbin.org/headers 2>&1 || true)"
 
+log "Bilgi: kayıtsız hedefe doğrudan çıkış (lab kısıtı, test değil)"
+direct=$(kubectl --context "$(ctx cluster-a)" -n api-a exec deploy/api-a -- \
+  sh -c 'wget -q -O /dev/null -T 8 http://example.com && echo açık || echo kapalı' 2>/dev/null || true)
+printf '  \033[33m⚠\033[0m api-a -> example.com (ServiceEntry yok): %s\n' "$direct"
+echo "    Ambient'te REGISTRY_ONLY pod'un doğrudan çıkışını engellemez; engel egress NetworkPolicy ile olur,"
+echo "    bu lab'da NetworkPolicy uygulanamıyor (bkz. docs/03-hardening.md)."
+
+log "Internal: varsayılan reddet (cluster-a, api-a namespace'inde test pod'u)"
+K="kubectl --context $(ctx cluster-a) -n api-a"
+$K delete pod authz-probe --ignore-not-found --wait=true >/dev/null 2>&1
+$K run authz-probe --image="$LOADGEN_IMAGE" --restart=Never --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":100,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"p","image":"'"$LOADGEN_IMAGE"'","command":["sleep","300"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' >/dev/null
+$K wait --for=condition=Ready pod/authz-probe --timeout=90s >/dev/null
+pod_ip=$($K get pod -l app=api-a -o jsonpath='{.items[0].status.podIP}')
+check "Pod IP ile waypoint'i atlama engelleniyor (ztunnel L4)" "000" \
+  "$($K exec authz-probe -- curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$pod_ip:9898/" 2>/dev/null || true)"
+check "Servise yetkisiz kimlikle erişim reddediliyor (waypoint L7, 403)" "RBAC: access denied" \
+  "$($K exec authz-probe -- curl -s --max-time 5 http://api-a/ 2>/dev/null || true)"
+# Probe mesh sertifikası taşımadığı için ISTIO_MUTUAL el sıkışması başarısız olur (000).
+# Mesh kimliği olan ama waypoint olmayan bir istemci ise AuthZ'ye (allow-only-waypoints) takılır.
+check "Egress gateway'e waypoint dışından erişilemiyor" "000" \
+  "$($K exec authz-probe -- curl -s -o /dev/null -w '%{http_code}' --max-time 5 -k https://istio-egressgateway.istio-egress/ 2>/dev/null || true)"
+$K delete pod authz-probe --wait=false >/dev/null
+
+log "Pod Security: gateway namespace'leri restricted"
+for c in $CLUSTERS; do
+  for ns in istio-ingress istio-egress; do
+    warn=$(kubectl --context "$(ctx "$c")" label ns "$ns" pod-security.kubernetes.io/enforce=restricted \
+      --overwrite --dry-run=server 2>&1 | grep -c Warning || true)
+    check "$c/$ns: restricted ve ihlal eden pod yok" "0" "$warn"
+  done
+done
+
 log "5) Mesh durumu (ztunnel, cluster-a)"
-check "api-a pod'ları ambient'te ve waypoint kullanıyor" "waypoint HBONE" \
+check "api-a pod'ları ambient'te (HBONE)" "HBONE" \
   "$(istioctl --context "$(ctx cluster-a)" ztunnel-config workloads 2>/dev/null | grep -E '^api-a +api-a-' | head -1 || true)"
+# waypoint-for: service -> waypoint servise bağlı (pod'larda WAYPOINT=None beklenir)
+check "api-a servisi waypoint kullanıyor" "waypoint" \
+  "$(istioctl --context "$(ctx cluster-a)" ztunnel-config services 2>/dev/null | grep -E '^api-a +api-a ' | head -1 || true)"
 
 log "6) Gözlemlenebilirlik (Kiali / Grafana)"
 for c in $CLUSTERS; do

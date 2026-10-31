@@ -41,6 +41,34 @@ EOF
   cat edge/tls.crt edge/tls.key > edge/edge.pem
 fi
 
+# Edge -> DMZ zone geçişi: WAF ile DMZ ingress gateway arası karşılıklı TLS (mTLS).
+# Ayrı bir CA: DMZ ingress yalnızca bu CA'nın imzaladığı istemci sertifikasını (edge-waf) kabul eder.
+mkdir -p edge-dmz
+if [[ ! -f edge-dmz/waf-client.crt ]]; then
+  log "Edge -> DMZ mTLS sertifikaları üretiliyor"
+  openssl req -x509 -new -nodes -newkey rsa:2048 -sha256 -days 3650 \
+    -keyout edge-dmz/ca-key.pem -out edge-dmz/ca.pem \
+    -subj "/O=${MESH_ID}/CN=Edge-DMZ Zone CA" \
+    -addext "basicConstraints=critical,CA:true" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign"
+  # Sunucu: DMZ ingress gateway
+  openssl req -new -nodes -newkey rsa:2048 -sha256 \
+    -keyout edge-dmz/dmz-server.key -out edge-dmz/dmz-server.csr -subj "/CN=*.${APPS_DOMAIN}"
+  printf 'basicConstraints=CA:false\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:*.%s\n' \
+    "$APPS_DOMAIN" > edge-dmz/server-ext.cnf
+  openssl x509 -req -sha256 -days 397 -in edge-dmz/dmz-server.csr \
+    -CA edge-dmz/ca.pem -CAkey edge-dmz/ca-key.pem -CAcreateserial \
+    -extfile edge-dmz/server-ext.cnf -out edge-dmz/dmz-server.crt
+  # İstemci: edge-waf
+  openssl req -new -nodes -newkey rsa:2048 -sha256 \
+    -keyout edge-dmz/waf-client.key -out edge-dmz/waf-client.csr -subj "/O=${MESH_ID}/CN=edge-waf"
+  printf 'basicConstraints=CA:false\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth\n' \
+    > edge-dmz/client-ext.cnf
+  openssl x509 -req -sha256 -days 397 -in edge-dmz/waf-client.csr \
+    -CA edge-dmz/ca.pem -CAkey edge-dmz/ca-key.pem -CAcreateserial \
+    -extfile edge-dmz/client-ext.cnf -out edge-dmz/waf-client.crt
+fi
+
 for c in $CLUSTERS; do
   mkdir -p "$c"
   if [[ ! -f "$c/ca-cert.pem" ]]; then

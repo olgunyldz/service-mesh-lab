@@ -7,7 +7,8 @@
 # edge-lb ve loadgen yalnızca edge-net'te; cluster'lara erişemezler. kind ağına yalnızca WAF bağlanır.
 source "$(dirname "$0")/lib.sh"
 
-DMZ_GW="http://$(detect_net_prefix).$(lb_octet dmz).10:80"
+# WAF -> DMZ ingress: karşılıklı TLS (Edge-DMZ Zone CA, bkz. 03-generate-certs.sh)
+DMZ_GW="https://$(detect_net_prefix).$(lb_octet dmz).10:443"
 
 docker network inspect "$EDGE_NETWORK" >/dev/null 2>&1 || docker network create "$EDGE_NETWORK" >/dev/null
 EDGE_SUBNET=$(docker network inspect "$EDGE_NETWORK" -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}')
@@ -23,6 +24,10 @@ docker run -d --name edge-waf --restart unless-stopped --network "$EDGE_NETWORK"
   -e SET_REAL_IP_FROM="$EDGE_SUBNET" \
   -e NGINX_X_FORWARDED_PROTO=https \
   -e SERVER_TOKENS=off \
+  -e SERVER_HEADER= \
+  -e PROXY_SSL=on \
+  -v "$ROOT_DIR/edge/waf-proxy-backend-ssl.conf.template:/etc/nginx/templates/includes/proxy_backend_ssl.conf.template:ro" \
+  -v "$ROOT_DIR/certs/edge-dmz:/etc/nginx/edge-dmz:ro" \
   "$WAF_IMAGE" >/dev/null
 docker network connect kind edge-waf
 

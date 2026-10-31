@@ -14,6 +14,7 @@ metadata:
   name: istio-ingress
   labels:
     zone: internal
+    pod-security.kubernetes.io/enforce: restricted
 ---
 apiVersion: v1
 kind: Namespace
@@ -21,3 +22,4 @@ metadata:
   name: istio-egress
   labels:
     zone: internal
+    pod-security.kubernetes.io/enforce: restricted

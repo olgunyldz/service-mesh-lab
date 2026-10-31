@@ -21,7 +21,10 @@ metadata:
   name: waypoint
   namespace: api-a
   labels:
-    istio.io/waypoint-for: all   # hem service hem workload trafiği
+    # Yalnızca servis trafiği. "all" olunca pod IP trafiği de waypoint'ten geçiyor, waypoint onu yetkili
+    # kimlikle iletiyor ve Servis'e bağlı L7 politikası uygulanmıyordu (pod IP ile L7 AuthZ atlanabiliyordu).
+    # "service" ile pod IP trafiği ztunnel'de L4 kuralına (yalnızca waypoint) takılır.
+    istio.io/waypoint-for: service
 spec:
   gatewayClassName: istio-waypoint
   infrastructure:
