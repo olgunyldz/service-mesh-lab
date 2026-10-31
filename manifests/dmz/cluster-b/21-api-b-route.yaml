@@ -1,4 +1,6 @@
 # Yalnızca cluster-b aktifken uygulanır (bkz. scripts/06-deploy-manifests.sh).
+# TODO (17 · cluster-b): 06 · dmz-channels'tan beri dmz-egressgateway web gateway'ini kabul etmiyor; web trafiği
+# web-bff'ten geçmeli. cluster-b geri gelince api-b, BFF'e (ikinci upstream) ya da bir kanal gateway'ine taşınmalı.
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:

@@ -1,0 +1,70 @@
+# Mobil kanal: mobile-gateway (istio-mobile), mobile-api.apps.example.local.
+#   edge-waf --mTLS--> mobile-gateway --mTLS--> dmz-egressgateway --> cluster-a
+# Yalnızca /mobile/v1/* (önek kaldırılarak api-a'ya). Tarayıcı kanalı değil: CORS yok.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: mobile-gateway
+  namespace: istio-mobile
+spec:
+  selector:
+    istio: mobile-gateway
+  servers:
+    - port:
+        number: 443
+        name: https-mtls
+        protocol: HTTPS
+      tls:
+        mode: MUTUAL
+        credentialName: dmz-ingress-mtls   # aynı Edge-DMZ Zone CA: yalnızca edge-waf bağlanabilir
+        minProtocolVersion: TLSV1_2
+      hosts:
+        - mobile-api.apps.example.local
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: mobile
+  namespace: istio-mobile
+spec:
+  hosts:
+    - mobile-api.apps.example.local
+  gateways:
+    - mobile-gateway
+  http:
+    - match:
+        - uri:
+            prefix: /mobile/v1/
+      rewrite:
+        uri: /
+        authority: api-a.apps.example.local   # zone'lar arası iç ad
+      headers:
+        request:
+          set:
+            x-channel: mobile
+          remove:
+            - x-partner-id
+      route:
+        - destination:
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443
+      timeout: 10s
+---
+# Gateway'de varsayılan reddet: yalnızca mobil API yolları ve metotları
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: mobile-allow-api
+  namespace: istio-mobile
+spec:
+  selector:
+    matchLabels:
+      istio: mobile-gateway
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            hosts: ["mobile-api.apps.example.local", "mobile-api.apps.example.local:*"]
+            paths: ["/mobile/v1/*"]
+            methods: [GET, POST]

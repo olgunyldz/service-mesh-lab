@@ -1,0 +1,74 @@
+# Şube kanalı: branch-gateway (istio-branch), branch-api.corp.internal.
+#   şube terminali --(şube WAN'ı, branch-net)--> branch-fw (iç firewall, TCP 443) --mTLS (Branch CA)--> branch-gateway
+#   --mTLS--> dmz-egressgateway --> cluster-a
+# İnternet edge'inden (HAProxy + WAF) geçmez. Terminalin cihaz sertifikası burada doğrulanır (TLS passthrough
+# firewall'dan geçer); sertifikanın subject'i arka uca x-branch-device olarak iletilir (denetim izi).
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: branch-gateway
+  namespace: istio-branch
+spec:
+  selector:
+    istio: branch-gateway
+  servers:
+    - port:
+        number: 443
+        name: https-mtls
+        protocol: HTTPS
+      tls:
+        mode: MUTUAL
+        credentialName: branch-gateway-mtls   # sunucu sertifikası + Branch CA (05-install-gateways.sh)
+        minProtocolVersion: TLSV1_2
+      hosts:
+        - branch-api.corp.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: branch
+  namespace: istio-branch
+spec:
+  hosts:
+    - branch-api.corp.internal
+  gateways:
+    - branch-gateway
+  http:
+    - match:
+        - uri:
+            prefix: /branch/v1/
+      rewrite:
+        uri: /
+        authority: api-a.apps.example.local
+      headers:
+        request:
+          set:
+            x-channel: branch
+            # Doğrulanmış cihaz sertifikasının subject'i (Envoy değişkeni); dışarıdan gelen değer ezilir
+            x-branch-device: "%DOWNSTREAM_PEER_SUBJECT%"
+          remove:
+            - x-partner-id
+      route:
+        - destination:
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443
+      timeout: 10s
+---
+# Gateway'de varsayılan reddet: yalnızca şube API yolları ve metotları
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: branch-allow-api
+  namespace: istio-branch
+spec:
+  selector:
+    matchLabels:
+      istio: branch-gateway
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            hosts: ["branch-api.corp.internal", "branch-api.corp.internal:*"]
+            paths: ["/branch/v1/*"]
+            methods: [GET, POST]

@@ -34,19 +34,26 @@ for entry in $LAB_IMAGES; do
     | grep -v "^WARNING" || true
 done
 
+# Kendi servislerimiz: host'ta build -> lab registry (127.0.0.1:<port>) -> imza. Gerçekte CI yapar (15 · ci).
+for entry in $LAB_BUILDS; do
+  svc=${entry%%:*} ver=${entry#*:}
+  log "Build + imzala: services/$svc -> $LAB_REGISTRY/lab/$svc:$ver"
+  docker build -q -t "localhost:$LAB_REGISTRY_HOST_PORT/lab/$svc:$ver" \
+    --build-arg GO_BUILD_IMAGE="$GO_BUILD_IMAGE" --build-arg GO_RUNTIME_IMAGE="$GO_RUNTIME_IMAGE" \
+    --build-arg VERSION="$ver" "$ROOT_DIR/services/$svc" >/dev/null
+  docker push -q "localhost:$LAB_REGISTRY_HOST_PORT/lab/$svc:$ver" >/dev/null
+  verify "lab/$svc:$ver" && { echo "  zaten imzalı (aynı digest)"; continue; }
+  cosign sign --key /keys/cosign.key --allow-http-registry --tlog-upload=false --yes "$LAB_REGISTRY/lab/$svc:$ver" 2>&1 \
+    | grep -v "^WARNING" || true
+done
+
 # Negatif test: aynı içerik, imzasız
 src=$(echo "$LAB_IMAGES" | tr ' ' '\n' | grep curl | cut -d= -f1)
 log "İmzasız kopya (negatif test): $LAB_REGISTRY/$LAB_UNSIGNED_IMAGE"
 copy "$src" "$LAB_UNSIGNED_IMAGE"
 
-verify() {
-  cosign verify --key /keys/cosign.pub --allow-http-registry --allow-insecure-registry --insecure-ignore-tlog=true \
-    "$LAB_REGISTRY/$1" >/dev/null 2>&1
-}
-
 log "Doğrulama"
-for entry in $LAB_IMAGES; do
-  dst=${entry#*=}
+for dst in $(for e in $LAB_IMAGES; do echo "${e#*=}"; done) $(for e in $LAB_BUILDS; do echo "lab/${e%%:*}:${e#*:}"; done); do
   if verify "$dst"; then echo "  ✔ imzalı: $dst"; else echo "  ✘ imza doğrulanamadı: $dst"; exit 1; fi
 done
 # cosign copy upstream'in keyless imzasını da taşır; bizim anahtarımızla doğrulanmamalı

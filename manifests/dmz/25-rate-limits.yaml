@@ -1,0 +1,142 @@
+# Kanal başına hız sınırı: Envoy local rate limit (her gateway pod'unda token bucket).
+# Edge'deki sınır IP başına (kötüye kullanan istemci); buradaki sınır kanalın toplamı (arka ucu korumak).
+# Sınır aşılınca 429 + "x-ratelimit-scope: <kanal>" header'ı (edge'in 429'undan ayırt etmek için).
+# Not: local rate limit pod başınadır; replika sayısıyla çarpılır. Cluster genelinde ortak sınır
+# (global rate limit) Redis'li bir rate limit servisi ister (07 · data).
+#
+#   kanal    sürekli   anlık (bucket)
+#   web      50 rps    100
+#   mobile   30 rps    60
+#   partner   5 rps    10   (partner sözleşmesindeki kota)
+#   branch   20 rps    40   (şube terminalleri)
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: web-rate-limit
+  namespace: istio-ingress
+spec:
+  workloadSelector:
+    labels:
+      istio: dmz-ingressgateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.local_ratelimit
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+            stat_prefix: channel_rate_limit
+            token_bucket: { max_tokens: 100, tokens_per_fill: 50, fill_interval: 1s }
+            filter_enabled: { default_value: { numerator: 100, denominator: HUNDRED } }
+            filter_enforced: { default_value: { numerator: 100, denominator: HUNDRED } }
+            response_headers_to_add:
+              - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                header: { key: x-ratelimit-scope, value: web }
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: mobile-rate-limit
+  namespace: istio-mobile
+spec:
+  workloadSelector:
+    labels:
+      istio: mobile-gateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.local_ratelimit
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+            stat_prefix: channel_rate_limit
+            token_bucket: { max_tokens: 60, tokens_per_fill: 30, fill_interval: 1s }
+            filter_enabled: { default_value: { numerator: 100, denominator: HUNDRED } }
+            filter_enforced: { default_value: { numerator: 100, denominator: HUNDRED } }
+            response_headers_to_add:
+              - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                header: { key: x-ratelimit-scope, value: mobile }
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: partner-rate-limit
+  namespace: istio-partner
+spec:
+  workloadSelector:
+    labels:
+      istio: partner-gateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.local_ratelimit
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+            stat_prefix: channel_rate_limit
+            token_bucket: { max_tokens: 10, tokens_per_fill: 5, fill_interval: 1s }
+            filter_enabled: { default_value: { numerator: 100, denominator: HUNDRED } }
+            filter_enforced: { default_value: { numerator: 100, denominator: HUNDRED } }
+            response_headers_to_add:
+              - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                header: { key: x-ratelimit-scope, value: partner }
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: branch-rate-limit
+  namespace: istio-branch
+spec:
+  workloadSelector:
+    labels:
+      istio: branch-gateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.local_ratelimit
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+            stat_prefix: channel_rate_limit
+            token_bucket: { max_tokens: 40, tokens_per_fill: 20, fill_interval: 1s }
+            filter_enabled: { default_value: { numerator: 100, denominator: HUNDRED } }
+            filter_enforced: { default_value: { numerator: 100, denominator: HUNDRED } }
+            response_headers_to_add:
+              - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                header: { key: x-ratelimit-scope, value: branch }

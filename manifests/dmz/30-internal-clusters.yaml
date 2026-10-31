@@ -1,5 +1,5 @@
 # DMZ egress gateway: internal'a giden tek kapı. __NET_PREFIX__ scriptte doldurulur.
-#   dmz-ingressgateway --mTLS--> dmz-egressgateway --mTLS--> cluster-a ingress gw (LB IP)
+#   web-bff waypoint / mobile-gateway / partner-gateway --mTLS--> dmz-egressgateway --mTLS--> cluster-a ingress gw (LB IP)
 apiVersion: networking.istio.io/v1
 kind: Gateway
 metadata:
@@ -20,11 +20,15 @@ spec:
       hosts:
         - "*"
 ---
-# Egress gateway'e yalnızca DMZ ingress gateway kimliği girebilir
+# Egress gateway'e (internal'a tek kapı) yalnızca kanalların arka uçları girebilir:
+#   web     -> web-bff'in waypoint'i (web gateway'in kendisi değil: web trafiği BFF'ten geçmek zorunda)
+#   mobile  -> mobile-gateway
+#   partner -> partner-gateway
+#   branch  -> branch-gateway
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
-  name: allow-only-dmz-ingress
+  name: allow-channel-backends
   namespace: istio-egress
 spec:
   selector:
@@ -35,7 +39,23 @@ spec:
     - from:
         - source:
             principals:
-              - corp.mesh/ns/istio-ingress/sa/dmz-ingressgateway
+              - corp.mesh/ns/web-bff/sa/waypoint
+              - corp.mesh/ns/istio-mobile/sa/mobile-gateway
+              - corp.mesh/ns/istio-partner/sa/partner-gateway
+              - corp.mesh/ns/istio-branch/sa/branch-gateway
+---
+# Kanal gateway'leri ve BFF waypoint'i -> egress gateway: mesh kimlikleriyle mTLS.
+# Servisin kendi namespace'inde: tüm istemci namespace'leri için geçerli.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: dmz-egressgateway
+  namespace: istio-egress
+spec:
+  host: dmz-egressgateway.istio-egress.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
 ---
 apiVersion: networking.istio.io/v1
 kind: ServiceEntry
