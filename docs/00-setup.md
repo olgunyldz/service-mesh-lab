@@ -10,6 +10,37 @@
 
 OpenShift benzeri bir kurumsal yapıyı yerelde simüle etmek: dış dünyaya açık bir DMZ cluster'ı, iki internal cluster ve Istio ambient mesh. Cluster'lar arası trafik yalnızca gateway'ler üzerinden, mTLS ile akar.
 
+## Adım sonundaki durum
+
+| Konu | Durum |
+|------|-------|
+| Cluster'lar | `dmz`, `cluster-a`, `cluster-b` (kind); her biri 1 control-plane + 1 worker |
+| Mesh | Her cluster'da bağımsız Istio 1.30.7 ambient (istiod, istio-cni, ztunnel); ortak root CA, trust domain `corp.mesh` |
+| Giriş | `http://localhost:8080` (düz HTTP, `Host` header'ı ile) → DMZ içindeki HAProxy pod'u → `dmz-ingressgateway` |
+| Zone geçişi | `dmz-ingressgateway` → internal ingress gateway'ler, doğrudan, `ISTIO_MUTUAL` |
+| Uygulamalar | `api-a` (cluster-a), `api-b` (cluster-b): podinfo, namespace başına waypoint |
+| Çıkış | cluster-a/b'de `istio-egressgateway` → httpbin.org; api-a → api-b de egress üzerinden |
+| Çalışan akışlar | 1, 2, 3, 4 (bkz. Doğrulama) |
+| Gözlemlenebilirlik | Yok |
+
+## Önceki adıma göre değişenler
+
+İlk adım: önceki durum boş bir repo (`main` branch'inde yalnızca boş başlangıç commit'i). Tüm yapı bu adımda kuruldu.
+
+## Eklenen bileşenler
+
+| Bileşen | Amacı | Neden gerekli | Muadilleri | Neden bu seçildi |
+|---------|-------|---------------|------------|------------------|
+| **kind** | Docker container'ları içinde Kubernetes cluster'ları | OpenShift'i yerelde birden çok cluster'la simüle etmek | k3d, minikube, OpenShift Local (CRC), MicroShift | Birden çok cluster'ı aynı Docker ağında hafifçe çalıştırır. CRC tek cluster ve çok ağır |
+| **MetalLB** | `LoadBalancer` servislerine IP vermek | Cluster'lar birbirine gateway'lerin sabit LB IP'leri üzerinden ulaşıyor | kube-vip, Cilium LB IPAM, bulut LB'leri, NodePort | kind'da standart çözüm; L2 modu Docker ağında sorunsuz. OpenShift'te de MetalLB operatörü var |
+| **Istio (ambient mod)** | Service mesh: mTLS, kimlik, yetkilendirme, trafik yönetimi | İstekte belirtilen gereksinim (ztunnel, waypoint, ingress/egress gateway) | Istio sidecar modu, Linkerd, Cilium Service Mesh, Consul Connect | Ambient sidecar'sız (daha az kaynak). OpenShift Service Mesh 3 de Istio tabanlı ve ambient'i destekliyor |
+| **ztunnel** | Node başına L4 proxy; pod'lar arası mTLS (HBONE) | Ambient modun veri düzlemi | Sidecar Envoy | Ambient'in parçası |
+| **waypoint** | Namespace başına L7 proxy (HTTP AuthZ, yönlendirme) | L7 politikalar (metot bazlı AuthZ vb.) için | Sidecar Envoy | Ambient'te L7'nin yolu; yalnızca gereken namespace'lerde çalışır |
+| **Ingress / egress gateway'ler** (`istio/gateway` chart) | Cluster'a giriş ve çıkış noktaları | Zone'lar arası trafiğin denetlenebilir kapılardan geçmesi | Gateway API ile Istio gateway, NGINX/Envoy Gateway | İstekte belirtilen bileşen; klasik `Gateway`/`VirtualService` ile `ISTIO_MUTUAL` kolayca yapılandırılıyor |
+| **Ortak root CA + cluster başına intermediate CA** (openssl) | Cluster'lar arası mTLS için ortak güven zinciri | Ayrı mesh'lerin gateway'leri birbirinin sertifikasını doğrulayabilsin | cert-manager, Istio'nun `tools/certs` Makefile'ı, Vault PKI | Bağımlılık gerektirmez. Vault'a geçiş `13 · secrets` adımında planlı |
+| **HAProxy (edge-lb, DMZ içinde pod)** | Dış yük dengeleyici | F5 / OpenShift Router simülasyonu | nginx, Envoy, Traefik, F5 | Kurumsal ortamlarda yaygın. (`02 · zones`'ta Kubernetes dışına taşındı) |
+| **podinfo** | Örnek API (api-a, api-b) | Akışları test etmek için gerçek bir HTTP servisi | httpbin, Istio bookinfo, özel servis | Küçük (Go), non-root, `/api/echo` ile başka servise çağrı yapabiliyor |
+
 ## Yapılanlar
 
 ```mermaid

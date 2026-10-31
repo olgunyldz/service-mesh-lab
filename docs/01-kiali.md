@@ -9,6 +9,44 @@
 
 Mesh trafiğini görsel olarak izlemek: hangi servis kimi çağırıyor, istek/sn, hata oranı, mTLS. Sonraki adımlarda (token exchange vb.) sorun ayıklamayı da hızlandırır.
 
+## Adım sonundaki durum
+
+| Konu | Durum |
+|------|-------|
+| Cluster'lar | **`dmz`, `cluster-a`**; her biri **tek node**. `cluster-b` kapalı (yol haritasının sonunda, 17. adımda geri gelecek) |
+| Mesh | Değişmedi: cluster başına Istio 1.30.7 ambient; image'lar artık `docker.io/istio`'dan |
+| Giriş | Değişmedi: `http://localhost:8080` → DMZ içindeki HAProxy → `dmz-ingressgateway` → cluster-a |
+| Çalışan akışlar | 1 ve 4. (2 ve 3 cluster-b kapalı olduğu için askıda; tanımları `manifests/*/cluster-b/` altında) |
+| Gözlemlenebilirlik | **Yeni:** cluster başına Prometheus + Grafana + Kiali; Kiali `localhost:20001-20002/kiali`, Grafana `localhost:3001-3002` |
+| Trafik üretimi | **Yeni:** DMZ'de `loadgen` pod'u |
+| Kurulum altyapısı | **Yeni:** kalıcı registry önbelleği (3 container); sıfırdan kurulum ~7 dk |
+| Kaynak | Docker VM'inde ~6,7 GB kullanılabilir bellek, CPU ~%42 |
+
+## Önceki adıma göre değişenler
+
+| Değişiklik | Neden |
+|------------|-------|
+| Cluster başına Prometheus, Grafana, Kiali eklendi | Mesh trafiğini görsel olarak izlemek ve sonraki adımlarda sorun ayıklamayı hızlandırmak |
+| DMZ'ye `loadgen` eklendi | Kiali grafikleri ancak trafik varken dolu görünür |
+| Kiali/Grafana NodePort + kind port mapping ile host'a açıldı | Tarayıcıdan erişim. Internal cluster'larda açılan tek port bunlar (lab istisnası) |
+| Registry pull-through cache eklendi | Her cluster aynı image'ları internetten ayrı ayrı çekiyordu; kurulum zaman aşımına düşüyordu |
+| Istio image kaynağı `registry.istio.io` → `docker.io/istio` | `registry.istio.io` önbellek proxy'siyle uyumsuz (`Content-Length` göndermiyor) |
+| Cluster'lar 2 node'dan **tek node**'a indirildi | 15,7 GB RAM'li makinede bellek tükendi; cluster-b'nin API server'ı çöktü |
+| **cluster-b kapatıldı**; ona bağlı tanımlar `manifests/*/cluster-b/` altına taşındı | Aynı bellek sorunu. Ayrı klasörler sayesinde `CLUSTERS`'a eklenince otomatik geri geliyor |
+| Script'ler cluster listesine bağlı hale getirildi (`has_cluster`, `internal_clusters`) | cluster-b'nin (ve ileride mgmt'in) açılıp kapanabilmesi için |
+| `99-destroy.sh` sağlamlaştırıldı | Docker container'ları zamanında durduramayınca kurulum bozuk ilerliyordu |
+| Windows curl yol sorunları düzeltildi (`pwd -W`, `http_code`) | Git Bash'teki curl yerel Windows programı; `MSYS_NO_PATHCONV` ile `/tmp` ve `/dev/null` yollarına yazamıyordu |
+
+## Eklenen bileşenler
+
+| Bileşen | Amacı | Neden gerekli | Muadilleri | Neden bu seçildi |
+|---------|-------|---------------|------------|------------------|
+| **Prometheus** (Istio addon) | ztunnel, waypoint ve gateway metriklerini toplamak | Kiali ve Grafana metrikleri buradan okur | VictoriaMetrics, Thanos, OpenShift'in yerleşik izleme yığını | Istio'nun hazır, test edilmiş addon'u; Kiali ile doğrudan uyumlu |
+| **Grafana** (Istio addon) | Metrik dashboard'ları (mesh, workload, ztunnel) | Gecikme, istek sayısı, hata oranı gibi zaman serilerini izlemek | Perses, OpenShift Console dashboard'ları | Istio dashboard'larıyla hazır geliyor |
+| **Kiali 2.26.0** | Service mesh topolojisi, trafik ve yapılandırma doğrulama arayüzü | Mesh'i görsel izlemek ve Istio yapılandırma hatalarını görmek | OpenShift Service Mesh Console eklentisi (OSSMC, Kiali tabanlı), Linkerd Viz | Istio'nun resmi arayüzü, ambient'i destekliyor; OpenShift'teki karşılığı da Kiali |
+| **loadgen** (curl döngüsü) | Sürekli örnek trafik | Grafiklerin dolu görünmesi | fortio, k6, hey, Locust | En hafif çözüm; yük testi değil, yalnızca sürekli trafik gerekiyor |
+| **Registry önbelleği** (`registry:2`, 3 container) | docker.io, quay.io, ghcr.io için pull-through cache | Image'ları bir kez indirip sıfırlamalarda yerelden almak | Harbor proxy cache, Zot, Nexus/Artifactory, `kind load` | kind'ın önerdiği yöntem, tek container ile çalışıyor. `kind load` denendi, Windows'ta çok yavaş kaldı. Harbor bu iş için ağır |
+
 ## Yapılanlar
 
 - Her cluster'a Istio'nun **Prometheus** ve **Grafana** addon'ları kuruldu (Istio 1.30 `samples/addons`).
