@@ -21,7 +21,8 @@ metadata:
   name: waypoint
   namespace: api-b
   labels:
-    istio.io/waypoint-for: all   # hem service hem workload trafiği
+    # Yalnızca servis trafiği (bkz. cluster-a/20-waypoint.yaml: "all" ile pod IP üzerinden L7 AuthZ atlanabiliyordu)
+    istio.io/waypoint-for: service
 spec:
   gatewayClassName: istio-waypoint
   infrastructure:

@@ -1,0 +1,17 @@
+# edge-waf -> DMZ ingress gateway: karşılıklı TLS (mTLS).
+# Image'ın kendi proxy_backend_ssl şablonunun yerine geçer (bkz. scripts/06b-deploy-edge.sh);
+# orijinalinde güvenilir CA ve SNI ayarları yok.
+proxy_ssl_certificate     /etc/nginx/edge-dmz/waf-client.crt;
+proxy_ssl_certificate_key /etc/nginx/edge-dmz/waf-client.key;
+
+# Sunucuyu (DMZ ingress) yalnızca Edge-DMZ Zone CA'sına göre doğrula
+proxy_ssl_trusted_certificate /etc/nginx/edge-dmz/ca.pem;
+proxy_ssl_verify       on;
+proxy_ssl_verify_depth 2;
+
+# Gateway, *.apps.example.local sunucusunu SNI ile eşleştirir
+proxy_ssl_server_name on;
+proxy_ssl_name        $host;
+
+proxy_ssl_protocols TLSv1.2 TLSv1.3;
+proxy_ssl_session_reuse on;

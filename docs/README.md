@@ -14,6 +14,9 @@ gitGraph
     branch zones
     checkout zones
     commit id: "edge + WAF + TLS + tek kapı"
+    branch hardening
+    checkout hardening
+    commit id: "varsayılan reddet + mTLS + PSA"
 ```
 
 Her adım bittiğinde ortam sıfırlanır ve baştan kurulur (`99-destroy.sh` → `setup.sh` → `08-verify.sh`). Böylece o adımın elle müdahale olmadan, sıfırdan çalıştığı doğrulanır.
@@ -40,6 +43,7 @@ Ana [README](../README.md) ortamın güncel ve toplu halini anlatır. Bu klasör
 | 00 | [Temel kurulum](00-setup.md) | `setup` | ✅ Tamamlandı |
 | 01 | [Gözlemlenebilirlik: Kiali, Prometheus, Grafana](01-kiali.md) | `kiali` | ✅ Tamamlandı (tek node, cluster-b kapalı) |
 | 02 | [Zone'lar: Edge, WAF, TLS ve tek kapı](02-zones.md) | `zones` | ✅ Tamamlandı (20/20 test) |
+| 03 | [Sıkılaştırma (hardening)](03-hardening.md) | `hardening` | ✅ Tamamlandı (33/33 test) |
 
 ## Diğer dokümanlar
 

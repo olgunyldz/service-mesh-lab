@@ -4,7 +4,7 @@
 
 Bu doküman, bankacılık ortamı için tanımlanmış 13 katmanlı güvenlik gereksinimlerini lab ortamının **bugünkü haliyle** karşılaştırır. Her madde için üç şey belirtilir: şu anki durum, kanıt (dosya veya yapılandırma) ve lab'da nasıl karşılanacağı.
 
-Analiz tarihi: 2026-10-31 · Kapsam: `zones` branch'i (00-setup + 01-kiali + 02-zones adımları). ✅ işaretli maddelerin yanında hangi adımda kapandığı yazar.
+Analiz tarihi: 2026-10-31 · Kapsam: `hardening` branch'i (00-setup → 03-hardening). ✅/⚠️ işaretli maddelerin yanında hangi adımda değiştiği yazar.
 
 ## Gösterim
 
@@ -21,11 +21,11 @@ Analiz tarihi: 2026-10-31 · Kapsam: `zones` branch'i (00-setup + 01-kiali + 02-
 | # | Katman | ✅ | ⚠️ | ❌ | 📅 | ➖ | Genel durum |
 |---|--------|---|---|---|---|---|-------------|
 | 1 | Sağlayıcı / internet kenarı | 1 | 0 | 0 | 0 | 3 | Kapsam dışı; TLS on-prem sonlanıyor (`02-zones`) |
-| 2 | Edge (dış DMZ) | 3 | 3 | 0 | 0 | 1 | `02-zones` ile büyük ölçüde kapandı; yönetim UI'ları ve gerçek firewall eksik |
-| 3 | DMZ cluster (platform) | 1 | 2 | 1 | 0 | 2 | DMZ egress var; `REGISTRY_ONLY` ve secret yönetimi eksik |
-| 4 | API gateway / BFF / token handler | 0 | 1 | 4 | 3 | 0 | Büyük ölçüde planlı adımlara bağlı |
+| 2 | Edge (dış DMZ) | 4 | 2 | 0 | 0 | 1 | `02-zones` ve `03-hardening` ile büyük ölçüde kapandı; yönetim UI'ları ve gerçek firewall eksik |
+| 3 | DMZ cluster (platform) | 2 | 1 | 1 | 0 | 2 | Pod Security tamam; pod'ların doğrudan çıkışı ve secret yönetimi eksik |
+| 4 | API gateway / BFF / token handler | 1 | 0 | 4 | 3 | 0 | Hata yanıtları tek tip (`03`); geri kalanı planlı adımlara bağlı |
 | 5 | Zone geçişi (DMZ → internal) | 3 | 2 | 1 | 0 | 0 | Tek kapı var (`02-zones`); yön kısıtı ağ seviyesinde eksik |
-| 6 | Internal cluster / service mesh | 1 | 1 | 3 | 1 | 1 | STRICT mTLS var; default-deny ve admission eksik |
+| 6 | Internal cluster / service mesh | 2 | 0 | 2 | 1 | 2 | STRICT mTLS + varsayılan reddet (`03`); admission ve audit eksik; NetworkPolicy bu lab'da uygulanamıyor |
 | 7 | Uygulama (Spring Boot) | 0 | 0 | 0 | 0 | 6 | Örnek uygulama podinfo; gerçek servis yazılınca geçerli |
 | 8 | Kimlik ve oturum (IdP) | 0 | 0 | 0 | 5 | 1 | Keycloak mgmt'te planlı |
 | 9 | Veri katmanı | 0 | 0 | 2 | 2 | 1 | `data` adımında planlı |
@@ -72,7 +72,7 @@ flowchart LR
 | Dışarıdan gelen X-Forwarded-* header'larını sil, yeniden yaz | ✅ `02` | HAProxy `X-Forwarded-*`, `X-Real-IP`, `Forwarded`, `x-user-jwt` siliyor, yeniden yazıyor; Envoy `numTrustedProxies: 2` (test edildi) | – |
 | Bağlantı/istek boyutu limitleri, slow-loris koruması | ✅ `02` | IP başına 100 istek/10 sn (429, test edildi) ve 50 bağlantı; `timeout http-request 5s`; gövde ≤ 1 MB | Birden çok edge kopyası olursa limit paylaşımı (peers) |
 | İç firewall dış firewall'dan farklı üreticide | ➖ | Firewall yok | Fiziksel. Benzetim: edge'de HAProxy, DMZ'de Envoy; farklı yazılımlar |
-| Edge'den DMZ'ye yalnızca ingress portu açık | ⚠️ `02` | Edge ayrı `edge-net` Docker ağında; cluster'lara yalnızca WAF bağlı, yalnızca DMZ ingress LB IP'sine gidiyor | WAF container'ı `kind` ağının tamamını görebiliyor; port seviyesinde kısıt için host iptables gerekir |
+| Edge'den DMZ'ye yalnızca ingress portu açık | ✅ `03` | WAF → DMZ ingress **karşılıklı TLS**: DMZ yalnızca Edge-DMZ Zone CA'lı istemci sertifikasını (yalnızca edge-waf'ta) kabul ediyor; düz HTTP (80) kapalı. Ayrıca edge ayrı `edge-net` ağında | Ağ seviyesinde gerçek firewall ➖ |
 
 ## 3. DMZ cluster (platform)
 
@@ -80,9 +80,9 @@ flowchart LR
 |------------|-------|------------|--------------|
 | İş mantığı ve veri yok; yalnızca doğrulama, dönüştürme, yönlendirme | ✅ | DMZ'de yalnızca edge-lb, ingress gateway ve loadgen (test aracı) var | Korunmalı. `dmz-channels` adımındaki Web BFF yalnızca birleştirme/dönüştürme yapmalı |
 | Kubernetes API internete kapalı; bastion + MFA + PAM | ➖ | kind API server'ı yalnızca `127.0.0.1`'de | Bastion/PAM organizasyonel; lab'da API zaten dışarıya kapalı |
-| Dışarı çıkış kapalı (`REGISTRY_ONLY`); tek çıkış egress gateway | ⚠️ `02` | DMZ egress gateway var (internal'a giden tek yol). `outboundTrafficPolicy` hâlâ `ALLOW_ANY` | `03 · hardening`: `REGISTRY_ONLY` |
+| Dışarı çıkış kapalı (`REGISTRY_ONLY`); tek çıkış egress gateway | ⚠️ `03` | `REGISTRY_ONLY` açık (`03`) ve egress gateway'e yalnızca waypoint girebiliyor. Ama **ambient'te pod'ların doğrudan çıkışı engellenmiyor** (ztunnel `REGISTRY_ONLY` uygulamıyor) | Egress NetworkPolicy (bu lab'da uygulanamıyor; gerçek ortamda OVN-K / EgressFirewall) |
 | Node sertleştirme (CIS), SSH kapalı, otomatik yama | ➖ | kind node'ları container | Gerçek node gerektirir. `kube-bench` ile CIS raporu alınabilir (bilgi amaçlı) |
-| Pod Security restricted: non-root, read-only FS, capability yok | ⚠️ | `edge-lb`, `loadgen`, `api-a/b` namespace'leri `restricted`; non-root ve `drop: ALL` var. **`readOnlyRootFilesystem` hiçbir yerde yok**; `istio-ingress`/`istio-egress` namespace'leri etiketsiz | Tüm manifest'lere `readOnlyRootFilesystem: true` (gerekirse `emptyDir`); gateway namespace'lerine `restricted` etiketi (istio-cni ve ztunnel ayrıcalık gerektirdiği için `istio-system` istisna) |
+| Pod Security restricted: non-root, read-only FS, capability yok | ✅ `03` | Uygulama ve gateway namespace'leri `restricted`; gateway'lere seccomp; api pod'ları `readOnlyRootFilesystem`; Istio proxy'leri zaten salt okunur. `istio-system` istisna (istio-cni ve ztunnel ayrıcalık gerektirir) | – |
 | Secret'lar dış kasada (Vault / External Secrets), rotasyonlu | ❌ | Istio CA anahtarı Kubernetes secret'ı (`cacerts`); **root CA private key diskte** (`certs/root-key.pem`, gitignore'da) | mgmt'e HashiCorp Vault Community + External Secrets Operator. Istio CA için cert-manager + istio-csr ile Vault entegrasyonu |
 
 ## 4. API gateway / BFF / token handler
@@ -93,7 +93,7 @@ flowchart LR
 | Token exchange: dış token internal'a geçmesin | 📅 | Planlandı | `token-exchange` adımı ([README](../README.md#planlanan-kullanıcı-kimliği-yayılımı-token-exchange)) |
 | Kullanıcı, cihaz, IP, partner bazında rate limit ve kota | 📅 | Yok | `dmz-channels`: kanal gateway'lerinde Envoy local rate limit; kullanıcı bazlı için global rate limit servisi (Redis, mgmt) |
 | Girdi doğrulama: şema, boyut, content-type; bilinmeyen alan reddi | ❌ | Yok | Coraza'da body/content-type kuralları; OpenAPI şema doğrulaması BFF'te veya gateway'de (Envoy ext_proc) |
-| Genel hata yanıtları; stack trace / iç IP sızmasın | ⚠️ | Envoy hataları kısa ama `server: istio-envoy` header'ı dönüyor; podinfo ayrıntılı JSON (hostname dahil) döndürüyor | Gateway'de `server` header'ını gizleme; `local_reply_config` ile tek tip hata gövdesi |
+| Genel hata yanıtları; stack trace / iç IP sızmasın | ✅ `03` | Edge'de `Server`/`x-envoy-*` siliniyor, 5xx gövdeleri tek tip JSON (test edildi) | podinfo normal yanıtta hostname döndürüyor (örnek servis Go ile yazılınca) |
 | Cookie HttpOnly/Secure/SameSite=Strict, CSRF, CSP, X-Frame-Options | ❌ | Web kanalı yok | `dmz-channels` Web BFF'te; güvenlik header'ları gateway'de `response.headers.add` ile |
 | CORS yalnızca izinli origin'lere, `*` yok | ❌ | Tanımsız | VirtualService `corsPolicy` ile açık origin listesi |
 | Loglarda token, parola, OTP, kart verisi maskelensin | ❌ | Envoy access log'ları stdout'a varsayılan formatla yazıyor | Access log formatından `authorization` header'ının çıkarılması; uygulama loglarında maskeleme |
@@ -113,10 +113,10 @@ flowchart LR
 
 | Gereksinim | Durum | Mevcut hal | Lab'da nasıl |
 |------------|-------|------------|--------------|
-| Zero trust: STRICT mTLS | ✅ | `PeerAuthentication STRICT` (cluster-a/b, mesh geneli) | DMZ'ye de eklenmeli (HAProxy dışarı alınınca mümkün) |
-| Deny-by-default AuthorizationPolicy | ⚠️ | Gateway'lerde ve api servislerinde `ALLOW` politikaları var (hedefe gelen diğer trafiği dolaylı olarak reddeder). **Namespace genelinde `allow-nothing` politikası yok** | Her namespace'e boş `spec: {}` AuthorizationPolicy + açık izinler |
+| Zero trust: STRICT mTLS | ✅ `03` | `PeerAuthentication STRICT`: cluster-a/b ve DMZ (`03`) | – |
+| Deny-by-default AuthorizationPolicy | ✅ `03` | api-a'da `allow-nothing` + açık izinler (L4 ztunnel: yalnızca waypoint; L7 waypoint: yalnızca ingress gw). Egress gw'ye yalnızca waypoint. Pod IP ile L7 atlama açığı bulunup kapatıldı (`waypoint-for: service`) | – |
 | İki kimlik birlikte: SPIFFE + kullanıcı claim'leri (channel, acr, scope) | 📅 | Yalnızca servis kimliği | `token-exchange`: `when: request.auth.claims[channel]` vb. |
-| Namespace'ler arası default-deny NetworkPolicy | ❌ | Yok | kindnet NetworkPolicy destekliyor; her namespace'e default-deny + gerekli izinler. Ambient'te HBONE portu (15008) açık bırakılmalı |
+| Namespace'ler arası default-deny NetworkPolicy | ➖ `03` | Bu lab'da uygulanamıyor: kindnet NetworkPolicy uygulamıyor; kube-network-policies WSL2 kernel'inde `CONFIG_NFT_QUEUE` olmadığı için çalışmadı | Referans manifest: `infra/network-policies/reference/` (gerçek ortam için, doğrulanmadı) |
 | prod / test / dev ayrı cluster'larda | ➖ | Lab tek ortam | Gerçek ortamda ayrı cluster/hesap |
 | Kubernetes audit log → SIEM | ❌ | Kapalı | kind config'te `audit-policy` + log dosyası; merkezi log sistemine gönderim (katman 12) |
 | Admission kontrolü: imzasız image, `latest`, privileged, hostPath reddi | ❌ | Yok. Versiyonlar sabitlenmiş (latest kullanılmıyor), ama zorunlu kılan bir mekanizma yok | Kyverno: `disallow-latest-tag`, `disallow-privileged`, `disallow-host-path`, `verify-images` (cosign) |

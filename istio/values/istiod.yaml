@@ -8,6 +8,9 @@ global:
   hub: docker.io/istio
 meshConfig:
   accessLogFile: /dev/stdout
+  # Yalnızca kayıtlı (Service/ServiceEntry) hedeflere çıkış. Dışarıya tek yol: ServiceEntry -> waypoint -> egress gateway
+  outboundTrafficPolicy:
+    mode: REGISTRY_ONLY
   defaultConfig:
     holdApplicationUntilProxyStarts: true
 pilot:

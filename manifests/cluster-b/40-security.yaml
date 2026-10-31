@@ -8,7 +8,34 @@ spec:
   mtls:
     mode: STRICT
 ---
-# api-b'ya sadece internal ingress gateway erişebilir (waypoint'te L7 olarak uygulanır)
+# Varsayılan reddet (deny-by-default): api-b namespace'inde açıkça izin verilmeyen her şey reddedilir.
+# Seçicisiz politika ambient'te ztunnel tarafından L4'te uygulanır.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-nothing
+  namespace: api-b
+spec: {}
+---
+# api-b pod'larına L4'te yalnızca namespace'in waypoint'i ulaşabilir
+# (ingress gateway'den gelen trafik de waypoint üzerinden gelir).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: api-b-allow-waypoint
+  namespace: api-b
+spec:
+  selector:
+    matchLabels:
+      app: api-b
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/api-b/sa/waypoint
+---
+# L7 (waypoint'te): api-b servisine yalnızca internal ingress gateway, yalnızca GET/POST ile
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -28,3 +55,20 @@ spec:
       to:
         - operation:
             methods: ["GET", "POST"]
+---
+# Egress gateway'e yalnızca api-b'nın waypoint'i girebilir (dışarıya çıkış tek ve bilinen bir kimlikten)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-only-waypoints
+  namespace: istio-egress
+spec:
+  selector:
+    matchLabels:
+      istio: egressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/api-b/sa/waypoint
