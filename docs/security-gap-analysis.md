@@ -4,7 +4,7 @@
 
 Bu doküman, bankacılık ortamı için tanımlanmış 13 katmanlı güvenlik gereksinimlerini lab ortamının **bugünkü haliyle** karşılaştırır. Her madde için üç şey belirtilir: şu anki durum, kanıt (dosya veya yapılandırma) ve lab'da nasıl karşılanacağı.
 
-Analiz tarihi: 2026-10-31 · Kapsam: `kiali` branch'i (00-setup + 01-kiali adımları)
+Analiz tarihi: 2026-10-31 · Kapsam: `zones` branch'i (00-setup + 01-kiali + 02-zones adımları). ✅ işaretli maddelerin yanında hangi adımda kapandığı yazar.
 
 ## Gösterim
 
@@ -20,11 +20,11 @@ Analiz tarihi: 2026-10-31 · Kapsam: `kiali` branch'i (00-setup + 01-kiali adım
 
 | # | Katman | ✅ | ⚠️ | ❌ | 📅 | ➖ | Genel durum |
 |---|--------|---|---|---|---|---|-------------|
-| 1 | Sağlayıcı / internet kenarı | 0 | 0 | 0 | 1 | 3 | Kapsam dışı; TLS planlı |
-| 2 | Edge (dış DMZ) | 0 | 3 | 1 | 2 | 1 | **En büyük açık**: edge henüz Kubernetes içinde, TLS ve WAF yok |
-| 3 | DMZ cluster (platform) | 1 | 1 | 1 | 1 | 2 | Temel iyi; egress kontrolü ve secret yönetimi eksik |
+| 1 | Sağlayıcı / internet kenarı | 1 | 0 | 0 | 0 | 3 | Kapsam dışı; TLS on-prem sonlanıyor (`02-zones`) |
+| 2 | Edge (dış DMZ) | 3 | 3 | 0 | 0 | 1 | `02-zones` ile büyük ölçüde kapandı; yönetim UI'ları ve gerçek firewall eksik |
+| 3 | DMZ cluster (platform) | 1 | 2 | 1 | 0 | 2 | DMZ egress var; `REGISTRY_ONLY` ve secret yönetimi eksik |
 | 4 | API gateway / BFF / token handler | 0 | 1 | 4 | 3 | 0 | Büyük ölçüde planlı adımlara bağlı |
-| 5 | Zone geçişi (DMZ → internal) | 2 | 2 | 1 | 1 | 0 | mTLS var; tek kapı ve yön kısıtı eksik |
+| 5 | Zone geçişi (DMZ → internal) | 3 | 2 | 1 | 0 | 0 | Tek kapı var (`02-zones`); yön kısıtı ağ seviyesinde eksik |
 | 6 | Internal cluster / service mesh | 1 | 1 | 3 | 1 | 1 | STRICT mTLS var; default-deny ve admission eksik |
 | 7 | Uygulama (Spring Boot) | 0 | 0 | 0 | 0 | 6 | Örnek uygulama podinfo; gerçek servis yazılınca geçerli |
 | 8 | Kimlik ve oturum (IdP) | 0 | 0 | 0 | 5 | 1 | Keycloak mgmt'te planlı |
@@ -40,10 +40,10 @@ flowchart LR
         g1["mTLS her yerde<br/>ortak root CA"]
         g2["Ambient mesh<br/>STRICT mTLS"]
         g3["Pod Security restricted<br/>non-root"]
-        g4["Zone ayrımı<br/>ayrı cluster'lar"]
+        g4["Zone ayrımı · tek kapı<br/>edge dışarıda · TLS · WAF"]
     end
     subgraph gap["Kritik açıklar"]
-        x1["Edge Kubernetes içinde<br/>TLS yok · WAF yok"]
+        x1["Yönetim UI'ları açık<br/>anonim Kiali/Grafana"]
         x2["Egress kontrolü yok<br/>ALLOW_ANY"]
         x3["Kullanıcı kimliği yok<br/>token / IdP"]
         x4["Tedarik zinciri<br/>imza · tarama · GitOps yok"]
@@ -60,19 +60,19 @@ flowchart LR
 | Volumetrik DDoS scrubbing | ➖ | Yok | Telekom/CDN hizmeti; simüle edilemez |
 | Bot yönetimi (login/OTP'de credential stuffing) | ➖ | Yok | Ticari ürün. Kısmi karşılık: edge ve kanal gateway'lerinde IP/kullanıcı bazlı rate limit (bkz. katman 4) |
 | DNS koruması (DNSSEC, CAA, registrar kilidi) | ➖ | Lab `*.apps.example.local`, `Host` header ile çalışıyor | Gerçek alan adı gerektirir |
-| TLS private key dışarı verilmesin / on-prem sonlandırma | 📅 | **TLS hiç yok**; giriş düz HTTP (`localhost:8080`) | `zones`: TLS edge appliance'ta (on-prem) sonlandırılacak |
+| TLS private key dışarı verilmesin / on-prem sonlandırma | ✅ `02` | TLS edge-lb'de (on-prem) sonlanıyor; anahtar `certs/edge/` altında | Gerçekte HSM / keyless SSL |
 
 ## 2. Edge (dış DMZ)
 
 | Gereksinim | Durum | Mevcut hal | Lab'da nasıl |
 |------------|-------|------------|--------------|
-| Dış firewall'da yalnızca LB VIP'e 443; yönetim portları internetten görünmesin | ⚠️ | Uygulama 8080 (HTTP) ile açık. **Kiali (20001-3) ve Grafana (3001-3) de host'a açık**, anonim erişimle | `zones`: yalnızca 443. Yönetim UI'ları `mgmt` adımında tek noktaya toplanacak; host'a açık kalmaları lab istisnası olarak işaretlenmeli |
-| WAF: OWASP CRS + API şema doğrulaması; önce detect sonra block; virtual patch | 📅 | Yok | `zones`: HAProxy + Coraza (OWASP CRS). Önce `DetectionOnly`, sonra `On`. Şema doğrulama katman 4'te |
-| TLS 1.2+/1.3, zayıf cipher kapalı, HSTS preload, OCSP stapling | 📅 | TLS yok | `zones`: `ssl-min-ver TLSv1.2`, yalnızca modern cipher'lar, HSTS header. OCSP stapling gerçek CA gerektirir (➖) |
-| Dışarıdan gelen X-Forwarded-* header'larını sil, yeniden yaz | ⚠️ | HAProxy yalnızca `X-Forwarded-Proto`'yu yazıyor. İstemcinin gönderdiği `X-Forwarded-For` **olduğu gibi geçiyor** ([10-edge-lb.yaml](../manifests/dmz/10-edge-lb.yaml)) | `zones`: `http-request del-header X-Forwarded-*` + `option forwardfor`; Istio gateway'de `numTrustedProxies: 1` |
-| Bağlantı/istek boyutu limitleri, slow-loris koruması | ⚠️ | Yalnızca `timeout client/server 30s` | `zones`: `timeout http-request 5s`, `maxconn`, istek boyutu limiti, `stick-table` ile IP başına bağlantı sınırı |
+| Dış firewall'da yalnızca LB VIP'e 443; yönetim portları internetten görünmesin | ⚠️ | Uygulama yalnızca edge-lb'de: 8443 (TLS) ve 8080 (yalnızca 301). **Kiali (20001-2) ve Grafana (3001-2) hâlâ host'a açık**, anonim erişimle | Yönetim UI'ları `mgmt` adımında tek noktaya toplanacak; lab istisnası |
+| WAF: OWASP CRS + API şema doğrulaması; önce detect sonra block; virtual patch | ⚠️ `02` | ModSecurity v3 + OWASP CRS 4 (paranoia 1), **engelleme modunda**; SQLi ve XSS testleri 403 | API şema doğrulaması yok (katman 4). Gerçekte önce `DetectionOnly` (`WAF_MODE`) |
+| TLS 1.2+/1.3, zayıf cipher kapalı, HSTS preload, OCSP stapling | ✅ `02` | TLS 1.2/1.3, yalnızca ECDHE + AEAD; TLS 1.1 reddediliyor (test edildi); HSTS `preload` | OCSP stapling ➖ (lab CA'sının OCSP'si yok) |
+| Dışarıdan gelen X-Forwarded-* header'larını sil, yeniden yaz | ✅ `02` | HAProxy `X-Forwarded-*`, `X-Real-IP`, `Forwarded`, `x-user-jwt` siliyor, yeniden yazıyor; Envoy `numTrustedProxies: 2` (test edildi) | – |
+| Bağlantı/istek boyutu limitleri, slow-loris koruması | ✅ `02` | IP başına 100 istek/10 sn (429, test edildi) ve 50 bağlantı; `timeout http-request 5s`; gövde ≤ 1 MB | Birden çok edge kopyası olursa limit paylaşımı (peers) |
 | İç firewall dış firewall'dan farklı üreticide | ➖ | Firewall yok | Fiziksel. Benzetim: edge'de HAProxy, DMZ'de Envoy; farklı yazılımlar |
-| Edge'den DMZ'ye yalnızca ingress portu açık | ❌ | Tüm container'lar tek bir docker ağında (`kind`); her şey birbirine erişebiliyor | Edge container'ı ile DMZ arasında ayrı docker ağı ve yalnızca LB IP'si:443. Tam izolasyon için host iptables kuralları gerekir |
+| Edge'den DMZ'ye yalnızca ingress portu açık | ⚠️ `02` | Edge ayrı `edge-net` Docker ağında; cluster'lara yalnızca WAF bağlı, yalnızca DMZ ingress LB IP'sine gidiyor | WAF container'ı `kind` ağının tamamını görebiliyor; port seviyesinde kısıt için host iptables gerekir |
 
 ## 3. DMZ cluster (platform)
 
@@ -80,7 +80,7 @@ flowchart LR
 |------------|-------|------------|--------------|
 | İş mantığı ve veri yok; yalnızca doğrulama, dönüştürme, yönlendirme | ✅ | DMZ'de yalnızca edge-lb, ingress gateway ve loadgen (test aracı) var | Korunmalı. `dmz-channels` adımındaki Web BFF yalnızca birleştirme/dönüştürme yapmalı |
 | Kubernetes API internete kapalı; bastion + MFA + PAM | ➖ | kind API server'ı yalnızca `127.0.0.1`'de | Bastion/PAM organizasyonel; lab'da API zaten dışarıya kapalı |
-| Dışarı çıkış kapalı (`REGISTRY_ONLY`); tek çıkış egress gateway | 📅 | `outboundTrafficPolicy: ALLOW_ANY`; **DMZ'de egress gateway yok** | `zones`: `dmz-egressgateway`. Sonra `REGISTRY_ONLY` (yol haritasında aday) |
+| Dışarı çıkış kapalı (`REGISTRY_ONLY`); tek çıkış egress gateway | ⚠️ `02` | DMZ egress gateway var (internal'a giden tek yol). `outboundTrafficPolicy` hâlâ `ALLOW_ANY` | `03 · hardening`: `REGISTRY_ONLY` |
 | Node sertleştirme (CIS), SSH kapalı, otomatik yama | ➖ | kind node'ları container | Gerçek node gerektirir. `kube-bench` ile CIS raporu alınabilir (bilgi amaçlı) |
 | Pod Security restricted: non-root, read-only FS, capability yok | ⚠️ | `edge-lb`, `loadgen`, `api-a/b` namespace'leri `restricted`; non-root ve `drop: ALL` var. **`readOnlyRootFilesystem` hiçbir yerde yok**; `istio-ingress`/`istio-egress` namespace'leri etiketsiz | Tüm manifest'lere `readOnlyRootFilesystem: true` (gerekirse `emptyDir`); gateway namespace'lerine `restricted` etiketi (istio-cni ve ztunnel ayrıcalık gerektirdiği için `istio-system` istisna) |
 | Secret'lar dış kasada (Vault / External Secrets), rotasyonlu | ❌ | Istio CA anahtarı Kubernetes secret'ı (`cacerts`); **root CA private key diskte** (`certs/root-key.pem`, gitignore'da) | mgmt'e HashiCorp Vault Community + External Secrets Operator. Istio CA için cert-manager + istio-csr ile Vault entegrasyonu |
@@ -102,7 +102,7 @@ flowchart LR
 
 | Gereksinim | Durum | Mevcut hal | Lab'da nasıl |
 |------------|-------|------------|--------------|
-| Tek kapı: egress → internal ingress | 📅 | Şu an **DMZ ingress gateway** internal'a doğrudan gidiyor | `zones`: DMZ egress gateway; internal AuthZ yalnızca `dmz-egressgateway` + karşı internal egress |
+| Tek kapı: egress → internal ingress | ✅ `02` | DMZ ingress → DMZ egress → internal ingress; internal yalnızca `dmz-egressgateway` kimliğini kabul ediyor. Doğrudan gidiş 403 `RBAC: access denied` (negatif test) | – |
 | mTLS, yalnızca kurumsal CA'nın imzaladığı istemci sertifikası | ✅ | `ISTIO_MUTUAL`; sertifikalar ortak kurumsal root CA altındaki intermediate CA'lardan. Mesh dışı istemci reddediliyor (test edildi) | `MUTUAL` + harici CA isteniyorsa cert-manager ile ayrı gateway sertifikaları (`credentialName`) |
 | Kısa ömürlü sertifikalar, otomatik yenileme (cert-manager) | ⚠️ | Workload sertifikaları Istio tarafından **24 saatlik** üretilip otomatik yenileniyor ✅. Intermediate CA'lar 2 yıllık ve elle üretildi; cert-manager yok | cert-manager + istio-csr (mgmt'teki Vault'a bağlı) |
 | İptal kontrolü (CRL/OCSP) | ❌ | Yok | Istio'da CRL desteği sınırlı; kısa ömürlü sertifika stratejisi iptal ihtiyacını azaltır. Gateway sertifikalarında CRL dağıtımı denenebilir |

@@ -12,7 +12,7 @@ spec:
   http:
     - route:
         - destination:
-            host: cluster-b.internal.mesh
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
             port:
               number: 443
       timeout: 10s

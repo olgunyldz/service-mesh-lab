@@ -13,18 +13,25 @@ Bu proje, kurumsal bir OpenShift yapısını yerelde **kind** ile simüle eder:
 
 ## Mevcut durum
 
-Ortam kuruldu ve aşağıdaki akışların hepsi uçtan uca doğrulandı (`scripts/08-verify.sh`):
+Giriş noktası: **https://api-a.apps.example.local:8443** (host'ta `--resolve ...:8443:127.0.0.1` ve `certs/edge/ca.pem` ile; bkz. [Test](#test)).
 
-| # | Akış | Sonuç |
+`scripts/08-verify.sh` ile uçtan uca doğrulananlar:
+
+| # | Test | Sonuç |
 |---|------|-------|
-| 1 | İnternet → DMZ → cluster-a → api-a | ✅ |
-| 2 | İnternet → DMZ → cluster-b → api-b | ⏸️ cluster-b kapalı (`01-kiali` ilk doğrulamasında ✅ idi) |
-| 3 | api-a → cluster-a egress → cluster-b → api-b (cluster'lar arası) | ⏸️ cluster-b kapalı (`01-kiali` ilk doğrulamasında ✅ idi) |
-| 4 | api-a → egress gateway → httpbin.org (internete çıkış) | ✅ |
-| – | Mesh dışından internal gateway'e doğrudan erişim | ✅ reddediliyor (istemci sertifikası yok; `00-setup` adımında test edildi) |
-| – | Kiali (20001-20003) ve Grafana (3001-3003) erişimi, Kiali graph'larının dolu gelmesi | ✅ (bkz. [Gözlemlenebilirlik](#gözlemlenebilirlik-kiali-prometheus-grafana)) |
+| 1 | İnternet → edge (HAProxy + WAF) → DMZ ingress → DMZ egress → cluster-a → api-a (HTTPS) | ✅ |
+| – | Edge: HTTP → HTTPS (301), HSTS, TLS 1.1 reddi, TLS 1.2/1.3 kabulü | ✅ |
+| – | Edge: WAF XSS ve SQL injection denemelerini engelliyor (403) | ✅ |
+| – | Edge: sahte `X-Forwarded-For` ve `x-user-jwt` içeri geçmiyor | ✅ |
+| – | Edge: IP başına hız sınırı (ani 150 istekte 429) | ✅ |
+| – | Zone geçişi: DMZ ingress'ten cluster-a'ya **doğrudan** gidiş reddediliyor (403 RBAC), egress üzerinden kabul | ✅ |
+| 2 | İnternet → ... → cluster-b → api-b | ⏸️ cluster-b kapalı |
+| 3 | api-a → cluster-a egress → cluster-b → api-b | ⏸️ cluster-b kapalı |
+| 4 | api-a → egress gateway → httpbin.org | ✅ |
+| – | api-a ambient mesh'te ve waypoint kullanıyor | ✅ |
+| – | Kiali ve Grafana erişimi | ✅ |
 
-Son doğrulama: `01-kiali` adımının sıfırdan kurulumu ([docs/01-kiali.md](docs/01-kiali.md#doğrulama)).
+Adım adım doğrulama sonuçları: [docs/](docs/README.md).
 
 Kullanılan sürümler:
 
@@ -36,7 +43,8 @@ Kullanılan sürümler:
 | Istio dataplane modu | ambient + **native nftables** | WSL2 kernel'inde iptables CONNMARK yok |
 | Gateway API CRD | v1.6.0 | |
 | MetalLB | v0.16.1 | L2 modu |
-| Edge LB | HAProxy 3.0 | |
+| Edge LB | HAProxy 3.0 | Docker container, Kubernetes dışında |
+| WAF | OWASP ModSecurity CRS 4.25.2 (nginx, LTS) | ModSecurity v3, paranoia 1, engelleme modu |
 | Uygulama | podinfo 6.7.1 | |
 | Kiali | 2.26.0 | Istio 1.30 addon'undaki sürüm |
 | Prometheus / Grafana | Istio 1.30 `samples/addons` | |
@@ -51,16 +59,22 @@ Kullanılan sürümler:
 
 ### Fiziksel yapı
 
-Üç kind cluster'ı da Docker Desktop (WSL2) üzerinde, aynı `kind` docker ağında çalışır. Her cluster şimdilik **tek node**'dur, yani tek bir container (bkz. [Kaynak kısıtları](#kaynak-kısıtları)). Host'a uygulama trafiği için yalnızca DMZ'nin portu, yönetim için Kiali ve Grafana portları açıktır.
+Her şey Docker Desktop (WSL2) üzerinde çalışır. kind cluster'ları `kind` docker ağında, edge (dış DMZ) container'ları ise ayrı bir `edge-net` ağındadır. Her cluster şimdilik **tek node**'dur (bkz. [Kaynak kısıtları](#kaynak-kısıtları)). Host'a uygulama trafiği için yalnızca **edge-lb**'nin portları (8080 → HTTPS'e yönlendirme, 8443 → TLS), yönetim için Kiali ve Grafana portları açıktır.
 
 ```mermaid
 flowchart LR
-    host["💻 Windows host<br/>localhost:8080 / 8443"]
+    host["💻 Windows host<br/>:8443 (TLS) · :8080 → 301"]
 
-    subgraph docker["Docker Desktop · WSL2 · docker ağı kind 172.18.0.0/16"]
+    subgraph edgenet["Docker · edge-net · dış DMZ (Kubernetes yok)"]
+        elb["edge-lb<br/>HAProxy"]
+        lg["loadgen<br/>internet istemcisi"]
+        ewaf["edge-waf<br/>ModSecurity + CRS"]
+    end
+
+    subgraph docker["Docker · kind ağı 172.18.0.0/16"]
         direction LR
         subgraph dmz["kind-dmz · pod 10.10/16 · svc 10.110/16"]
-            dmzcp["dmz-control-plane · node-role=infra<br/>hostPort 8080→30080 · 8443→30443<br/>20001→Kiali · 3001→Grafana"]
+            dmzcp["dmz-control-plane · node-role=infra<br/>20001→Kiali · 3001→Grafana"]
         end
         subgraph ca["kind-cluster-a · pod 10.20/16 · svc 10.120/16"]
             cacp["cluster-a-control-plane · node-role=worker<br/>20002→Kiali · 3002→Grafana"]
@@ -76,7 +90,11 @@ flowchart LR
         lbb(["MetalLB VIP<br/>172.18.202.10"])
     end
 
-    host -->|"port mapping"| dmzcp
+    host -->|"port mapping 8080/8443"| elb
+    lg --> elb
+    elb --> ewaf
+    ewaf -->|"WAF iki ağa da bağlı"| lbd
+    host -.->|"Kiali / Grafana"| dmzcp
     lbd -.- dmz
     lba -.- ca
     lbb -.- cb
@@ -104,16 +122,23 @@ flowchart TB
     user(["👤 Kullanıcı"])
     internet(["🌐 httpbin.org"])
 
-    subgraph DMZ["DMZ · kind-dmz"]
+    subgraph EDGE["Dış DMZ · Docker · Kubernetes yok"]
         direction TB
-        haproxy["edge-lb<br/>HAProxy x2 · mesh dışı"]
+        haproxy["edge-lb · HAProxy<br/>TLS · HSTS · hız sınırı<br/>header temizliği"]
+        waf["edge-waf<br/>ModSecurity + OWASP CRS"]
+        haproxy -->|"HTTP"| waf
+    end
+
+    subgraph DMZ["İç DMZ · kind-dmz"]
+        direction TB
         dmzgw["dmz-ingressgateway<br/>LB 172.18.200.10<br/>Gateway public-gateway"]
-        haproxy -->|"HTTP :80"| dmzgw
+        dmzeg["dmz-egressgateway<br/>tek kapı · zone-exit"]
+        dmzgw ==>|"mTLS"| dmzeg
     end
 
     subgraph A["cluster-a · kind-cluster-a"]
         direction TB
-        agw["istio-ingressgateway<br/>LB 172.18.201.10<br/>AuthZ: dmz-ingressgateway"]
+        agw["istio-ingressgateway<br/>LB 172.18.201.10<br/>AuthZ: dmz-egressgateway"]
         subgraph nsa["ns api-a · ambient"]
             awp["waypoint<br/>L7 AuthZ + routing"]
             aapi["api-a x2<br/>podinfo :9898"]
@@ -126,7 +151,7 @@ flowchart TB
 
     subgraph B["cluster-b · kind-cluster-b · şimdilik kapalı"]
         direction TB
-        bgw["istio-ingressgateway<br/>LB 172.18.202.10<br/>AuthZ: dmz + egressgateway"]
+        bgw["istio-ingressgateway<br/>LB 172.18.202.10<br/>AuthZ: dmz-egress + egressgateway"]
         subgraph nsb["ns api-b · ambient"]
             bwp["waypoint<br/>L7 AuthZ + routing"]
             bapi["api-b x2<br/>podinfo :9898"]
@@ -137,9 +162,10 @@ flowchart TB
         bwp -->|"mTLS :443"| beg
     end
 
-    user -->|"HTTP localhost:8080"| haproxy
-    dmzgw ==>|"mTLS :443<br/>SNI api-a.apps.example.local"| agw
-    dmzgw ==>|"mTLS :443<br/>SNI api-b.apps.example.local"| bgw
+    user -->|"HTTPS :8443"| haproxy
+    waf -->|"HTTP :80"| dmzgw
+    dmzeg ==>|"mTLS :443<br/>SNI api-a.apps.example.local"| agw
+    dmzeg ==>|"mTLS :443<br/>SNI api-b.apps.example.local"| bgw
     aeg ==>|"mTLS :443<br/>SNI api-b.apps.example.local"| bgw
     aeg -->|"HTTP :80"| internet
     beg -->|"HTTP :80"| internet
@@ -148,13 +174,13 @@ flowchart TB
     classDef app fill:#dcfce7,stroke:#16a34a,color:#14532d
     classDef edge fill:#fef3c7,stroke:#d97706,color:#78350f
     classDef ext fill:#f3f4f6,stroke:#6b7280,color:#111827
-    class dmzgw,agw,bgw,aeg,beg gw
+    class dmzgw,dmzeg,agw,bgw,aeg,beg gw
     class awp,bwp,aapi,bapi app
-    class haproxy edge
+    class haproxy,waf edge
     class user,internet ext
 ```
 
-Kalın oklar (`==>`) cluster'lar arası mTLS bağlantılarıdır. Cluster'lar birbirine yalnızca bu oklar üzerinden, LoadBalancer IP'leri aracılığıyla ulaşır.
+Kalın oklar (`==>`) mTLS bağlantılarıdır. Cluster'lar birbirine yalnızca gateway'ler üzerinden, LoadBalancer IP'leri aracılığıyla ulaşır. DMZ'den internal'a giden **tek kapı** `dmz-egressgateway`'dir.
 
 ### Ambient veri düzlemi nasıl çalışıyor?
 
@@ -167,9 +193,11 @@ Kalın oklar (`==>`) cluster'lar arası mTLS bağlantılarıdır. Cluster'lar bi
 
 - **Cluster'lar arasında düz ağ yok.** Her cluster kendi bağımsız ambient mesh'ini çalıştırır. Cluster'lar birbirine yalnızca gateway'ler üzerinden, LoadBalancer IP'leri aracılığıyla bağlanır; tıpkı DMZ ile internal zone arasında firewall bulunan gerçek yapılarda olduğu gibi. Bir cluster diğerinin pod IP'lerini veya servislerini bilmez.
 - **Ortak güven zinciri.** Tek bir root CA vardır ve her cluster'ın istiod'u kendi intermediate CA'sıyla sertifika üretir (`istio-system/cacerts`, `scripts/03-generate-certs.sh`). Gateway'ler arasındaki `ISTIO_MUTUAL` bağlantısı bu ortak root sayesinde iki taraflı doğrulanır.
-- **Ortak trust domain: `corp.mesh`.** Kimlikler servis hesabı (SA) adlarıyla ayrışır: DMZ'deki gateway `dmz-ingressgateway`, internal gateway'ler ise `istio-ingressgateway` adını taşır. AuthorizationPolicy'ler bu adlara göre yazılır.
+- **Ortak trust domain: `corp.mesh`.** Kimlikler servis hesabı (SA) adlarıyla ayrışır: DMZ'deki gateway'ler `dmz-ingressgateway` ve `dmz-egressgateway`, internal gateway'ler `istio-ingressgateway` ve `istio-egressgateway` adını taşır. AuthorizationPolicy'ler bu adlara göre yazılır.
+- **Edge Kubernetes dışında.** Dış DMZ (LB, WAF, TLS) gerçekte bir appliance katmanıdır; lab'da Docker container'larıyla simüle edilir ve cluster'lara yalnızca WAF bağlanır. Edge sertifikası mesh CA'sından ayrı bir "public CA" ile imzalanır.
+- **Zone geçişinde tek kapı.** DMZ ingress gateway internal'a doğrudan gitmez; her şey `dmz-egressgateway`'den çıkar. Internal gateway'ler yalnızca bu kimliği kabul eder.
 - **Gateway kurulumu:** ingress ve egress gateway'ler `istio/gateway` Helm chart'ı ve klasik `Gateway` / `VirtualService` API'si ile, waypoint'ler ise Kubernetes Gateway API (`gatewayClassName: istio-waypoint`) ile kurulur.
-- **OpenShift benzerlikleri:** `*.apps.example.local` route domain'i, `restricted` Pod Security, sayısal UID ile non-root container'lar, infra/worker node etiketleri ve HAProxy tabanlı edge router.
+- **OpenShift benzerlikleri:** `*.apps.example.local` route domain'i, `restricted` Pod Security, sayısal UID ile non-root container'lar, infra/worker node etiketleri ve HAProxy tabanlı edge (OpenShift Router / F5 karşılığı).
 
 ---
 
@@ -180,10 +208,14 @@ Kalın oklar (`==>`) cluster'lar arası mTLS bağlantılarıdır. Cluster'lar bi
 ```mermaid
 sequenceDiagram
     autonumber
-    actor U as Kullanıcı
-    box rgb(254,243,199) DMZ cluster
-        participant H as HAProxy<br/>edge-lb
+    actor U as İstemci
+    box rgb(254,243,199) Dış DMZ · Docker
+        participant H as edge-lb<br/>HAProxy
+        participant F as edge-waf<br/>ModSecurity
+    end
+    box rgb(255,237,213) İç DMZ · kind-dmz
         participant D as dmz-ingressgateway
+        participant E as dmz-egressgateway
     end
     box rgb(219,234,254) cluster-a
         participant G as istio-ingressgateway
@@ -192,30 +224,38 @@ sequenceDiagram
         participant P as api-a pod
     end
 
-    U->>H: GET / · Host api-a.apps.example.local · localhost:8080
-    H->>D: HTTP :80
-    Note over D: Gateway public-gateway<br/>VirtualService api-a
-    D->>G: mTLS ISTIO_MUTUAL → 172.18.201.10:443
-    Note over G: AuthZ allow-only-dmz<br/>kaynak = dmz-ingressgateway mi?
+    U->>H: GET / · TLS :8443 · Host api-a.apps.example.local
+    Note over H: TLS 1.2+ sonlandır · hız/bağlantı sınırı<br/>X-Forwarded-* ve x-user-jwt sil, yeniden yaz
+    H->>F: HTTP :8080 (edge-net)
+    Note over F: OWASP CRS kuralları<br/>saldırı kalıbı → 403
+    F->>D: HTTP :80 → 172.18.200.10 (kind ağı)
+    Note over D: Gateway public-gateway<br/>VirtualService api-a → dmz-egressgateway
+    D->>E: mTLS ISTIO_MUTUAL :443
+    Note over E: AuthZ: yalnızca dmz-ingressgateway<br/>zone-exit → cluster-a.internal.mesh
+    E->>G: mTLS ISTIO_MUTUAL → 172.18.201.10:443
+    Note over G: AuthZ allow-only-dmz-egress<br/>kaynak = dmz-egressgateway mi?
     G->>W: HBONE :15008
     Note over W: AuthZ api-a-allow-ingress<br/>kaynak = istio-ingressgateway, GET/POST
     W->>Z: HBONE :15008
     Z->>P: HTTP :9898
-    P-->>U: 200 OK · api-a @ cluster-a
+    P-->>U: 200 OK · api-a @ cluster-a · HSTS header'ı ile
 ```
 
 | Adım | Nereden → Nereye | Port / Protokol | Şifreleme | Tanımlayan kaynak |
 |------|------------------|-----------------|-----------|-------------------|
-| 1 | Windows host → dmz node | `localhost:8080` → `30080` | Yok | [clusters/dmz.yaml](clusters/dmz.yaml) `extraPortMappings` |
-| 2 | NodePort → HAProxy pod | `30080` → `:8080` HTTP | Yok | [manifests/dmz/10-edge-lb.yaml](manifests/dmz/10-edge-lb.yaml) Service `edge-lb` |
-| 3 | HAProxy → dmz-ingressgateway | `:80` HTTP, `X-Forwarded-Proto` eklenir | Yok (DMZ içi) | HAProxy `backend istio_ingress_http` |
-| 4 | dmz-ingressgateway: Host eşleşmesi | `api-a.apps.example.local` | – | [manifests/dmz/20-public-gateway.yaml](manifests/dmz/20-public-gateway.yaml) `Gateway public-gateway` + `VirtualService api-a` (timeout 10s, 2 retry) |
-| 5 | dmz-ingressgateway → cluster-a ingress gw | `172.18.201.10:443` | **mTLS** (`ISTIO_MUTUAL`, SNI `api-a.apps.example.local`) | [manifests/dmz/30-internal-clusters.yaml](manifests/dmz/30-internal-clusters.yaml) `ServiceEntry` + `DestinationRule cluster-a-gateway` |
-| 6 | cluster-a ingress gw: kimlik kontrolü | istemci sertifikası `corp.mesh/ns/istio-ingress/sa/dmz-ingressgateway` olmalı | – | [manifests/cluster-a/30-internal-gateway.yaml](manifests/cluster-a/30-internal-gateway.yaml) `AuthorizationPolicy allow-only-dmz` |
-| 7 | cluster-a ingress gw → waypoint | HBONE `:15008` | **mTLS** | `Service api-a` üzerindeki `istio.io/ingress-use-waypoint: "true"` etiketi |
-| 8 | waypoint: L7 yetki kontrolü | kaynak `istio-ingressgateway`, metot `GET`/`POST` olmalı | – | [manifests/cluster-a/40-security.yaml](manifests/cluster-a/40-security.yaml) `AuthorizationPolicy api-a-allow-ingress` |
-| 9 | waypoint → hedef node'daki ztunnel | HBONE `:15008` | **mTLS** | [manifests/cluster-a/20-waypoint.yaml](manifests/cluster-a/20-waypoint.yaml) |
-| 10 | ztunnel → api-a pod | `:9898` HTTP (pod ağ namespace'i içinde) | – | [manifests/cluster-a/10-api-a.yaml](manifests/cluster-a/10-api-a.yaml) |
+| 1 | Windows host → edge-lb container | `localhost:8443` → `:8443` | **TLS 1.2+/1.3** (edge sertifikası, "Lab Public CA") | [scripts/06b-deploy-edge.sh](scripts/06b-deploy-edge.sh), [edge/haproxy.cfg](edge/haproxy.cfg) |
+| 2 | edge-lb: kontroller | Hız (100/10 sn) ve bağlantı (50) sınırı, `Host` zorunlu, gövde ≤ 1 MB, slow-loris; header temizliği; HSTS | – | `frontend https_in` |
+| 3 | edge-lb → edge-waf | `:8080` HTTP (`edge-net` ağı) | Yok (edge içi) | `backend waf` |
+| 4 | edge-waf: OWASP CRS | Paranoia 1, engelleme modu | – | `WAF_MODE` ([config.env](config.env)) |
+| 5 | edge-waf → dmz-ingressgateway | `172.18.200.10:80` HTTP (`kind` ağı) | Yok | `BACKEND` ortam değişkeni |
+| 6 | dmz-ingressgateway: Host eşleşmesi | `api-a.apps.example.local`; istemci IP'si `numTrustedProxies: 2` ile | – | [manifests/dmz/20-public-gateway.yaml](manifests/dmz/20-public-gateway.yaml) |
+| 7 | dmz-ingressgateway → dmz-egressgateway | `:443` | **mTLS** (`ISTIO_MUTUAL`) | `DestinationRule dmz-egressgateway` |
+| 8 | dmz-egressgateway: kimlik kontrolü ve yönlendirme | yalnızca `dmz-ingressgateway`; `zone-exit` → `cluster-a.internal.mesh` | – | [manifests/dmz/30-internal-clusters.yaml](manifests/dmz/30-internal-clusters.yaml) |
+| 9 | dmz-egressgateway → cluster-a ingress gw | `172.18.201.10:443` | **mTLS** (`ISTIO_MUTUAL`, SNI `api-a.apps.example.local`) | `ServiceEntry` + `DestinationRule cluster-a-gateway` |
+| 10 | cluster-a ingress gw: kimlik kontrolü | istemci sertifikası `corp.mesh/ns/istio-egress/sa/dmz-egressgateway` olmalı | – | [manifests/cluster-a/30-internal-gateway.yaml](manifests/cluster-a/30-internal-gateway.yaml) `allow-only-dmz-egress` |
+| 11 | cluster-a ingress gw → waypoint | HBONE `:15008` | **mTLS** | `Service api-a` üzerindeki `istio.io/ingress-use-waypoint: "true"` |
+| 12 | waypoint: L7 yetki kontrolü | kaynak `istio-ingressgateway`, metot `GET`/`POST` | – | [manifests/cluster-a/40-security.yaml](manifests/cluster-a/40-security.yaml) |
+| 13 | waypoint → ztunnel → api-a pod | HBONE `:15008` → `:9898` | **mTLS** | [manifests/cluster-a/10-api-a.yaml](manifests/cluster-a/10-api-a.yaml) |
 
 **Akış 2 (İnternet → api-b)** *(cluster-b kapalı)* aynı yolu izler. Farklar: Host `api-b.apps.example.local`, hedef `172.18.202.10:443` ve kaynaklar `manifests/cluster-b/` altında.
 
@@ -295,8 +335,10 @@ sequenceDiagram
 
 | Bölüm | Durum |
 |-------|-------|
-| Kullanıcı → HAProxy → dmz-ingressgateway | **Düz HTTP.** DMZ'de TLS terminasyonu yol haritasında |
-| DMZ ↔ internal cluster gateway'leri | mTLS (`ISTIO_MUTUAL`, ortak root CA) |
+| İstemci → edge-lb | **TLS 1.2+/1.3** (edge sertifikası, "Lab Public CA"), HSTS |
+| edge-lb → edge-waf → dmz-ingressgateway | **Düz HTTP** (edge içi ve `kind` ağı). Yeniden şifreleme `hardening` adımında değerlendirilecek |
+| dmz-ingressgateway → dmz-egressgateway | mTLS (`ISTIO_MUTUAL`) |
+| dmz-egressgateway → internal cluster gateway'leri | mTLS (`ISTIO_MUTUAL`, ortak root CA) |
 | cluster-a egress ↔ cluster-b ingress | mTLS (`ISTIO_MUTUAL`) |
 | Cluster içi (gateway ↔ waypoint ↔ ztunnel ↔ pod) | mTLS (HBONE); `PeerAuthentication STRICT` (cluster-a/b) |
 | Egress gateway → httpbin.org | Düz HTTP (dış hedef) |
@@ -330,7 +372,8 @@ Her workload sertifikası `spiffe://corp.mesh/ns/<namespace>/sa/<serviceaccount>
 
 | Kimlik | Nerede | Kullanım |
 |--------|--------|----------|
-| `corp.mesh/ns/istio-ingress/sa/dmz-ingressgateway` | dmz | DMZ'den internal cluster'lara giden trafik |
+| `corp.mesh/ns/istio-ingress/sa/dmz-ingressgateway` | dmz | Edge'den gelen trafiği karşılar, DMZ egress'e verir |
+| `corp.mesh/ns/istio-egress/sa/dmz-egressgateway` | dmz | DMZ'den internal cluster'lara giden **tek** kimlik |
 | `corp.mesh/ns/istio-ingress/sa/istio-ingressgateway` | cluster-a, cluster-b | Internal gateway'den uygulamalara giden trafik |
 | `corp.mesh/ns/istio-egress/sa/istio-egressgateway` | cluster-a, cluster-b | Egress üzerinden diğer cluster'a giden trafik |
 | `corp.mesh/ns/api-a/sa/api-a`, `.../api-b/sa/api-b` | cluster-a / cluster-b | Uygulama pod'ları |
@@ -339,8 +382,9 @@ Her workload sertifikası `spiffe://corp.mesh/ns/<namespace>/sa/<serviceaccount>
 
 | Hedef | İzin verilen kaynak | Kural | Uygulandığı yer |
 |-------|---------------------|-------|-----------------|
-| cluster-a ingress gw | yalnızca `dmz-ingressgateway` | L4/L7 | gateway Envoy |
-| cluster-b ingress gw | `dmz-ingressgateway` + `istio-egressgateway` | L4/L7 | gateway Envoy |
+| dmz-egressgateway | yalnızca `dmz-ingressgateway` | L4/L7 | gateway Envoy |
+| cluster-a ingress gw | yalnızca `dmz-egressgateway` (cluster-b aktifken + `istio-egressgateway`) | L4/L7 | gateway Envoy |
+| cluster-b ingress gw | `dmz-egressgateway` + `istio-egressgateway` | L4/L7 | gateway Envoy |
 | api-a servisi | yalnızca `istio-ingressgateway`, `GET`/`POST` | L7 | waypoint |
 | api-b servisi | yalnızca `istio-ingressgateway`, `GET`/`POST` | L7 | waypoint |
 | cluster-a/b mesh geneli | – | mTLS `STRICT` | ztunnel |
@@ -349,7 +393,10 @@ Her workload sertifikası `spiffe://corp.mesh/ns/<namespace>/sa/<serviceaccount>
 
 - **Ortak trust domain:** cluster-b'nin kendi `istio-egressgateway`'i, cluster-a'nınkiyle aynı kimliği taşır. Bu yüzden cluster-b ingress gateway'i ikisini birbirinden ayıramaz. Ayrım gerekiyorsa cluster başına ayrı trust domain veya farklı SA adları kullanılmalı.
 - **Egress zorunlu değil:** `outboundTrafficPolicy` henüz `ALLOW_ANY`; ServiceEntry'si olmayan bir dış adrese pod'lar doğrudan çıkabilir (yol haritası: `REGISTRY_ONLY`).
-- **DMZ'de PeerAuthentication yok:** HAProxy mesh dışında çalıştığı için DMZ'de `STRICT` mTLS uygulanmıyor.
+- **DMZ'de PeerAuthentication yok:** DMZ'de ambient workload olmadığı için henüz eklenmedi (`hardening` adımı).
+- **Edge → DMZ arası şifresiz:** TLS edge'de sonlanıyor; WAF → DMZ ingress gateway düz HTTP.
+
+Ayrıntılı tehdit analizi: [docs/02-zones.md → STRIDE](docs/02-zones.md#stride-tehdit-modeli) ve [Güvenlik boşluk analizi](docs/security-gap-analysis.md).
 
 ---
 
@@ -384,20 +431,20 @@ flowchart LR
 
 - **Erişim:** Kiali ve Grafana NodePort ile açılır, kind `extraPortMappings` ile host'a bağlanır (bkz. [clusters/](clusters/)). Internal cluster'lar uygulama trafiği için host'a kapalıdır; açık olan yalnızca bu yönetim araçlarıdır.
 - **Kimlik doğrulama:** Kiali `anonymous`, Grafana anonim admin kullanır. Bu ayar lab içindir; gerçek ortamda OpenID veya OpenShift OAuth kullanılmalıdır.
-- **Sürekli trafik:** DMZ'deki `loadgen` ([manifests/dmz/40-loadgen.yaml](manifests/dmz/40-loadgen.yaml)) her saniye Akış 1'i (cluster-b aktifse 2 ve 3'ü de; hedefler `LOADGEN_HOSTS` ile) tetikler, her 10 turda bir de `/status/500` çağırır. Böylece grafiklerde hata oranı da görünür. Akış 4 (httpbin.org) dış servisi yormamak için loadgen'e eklenmedi; elle tetiklenir.
+- **Sürekli trafik:** `loadgen` container'ı ([scripts/06b-deploy-edge.sh](scripts/06b-deploy-edge.sh)) bir internet istemcisi gibi `edge-net` ağından edge-lb'ye HTTPS istekleri atar: her saniye Akış 1'i (cluster-b aktifse 2 ve 3'ü de) tetikler, her 10 turda bir de `/status/500` çağırır. Böylece grafiklerde hata oranı da görünür. Akış 4 (httpbin.org) dış servisi yormamak için loadgen'e eklenmedi; elle tetiklenir.
 
 Kiali'de görülen graph (workload görünümü, loadgen çalışırken ölçüldü; cluster-b kapalı):
 
 | Cluster | Kenarlar |
 |---------|----------|
-| dmz | `dmz-ingressgateway` → `cluster-a-gateway` (~2 rps, ~%5 hata) |
+| dmz | `dmz-ingressgateway` → `dmz-egressgateway` → `cluster-a-gateway` (~2,6 rps, ~%3 hata) |
 | cluster-a | `istio-ingressgateway` → `waypoint` → `api-a` (mTLS, ~%5 hata) · `waypoint` → `api-a` (TCP, ztunnel) |
 
 cluster-b aktifken ek olarak görülenler (`01-kiali` ilk doğrulaması): dmz'de `dmz-ingressgateway` → `cluster-b-gateway`; cluster-a'da `api-a` → `istio-egressgateway` (HTTP, mTLS) → `cluster-b-gateway`; cluster-b'de `istio-ingressgateway` → `waypoint` → `api-b`.
 
 Graph'ı okurken dikkat edilecekler:
 - **Cluster'lar arası hedefler ServiceEntry adıyla görünür** (`cluster-a-gateway`, `cluster-b-gateway`). Kiali bu kenarlarda mTLS kilidi göstermez, ama trafik `ISTIO_MUTUAL` ile şifrelidir.
-- **Gateway'e gelen trafiğin kaynağı görünmez.** Gateway'ler yalnızca kendi giden trafiğini raporlar. Bu yüzden DMZ'de HAProxy düğümü yoktur; cluster-b'de de trafiğin bir kısmının cluster-a egress'inden geldiği ayrıca görünmez.
+- **Gateway'e gelen trafiğin kaynağı görünmez.** Gateway'ler yalnızca kendi giden trafiğini raporlar. Bu yüzden edge (HAProxy, WAF) graph'ta görünmez; cluster-b'de de trafiğin bir kısmının cluster-a egress'inden geldiği ayrıca görünmez.
 - **Aynı çağrı iki katmanda görünür:** ztunnel L4 (`api-a → waypoint`, TCP bayt/sn), waypoint ise L7 (`api-a → istio-egressgateway`, HTTP istek/sn) olarak raporlar.
 - **Hata oranı** loadgen'in her 10 turda bir yaptığı `/status/500` çağrısından gelir (son hedef host'a; cluster-b kapalıyken api-a).
 
@@ -411,15 +458,17 @@ Graph'ı okurken dikkat edilecekler:
 | istiod (profile=ambient) | hepsi | istio-system | helm `istio/istiod` |
 | istio-cni (nftables) | hepsi | istio-system | helm `istio/cni` |
 | ztunnel (DaemonSet) | hepsi | istio-system | helm `istio/ztunnel` |
-| edge-lb (HAProxy) | dmz | edge-lb | `manifests/dmz` |
+| edge-lb (HAProxy) | – (Docker, `edge-net`) | – | `scripts/06b-deploy-edge.sh` |
+| edge-waf (ModSecurity + CRS) | – (Docker, `edge-net` + `kind`) | – | `scripts/06b-deploy-edge.sh` |
+| loadgen (internet istemcisi) | – (Docker, `edge-net`) | – | `scripts/06b-deploy-edge.sh` |
 | dmz-ingressgateway | dmz | istio-ingress | helm `istio/gateway` |
+| dmz-egressgateway | dmz | istio-egress | helm `istio/gateway` |
 | istio-ingressgateway (internal) | a, b | istio-ingress | helm `istio/gateway` |
 | istio-egressgateway | a, b | istio-egress | helm `istio/gateway` |
 | waypoint | a, b | api-a / api-b | Gateway API (`istio-waypoint`) |
 | api-a / api-b (podinfo) | a / b | api-a / api-b | `manifests/cluster-*` |
 | Prometheus, Grafana | hepsi | istio-system | Istio `samples/addons` |
 | Kiali | hepsi | istio-system | helm `kiali/kiali-server` |
-| loadgen (curl döngüsü) | dmz | loadgen | `manifests/dmz` |
 
 ## Dizin yapısı
 
@@ -427,9 +476,11 @@ Graph'ı okurken dikkat edilecekler:
 service-mesh/
 ├── config.env                  # versiyonlar, mesh id, trust domain, IP planı
 ├── clusters/                   # kind cluster tanımları
-│   ├── dmz.yaml                #   host 8080/8443 -> NodePort 30080/30443
+│   ├── dmz.yaml                #   host'a yalnızca Kiali/Grafana portları
 │   ├── cluster-a.yaml
 │   └── cluster-b.yaml
+├── edge/
+│   └── haproxy.cfg             # edge LB: TLS, HSTS, limitler, header temizliği
 ├── infra/
 │   ├── metallb/                # IP havuzu şablonu (cluster başına ayrı /24)
 │   └── observability/          # Grafana NodePort servisi
@@ -437,12 +488,10 @@ service-mesh/
 │   └── values/                 # helm values: istiod, cni, ztunnel, ingress/egress gw, kiali
 ├── manifests/
 │   ├── dmz/
-│   │   ├── 00-namespaces.yaml
-│   │   ├── 10-edge-lb.yaml             # HAProxy
-│   │   ├── 20-public-gateway.yaml      # Gateway + VirtualService (Host bazlı)
-│   │   ├── 30-internal-clusters.yaml   # ServiceEntry + DestinationRule (mTLS) → cluster-a
-│   │   ├── 40-loadgen.yaml             # Kiali için sürekli trafik
-│   │   └── cluster-b/                  # yalnızca cluster-b aktifken: api-b rotası, gateway'i, loadgen hedefi
+│   │   ├── 00-namespaces.yaml          # istio-ingress, istio-egress
+│   │   ├── 20-public-gateway.yaml      # Gateway + VirtualService → dmz-egressgateway
+│   │   ├── 30-internal-clusters.yaml   # egress: zone-exit Gateway, AuthZ, cluster-a ServiceEntry/DR/VS
+│   │   └── cluster-b/                  # yalnızca cluster-b aktifken: api-b rotası ve çıkışı
 │   ├── cluster-a/
 │   │   ├── 00-namespaces.yaml          # ambient + waypoint etiketleri
 │   │   ├── 10-api-a.yaml               # podinfo (backend opsiyonel, ConfigMap'ten)
@@ -462,9 +511,12 @@ service-mesh/
 │   ├── 04-install-istio.sh     # base, istiod, cni, ztunnel
 │   ├── 05-install-gateways.sh  # ingress / egress gateway'ler
 │   ├── 06-deploy-manifests.sh
+│   ├── 06b-deploy-edge.sh      # edge-net, edge-waf, edge-lb, loadgen (Docker)
 │   ├── 07-install-observability.sh  # Prometheus, Grafana, Kiali
 │   ├── 08-verify.sh            # uçtan uca testler + Kiali/Grafana erişimi
 │   └── 99-destroy.sh           # --certs, --cache
+├── tests/
+│   └── zone-direct-path.yaml   # "tek kapı" negatif testi için geçici rota
 ├── docs/
 │   ├── README.md               # adımların listesi
 │   ├── 00-setup.md             # her adımın dokümanı: yapılanlar, değişen dosyalar,
@@ -530,19 +582,25 @@ bash scripts/03-generate-certs.sh
 bash scripts/04-install-istio.sh
 bash scripts/05-install-gateways.sh
 bash scripts/06-deploy-manifests.sh
+bash scripts/06b-deploy-edge.sh
 bash scripts/07-install-observability.sh
 ```
 
 ## Test
 
 ```bash
-bash scripts/08-verify.sh
+bash scripts/08-verify.sh      # her test ✔/✘ olarak raporlanır, sonunda özet
 
-# Manuel
-curl -H "Host: api-a.apps.example.local" http://localhost:8080/
-curl -H "Host: api-b.apps.example.local" http://localhost:8080/
-curl -X POST -H "Host: api-a.apps.example.local" -d 'selam' http://localhost:8080/api/echo   # api-a -> api-b
+# Manuel (Git Bash). --ssl-no-revoke: Windows curl'ü CRL kontrolü yapar, lab CA'sının CRL'i yok
+H=api-a.apps.example.local
+C="--ssl-no-revoke --cacert certs/edge/ca.pem --resolve $H:8443:127.0.0.1"
+curl $C https://$H:8443/                                   # api-a
+curl $C -X POST -d selam https://$H:8443/api/echo           # echo (cluster-b aktifse api-b'ye gider)
+curl $C -s -o /dev/null -w '%{http_code}\n' "https://$H:8443/?id=1%27%20OR%20%271%27=%271"   # WAF: 403
+curl -sI -H "Host: $H" http://127.0.0.1:8080/               # 301 -> https://...:8443/
 ```
+
+Tarayıcıdan denemek için `certs/edge/ca.pem`'i güvenilir kök sertifika olarak ekleyin ve `hosts` dosyasına `127.0.0.1 api-a.apps.example.local` satırını yazın; ardından https://api-a.apps.example.local:8443 açılır.
 
 Faydalı komutlar:
 
@@ -553,6 +611,9 @@ istioctl --context kind-cluster-a waypoint list -n api-a
 kubectl --context kind-dmz -n istio-ingress logs deploy/dmz-ingressgateway -f
 kubectl --context kind-cluster-a -n api-a logs deploy/waypoint -f
 kubectl --context kind-cluster-a -n istio-egress logs deploy/istio-egressgateway -f
+kubectl --context kind-dmz -n istio-egress logs deploy/dmz-egressgateway -f
+docker logs -f edge-lb                                         # HAProxy erişim log'u
+docker logs -f edge-waf                                        # nginx + ModSecurity (engellenenler JSON audit log)
 ```
 
 ## Windows / Docker Desktop notları
@@ -573,6 +634,7 @@ Kurulum sırasında karşılaşılan ve repoda çözülmüş sorunlar:
 | Kurulum yavaş, Prometheus `timed out` | Her cluster image'ları internetten ayrı çekiyor | Registry önbelleği (pull-through cache). `kind load` denendi, çok yavaş |
 | Registry önbelleği boş kalıyor | Node'lara `docker exec` ile yazılan `hosts.toml` boştu (`-i` yoktu) | `docker exec -i` |
 | Istio image'ları önbelleğe girmiyor | Istio 1.30 `registry.istio.io` kullanıyor; `registry:2` proxy'si onunla çalışmıyor (Content-Length yok) | `hub: docker.io/istio` |
+| Edge HTTPS testinde curl `000`, `CERT_TRUST_REVOCATION_STATUS_UNKNOWN` | Windows curl'ü (schannel) sertifika iptal kontrolü yapar; lab CA'sının CRL/OCSP'si yok | `--ssl-no-revoke`. TLS sürüm testleri `openssl s_client` ile (Windows istemcisi TLS 1.1'i zaten kapatıyor olabilir) |
 
 ## Temizlik
 
@@ -592,7 +654,7 @@ Kurulum, Docker'da cluster'lardan bağımsız üç kalıcı registry container'�
 |------|--------|-----------|
 | Istio kurulumu | Helm chart'ları | OpenShift Service Mesh 3 (Sail Operator): `Istio`, `IstioCNI`, `ZTunnel` CR'ları |
 | CNI | kindnet + istio-cni (nftables) | OVN-Kubernetes + istio-cni (`global.platform=openshift`) |
-| Edge LB | HAProxy pod + NodePort | OpenShift Router / harici F5 |
+| Edge LB / WAF | HAProxy + ModSecurity CRS Docker container'ları (Kubernetes dışı) | Harici F5 / Citrix ADC + WAF appliance; DMZ içinde OpenShift Router |
 | LoadBalancer | MetalLB (L2) | MetalLB operator veya bulut LB |
 | Güvenlik | Pod Security `restricted` + elle seccomp | SCC (`restricted-v2`, seccomp otomatik) |
 
@@ -632,12 +694,14 @@ Dışarıdan gelen access token DMZ'de bırakılır. İçeriye yalnızca kullan�
 sequenceDiagram
     autonumber
     actor U as İstemci
-    box rgb(254,243,199) DMZ cluster
-        participant H as HAProxy<br/>edge-lb
+    box rgb(254,243,199) Dış DMZ
+        participant H as edge-lb + edge-waf
+    end
+    box rgb(255,237,213) İç DMZ · dmz cluster
         participant D as dmz-ingressgateway
         participant AS as auth-service<br/>ns auth
     end
-    participant IDP as IdP<br/>Keycloak vb.
+    participant IDP as Keycloak<br/>mgmt
     box rgb(219,234,254) cluster-a
         participant GA as istio-ingressgateway
         participant WA as waypoint
@@ -650,7 +714,8 @@ sequenceDiagram
         participant B as api-b
     end
 
-    U->>H: GET /orders · Authorization Bearer access_token
+    U->>H: GET /orders · TLS · Authorization Bearer access_token
+    Note over H: dışarıdan gelen x-user-jwt silinir
     H->>D: HTTP :80
     Note over D: AuthorizationPolicy CUSTOM<br/>provider auth-service
     D->>AS: ext_authz check · Authorization header
@@ -667,7 +732,7 @@ sequenceDiagram
         Note over AS: iç JWT üret<br/>iss auth.dmz.corp.mesh · exp 5 dk<br/>RS256 private key ile imzala
         AS-->>D: 200 · x-user-jwt eklendi
         Note over D: Authorization header silindi<br/>x-user-jwt eklendi
-        D->>GA: mTLS :443 · x-user-jwt
+        D->>GA: mTLS · DMZ egress üzerinden · x-user-jwt
         Note over GA: RequestAuthentication<br/>imza, iss, aud, exp kontrolü
         GA->>WA: HBONE · x-user-jwt
         Note over WA: AuthorizationPolicy<br/>requestPrincipals + claim kontrolü
@@ -689,13 +754,13 @@ sequenceDiagram
 
 - **İmza anahtarı yalnızca DMZ'de durur.** Internal cluster'lar sadece public key'i (JWKS) bilir. JWKS, `RequestAuthentication` içine **inline** yazılır; böylece internal zone'dan DMZ'ye doğru bir ağ çağrısı açmak gerekmez. Anahtar değiştirilirken eski ve yeni key bir süre birlikte yayınlanır.
 - **Dış token içeri sızmaz.** `Authorization` header'ı DMZ gateway'de silinir (VirtualService `headers.request.remove`). Internal tarafta `x-user-jwt` dışında bir kimlik header'ı kabul edilmez.
-- **Sahte header'a karşı koruma:** İstemci kendisi `x-user-jwt` gönderirse DMZ gateway bu header'ı auth-service'e gitmeden önce siler. İçeride ise imza doğrulaması, DMZ dışında üretilmiş JWT'leri zaten reddeder.
+- **Sahte header'a karşı koruma:** İstemci kendisi `x-user-jwt` gönderirse edge-lb (HAProxy) bu header'ı daha DMZ'ye girmeden siler (`zones` adımında uygulandı). İçeride ise imza doğrulaması, DMZ dışında üretilmiş JWT'leri zaten reddeder.
 - **Kısa ömür:** JWT 5 dakika gibi kısa süreli olmalı; uzun süren iş akışları için yenilemeyi auth-service yapar.
 - **Header aktarımı uygulamanın işi:** Mesh gelen header'ı giden çağrıya otomatik kopyalamaz. Her mikroservis, aldığı `x-user-jwt`'yi yaptığı çağrılara eklemeli (ör. HTTP client interceptor / middleware).
 
 ## Hedef katman modeli (planlanan)
 
-> Henüz uygulanmadı; yol haritasındaki `zones`, `mgmt`, `dmz-channels` ve `data` adımlarıyla bu yapıya geçilecek.
+> **Kısmen uygulandı.** `02 · zones` ile dış DMZ (edge Kubernetes dışında, WAF, TLS), DMZ egress gateway ve "internal yalnızca DMZ egress'ten" kuralı hayata geçti. Kanal gateway'leri (`dmz-channels`), mgmt ve veri (`data`) sonraki adımlarda.
 
 | Katman | İnternet paketini doğrudan alır mı? | İçinde ne var |
 |--------|-------------------------------------|---------------|
@@ -756,7 +821,7 @@ Her adım ayrı bir branch'te yapılır; her branch bir önceki biten branch'ten
 |---|--------|------|-------|
 | 00 | `setup` | Temel kurulum: 3 cluster, Istio ambient, gateway'ler, 4 akış | ✅ |
 | 01 | `kiali` | Gözlemlenebilirlik: cluster başına Kiali, Prometheus, Grafana + loadgen; registry önbelleği | ✅ |
-| 02 | `zones` | Edge'i Kubernetes dışına almak (HAProxy + Coraza WAF, ayrı Docker container); TLS 1.2+/1.3 ve HSTS; X-Forwarded-* temizliği, istek/bağlantı limitleri; DMZ egress gateway; internal AuthZ'nin `dmz-egressgateway` + karşı internal egress ile sınırlanması | ⏳ |
+| 02 | `zones` | Edge'i Kubernetes dışına almak (HAProxy + ModSecurity/OWASP CRS WAF, ayrı Docker container'ları); TLS 1.2+/1.3 ve HSTS; X-Forwarded-* temizliği, istek/bağlantı limitleri; DMZ egress gateway; internal AuthZ'nin `dmz-egressgateway` + karşı internal egress ile sınırlanması | ✅ |
 | 03 | `hardening` | `readOnlyRootFilesystem`; namespace başına `allow-nothing` AuthorizationPolicy; default-deny NetworkPolicy; gateway namespace'lerine `restricted`; DMZ'de STRICT mTLS; `REGISTRY_ONLY`; `server` header gizleme ve tek tip hata yanıtları | ⏳ |
 | 04 | `mgmt` | mgmt cluster'ı; merkezi Prometheus (`remote_write`, gateway üzerinden), tek Kiali, tek Grafana; cluster başına Kiali/Grafana kaldırılır | ⏳ |
 | 05 | `policy` | Kyverno: `latest` tag, privileged pod, hostPath reddi; cosign ile imzalı image zorunluluğu | ⏳ |

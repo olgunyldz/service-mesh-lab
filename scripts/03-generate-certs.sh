@@ -16,6 +16,31 @@ if [[ ! -f root-cert.pem ]]; then
     -addext "keyUsage=critical,keyCertSign,cRLSign"
 fi
 
+# Edge (dış DMZ) TLS sertifikası. Mesh CA'sından bilerek AYRI bir CA ile imzalanır:
+# gerçekte bu sertifika genel bir CA'dan (public CA) gelir ve kurumsal mesh CA'sıyla ilgisi yoktur.
+mkdir -p edge
+if [[ ! -f edge/edge.pem ]]; then
+  log "Edge CA ve *.${APPS_DOMAIN} sertifikası üretiliyor"
+  openssl req -x509 -new -nodes -newkey rsa:2048 -sha256 -days 3650 \
+    -keyout edge/ca-key.pem -out edge/ca.pem \
+    -subj "/O=Lab Public CA/CN=Lab Public Root CA" \
+    -addext "basicConstraints=critical,CA:true" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign"
+  openssl req -new -nodes -newkey rsa:2048 -sha256 \
+    -keyout edge/tls.key -out edge/tls.csr -subj "/CN=*.${APPS_DOMAIN}"
+  cat > edge/ext.cnf <<EOF
+basicConstraints=CA:false
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+subjectAltName=DNS:*.${APPS_DOMAIN},DNS:${APPS_DOMAIN},DNS:localhost
+EOF
+  openssl x509 -req -sha256 -days 397 -in edge/tls.csr \
+    -CA edge/ca.pem -CAkey edge/ca-key.pem -CAcreateserial \
+    -extfile edge/ext.cnf -out edge/tls.crt
+  # HAProxy sertifika ve anahtarı tek dosyada ister
+  cat edge/tls.crt edge/tls.key > edge/edge.pem
+fi
+
 for c in $CLUSTERS; do
   mkdir -p "$c"
   if [[ ! -f "$c/ca-cert.pem" ]]; then

@@ -1,0 +1,7 @@
+# Yalnızca dmz-ingressgateway için (ingress-gateway.yaml'ın üzerine).
+# Önünde iki proxy var (edge-lb HAProxy + edge-waf); istemci IP'si X-Forwarded-For'dan
+# doğru okunsun diye ikisine de güvenilir.
+podAnnotations:
+  proxy.istio.io/config: |
+    gatewayTopology:
+      numTrustedProxies: 2

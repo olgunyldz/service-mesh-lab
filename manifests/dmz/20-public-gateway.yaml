@@ -1,5 +1,5 @@
-# DMZ ingress gateway: *.apps.example.local trafiğini karşılar,
-# host'a göre internal cluster'ların ingress gateway'lerine mTLS ile iletir.
+# DMZ ingress gateway: edge-waf'tan gelen *.apps.example.local trafiğini karşılar.
+# Internal'a doğrudan gitmez; her şeyi DMZ egress gateway'e verir (zone geçişinde tek kapı).
 apiVersion: networking.istio.io/v1
 kind: Gateway
 metadata:
@@ -29,11 +29,23 @@ spec:
   http:
     - route:
         - destination:
-            host: cluster-a.internal.mesh
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
             port:
               number: 443
       timeout: 10s
       retries:
         attempts: 2
         perTryTimeout: 4s
+---
+# ingress gw -> egress gw: mesh kimlikleriyle mTLS
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: dmz-egressgateway
+  namespace: istio-ingress
+spec:
+  host: dmz-egressgateway.istio-egress.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
 # api-b rotası: cluster-b/21-api-b-route.yaml (yalnızca cluster-b aktifken uygulanır)

@@ -1,9 +1,47 @@
-# Internal cluster'ların ingress gateway'leri (MetalLB IP'leri). __NET_PREFIX__ scriptte doldurulur.
+# DMZ egress gateway: internal'a giden tek kapı. __NET_PREFIX__ scriptte doldurulur.
+#   dmz-ingressgateway --mTLS--> dmz-egressgateway --mTLS--> cluster-a ingress gw (LB IP)
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: zone-exit
+  namespace: istio-egress
+spec:
+  selector:
+    istio: dmz-egressgateway
+  servers:
+    - port:
+        number: 443
+        name: https-mtls
+        protocol: HTTPS
+      tls:
+        mode: ISTIO_MUTUAL
+      # Ingress gateway Istio'nun iç SNI'ını gönderir; host listesi kısıtlanamaz.
+      # Kimlik mTLS ile doğrulanır, yönlendirme VirtualService'te.
+      hosts:
+        - "*"
+---
+# Egress gateway'e yalnızca DMZ ingress gateway kimliği girebilir
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-only-dmz-ingress
+  namespace: istio-egress
+spec:
+  selector:
+    matchLabels:
+      istio: dmz-egressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/dmz-ingressgateway
+---
 apiVersion: networking.istio.io/v1
 kind: ServiceEntry
 metadata:
   name: cluster-a-gateway
-  namespace: istio-ingress
+  namespace: istio-egress
 spec:
   hosts:
     - cluster-a.internal.mesh
@@ -20,11 +58,28 @@ apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
   name: cluster-a-gateway
-  namespace: istio-ingress
+  namespace: istio-egress
 spec:
   host: cluster-a.internal.mesh
   trafficPolicy:
     tls:
       mode: ISTIO_MUTUAL
       sni: api-a.apps.example.local
-# cluster-b gateway'i: cluster-b/31-cluster-b-gateway.yaml (yalnızca cluster-b aktifken uygulanır)
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: zone-exit-api-a
+  namespace: istio-egress
+spec:
+  hosts:
+    - api-a.apps.example.local
+  gateways:
+    - zone-exit
+  http:
+    - route:
+        - destination:
+            host: cluster-a.internal.mesh
+            port:
+              number: 443
+# cluster-b'ye çıkış: cluster-b/31-cluster-b-gateway.yaml (yalnızca cluster-b aktifken uygulanır)

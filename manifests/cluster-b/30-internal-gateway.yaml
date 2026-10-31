@@ -1,4 +1,4 @@
-# Internal ingress gateway: DMZ ingress ve cluster-a egress gateway'inden mTLS ile gelen trafiği kabul eder.
+# Internal ingress gateway: DMZ egress ve cluster-a egress gateway'inden mTLS ile gelen trafiği kabul eder.
 apiVersion: networking.istio.io/v1
 kind: Gateway
 metadata:
@@ -49,5 +49,5 @@ spec:
     - from:
         - source:
             principals:
-              - corp.mesh/ns/istio-ingress/sa/dmz-ingressgateway
+              - corp.mesh/ns/istio-egress/sa/dmz-egressgateway
               - corp.mesh/ns/istio-egress/sa/istio-egressgateway
