@@ -56,7 +56,8 @@ spec:
         - operation:
             methods: ["GET", "POST"]
 ---
-# Egress gateway'e yalnızca api-a'nın waypoint'i girebilir (dışarıya çıkış tek ve bilinen bir kimlikten)
+# Egress gateway'e yalnızca api-a'nın waypoint'i girebilir (dışarıya çıkış tek ve bilinen bir kimlikten),
+# yalnızca 443'ten. Veri portları ayrı politikada (55-data-exit.yaml)
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -72,3 +73,6 @@ spec:
         - source:
             principals:
               - corp.mesh/ns/api-a/sa/waypoint
+      to:
+        - operation:
+            ports: ["443"]

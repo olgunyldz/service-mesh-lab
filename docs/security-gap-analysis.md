@@ -4,7 +4,7 @@
 
 Bu doküman, bankacılık ortamı için tanımlanmış 13 katmanlı güvenlik gereksinimlerini lab ortamının **bugünkü haliyle** karşılaştırır. Her madde için üç şey belirtilir: şu anki durum, kanıt (dosya veya yapılandırma) ve lab'da nasıl karşılanacağı.
 
-Analiz tarihi: 2026-10-31 · Kapsam: `dmz-channels` branch'i (00-setup → 06-dmz-channels). ✅/⚠️ işaretli maddelerin yanında hangi adımda değiştiği yazar.
+Analiz tarihi: 2026-10-31 · Kapsam: `data` branch'i (00-setup → 07-data). ✅/⚠️ işaretli maddelerin yanında hangi adımda değiştiği yazar.
 
 ## Gösterim
 
@@ -28,7 +28,7 @@ Analiz tarihi: 2026-10-31 · Kapsam: `dmz-channels` branch'i (00-setup → 06-dm
 | 6 | Internal cluster / service mesh | 2 | 0 | 2 | 1 | 2 | STRICT mTLS + varsayılan reddet (`03`); admission ve audit eksik; NetworkPolicy bu lab'da uygulanamıyor |
 | 7 | Uygulama (Spring Boot) | 0 | 0 | 0 | 0 | 6 | Örnek uygulama podinfo; gerçek servis yazılınca geçerli |
 | 8 | Kimlik ve oturum (IdP) | 0 | 0 | 0 | 5 | 1 | Keycloak mgmt'te planlı |
-| 9 | Veri katmanı | 0 | 0 | 2 | 2 | 1 | `data` adımında planlı |
+| 9 | Veri katmanı | 0 | 2 | 2 | 0 | 1 | PostgreSQL ve Valkey mgmt'te, mesh mTLS, servis başına kullanıcı (`07`); durağan şifreleme, yedek ve alan şifrelemesi eksik |
 | 10 | Kart zone (PCI) | 0 | 0 | 1 | 0 | 3 | Kapsam dışı; segment simülasyonu yapılabilir |
 | 11 | Tedarik zinciri (CI/CD) | 0 | 1 | 5 | 0 | 0 | **Hiç ele alınmadı** |
 | 12 | İzleme ve müdahale (SOC) | 0 | 1 | 2 | 0 | 2 | Metrik var, merkezi log yok |
@@ -91,12 +91,12 @@ flowchart LR
 |------------|-------|------------|--------------|
 | Token doğrulama: imza, exp, aud, iss, DPoP | 📅 | Kullanıcı kimliği yok | `token-exchange`: `RequestAuthentication` (imza, iss, aud, exp). DPoP ❌: auth-service'te `DPoP` proof doğrulaması ayrıca yazılmalı |
 | Token exchange: dış token internal'a geçmesin | 📅 | Planlandı | `token-exchange` adımı ([README](../README.md#planlanan-kullanıcı-kimliği-yayılımı-token-exchange)) |
-| Kullanıcı, cihaz, IP, partner bazında rate limit ve kota | ⚠️ `06` | Edge'de IP başına (100/10 sn); kanal gateway'lerinde kanal toplamı (Envoy local rate limit: web 50, mobil 30, partner 5 rps; 429 + `x-ratelimit-scope`). Pod başına; kullanıcı/partner başına ve cluster genelinde kota yok | `07 · data`: global rate limit servisi (Redis, mgmt); partner/kullanıcı bazlı descriptor'lar |
+| Kullanıcı, cihaz, IP, partner bazında rate limit ve kota | ⚠️ `07` | Edge'de IP başına; kanal gateway'lerinde kanal toplamı (local, `06`); **partner başına global kota** (Envoy ratelimit, sayaçlar mgmt Valkey'de, `07`; test edildi). Kullanıcı/cihaz bazlı kota yok (kimlik 08'de) | `08 · token-exchange` sonrası `sub`/cihaz tanımlayıcılarıyla |
 | Girdi doğrulama: şema, boyut, content-type; bilinmeyen alan reddi | ❌ | Yok | Coraza'da body/content-type kuralları; OpenAPI şema doğrulaması BFF'te veya gateway'de (Envoy ext_proc) |
 | Genel hata yanıtları; stack trace / iç IP sızmasın | ✅ `03` | Edge'de `Server`/`x-envoy-*` siliniyor, 5xx gövdeleri tek tip JSON (test edildi) | podinfo normal yanıtta hostname döndürüyor (örnek servis Go ile yazılınca) |
 | Cookie HttpOnly/Secure/SameSite=Strict, CSRF, CSP, X-Frame-Options | ⚠️ `06` | Web BFF her yanıta CSP (`default-src 'none'`), `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Cache-Control: no-store` ekliyor. Oturum (cookie) ve CSRF yok | `08 · token-exchange`: BFF'te oturum cookie'si (HttpOnly/Secure/SameSite=Strict) ve CSRF koruması |
 | CORS yalnızca izinli origin'lere, `*` yok | ✅ `06` | Yalnızca web kanalında, VirtualService `corsPolicy` ile `https://www.apps.example.local`. WAF image'ının 403'lere eklediği `Allow-Origin: *` kapatıldı (test edildi) | – |
-| Loglarda token, parola, OTP, kart verisi maskelensin | ❌ | Envoy access log'ları stdout'a varsayılan formatla yazıyor | Access log formatından `authorization` header'ının çıkarılması; uygulama loglarında maskeleme |
+| Loglarda token, parola, OTP, kart verisi maskelensin | ❌ | Envoy access log'ları stdout'a varsayılan formatla yazıyor. **Bulgu (`07`):** podinfo, Valkey bağlantı URL'ini parolasıyla loga yazıyor | Access log formatından `authorization` header'ının çıkarılması; uygulama loglarında maskeleme |
 
 ## 5. Zone geçişi (DMZ → internal)
 
@@ -128,7 +128,7 @@ flowchart LR
 | Gereksinim | Durum | Not |
 |------------|-------|-----|
 | Nesne seviyesinde yetkilendirme (BOLA/IDOR) | ➖ | Örnek serviste `sub` claim'i ile kaynak sahibi kontrolü gösterilebilir |
-| Parametreli SQL, çıktı encode | ➖ | `data` adımından sonra |
+| Parametreli SQL, çıktı encode | ✅ `07` | account-api yalnızca parametreli sorgu kullanıyor (pgx `$1`); JSON encode |
 | Idempotency key, step-up onay | ➖ | `acr` claim'i ile step-up örneği yapılabilir |
 | İş kuralı limitleri sunucuda | ➖ | Uygulama mantığı |
 | Actuator dışarı kapalı, ayrı port | ➖ | Ayrı management portu + mesh AuthZ ile yalnızca Prometheus'a izin |
@@ -149,12 +149,12 @@ Keycloak `mgmt` cluster'ında planlandı (`token-exchange` adımı). Maddelerin 
 
 ## 9. Veri katmanı
 
-`data` adımında PostgreSQL ve Redis mgmt'e kurulacak.
+`07 · data` adımında PostgreSQL 18 ve Valkey 9 (Redis uyumlu) mgmt'e kuruldu.
 
 | Gereksinim | Durum | Lab'da nasıl |
 |------------|-------|--------------|
-| İletimde TLS, durağanken şifreleme (TDE / disk) | 📅 | İletim: mesh mTLS (internal → mgmt gateway). Durağan şifreleme ➖ (kind volume'ları); pgcrypto ile alan seviyesi gösterilebilir |
-| Servis başına DB kullanıcısı, en az yetki; insan erişimi PAM | 📅 | Servis başına rol ve şema. PAM ➖ |
+| İletimde TLS, durağanken şifreleme (TDE / disk) | ⚠️ `07` | **İletim:** uçtan uca mesh mTLS (servis → waypoint → egress → mgmt ingress → DB). Durağan şifreleme yok (kind volume'ları ➖); DB'nin kendi TLS'i yok. pgcrypto ile alan seviyesi gösterilebilir |
+| Servis başına DB kullanıcısı, en az yetki; insan erişimi PAM | ⚠️ `07` | PostgreSQL: `account_api` yalnızca `accounts.accounts` SELECT (başka şema ve yazma testle reddedildi). Valkey: ACL ile kullanıcı başına anahtar öneki, `default` kapalı. Parolalar uzun ömürlü Kubernetes Secret (Vault: `13`). PAM ➖ |
 | TCKN ve kart verisi tokenize / alan seviyesinde şifreli | ❌ | pgcrypto veya uygulama seviyesinde şifreleme (Vault Transit) |
 | Şifreli, immutable yedek; geri dönüş testi | ❌ | `pg_dump` + şifreleme; immutable depolama ➖ |
 | DB erişim logları SIEM'e | ➖ | `pgaudit` + merkezi log (katman 12) |

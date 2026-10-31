@@ -212,6 +212,9 @@ log "Pod Security: gateway ve DMZ kanal namespace'leri restricted"
 for c in $CLUSTERS; do
   nss="istio-ingress istio-egress"
   [[ $c == dmz ]] && nss="$nss istio-mobile istio-partner istio-branch web-bff"
+  [[ $c == dmz ]] && nss="$nss ratelimit"
+  [[ $c == cluster-a ]] && nss="$nss account-api"
+  [[ $c == mgmt ]] && nss="$nss data"
   for ns in $nss; do
     warn=$(kubectl --context "$(ctx "$c")" label ns "$ns" pod-security.kubernetes.io/enforce=restricted \
       --overwrite --dry-run=server 2>&1 | grep -c Warning || true)
@@ -251,6 +254,62 @@ done
 check "mgmt girişine mesh sertifikası olmadan erişilemiyor" "000" \
   "$(MSYS_NO_PATHCONV=1 docker run --rm --network kind "$LOADGEN_IMAGE" curl -sk -o /dev/null -w '%{http_code}' --max-time 5 \
      --resolve "$METRICS_HOST:443:$(detect_net_prefix).$(lb_octet mgmt).10" "https://$METRICS_HOST/api/v1/write" 2>/dev/null || true)"
+
+log "8) Veri katmanı (mgmt: PostgreSQL, Valkey; mesh üzerinden)"
+pg() {  # pg <kullanıcı> <parola dosyası> <sql>: mgmt'teki postgres pod'unda, verilen kullanıcıyla
+  kubectl --context "$(ctx mgmt)" -n data exec postgres-0 -- env PGPASSWORD="$(cat "$ROOT_DIR/certs/data/$2.pw")" \
+    psql -h 127.0.0.1 -U "$1" -d "$POSTGRES_DB" -tAc "$3" 2>&1 || true
+}
+vk() {  # vk <kullanıcı> <parola dosyası|-> <komut...>: mgmt'teki valkey pod'unda
+  local auth=()
+  [[ $2 != - ]] && auth=(--user "$1" --pass "$(cat "$ROOT_DIR/certs/data/$2.pw")")
+  shift 2
+  kubectl --context "$(ctx mgmt)" -n data exec deploy/valkey -- valkey-cli "${auth[@]}" --no-auth-warning "$@" 2>&1 || true
+}
+
+check "Mobil: hesaplar PostgreSQL'den (account-api -> egress -> mgmt)" '"source":"postgresql"' "$(mobile /mobile/v1/accounts)"
+check "Web (BFF üzerinden): hesap sorgusu" '"owner":"Acme Ltd."' "$(edge www /accounts/3)"
+check "Partner (acme): hesap sorgusu" '"owner":"Acme Ltd."' \
+  "$(partner acme "https://$PARTNER_HOST:8443/partner/v1/accounts/3")"
+check "IBAN maskeli dönüyor (tam IBAN yanıtta yok)" "yok" \
+  "$(mobile /mobile/v1/accounts | grep -q TR190006400000112345678901 && echo var || echo yok)"
+check "account-api yalnızca okuma: POST reddediliyor (403, waypoint L7)" "403" \
+  "$(mobile /mobile/v1/accounts -X POST -d '{}' -o /dev/null -w '%{http_code}')"
+
+check "PostgreSQL: account_api kendi tablosunu okuyabiliyor" "4" \
+  "$(pg account_api pg-account-api 'select count(*) from accounts.accounts')"
+check "PostgreSQL: account_api başka şemayı okuyamıyor (audit)" "permission denied" \
+  "$(pg account_api pg-account-api 'select * from audit.events')"
+check "PostgreSQL: account_api yazamıyor" "permission denied" \
+  "$(pg account_api pg-account-api "update accounts.accounts set balance = 0 where id = 1")"
+
+check "Valkey: api-a önbelleği (kendi önekinde yaz/oku)" "verify-ok" \
+  "$(mobile /mobile/v1/cache/cache:api-a:verify -X POST -d verify-ok -o /dev/null; mobile /mobile/v1/cache/cache:api-a:verify)"
+check "Valkey: api-a başka önekte yazamıyor (ACL)" "cache set failed" \
+  "$(mobile /mobile/v1/cache/baska-anahtar -X POST -d x)"
+check "Valkey: ratelimit kullanıcısı api-a anahtarlarını okuyamıyor (ACL)" "NOPERM" \
+  "$(vk ratelimit valkey-ratelimit GET cache:api-a:verify)"
+check "Valkey: kimliksiz (default) kullanıcı kapalı" "NOAUTH" "$(vk - - PING)"
+
+limited=$(partner initech "-o /dev/null -D - https://$PARTNER_HOST:8443/partner/v1/accounts & \
+  $(printf 'curl -s --cacert /ca.pem --cert /p/initech.crt --key /p/initech.key --resolve %s:8443:$(getent hosts edge-lb | cut -d" " -f1) -o /dev/null -D - https://%s:8443/partner/v1/accounts & ' \
+     $(for i in $(seq 9); do echo "$PARTNER_HOST $PARTNER_HOST"; done)) wait" | grep -ci '^x-envoy-ratelimited: true')
+check "Global kota: initech (5/dk) aşınca 429 (ratelimit servisi, sayaç mgmt Valkey'de)" "yes" \
+  "$([[ ${limited:-0} -gt 0 ]] && echo yes || echo "no (429 sayısı: ${limited:-0})")"
+check "Global kota sayaçları Valkey'de yalnızca rl: önekiyle" "rl:partner_partner_id_" \
+  "$(vk admin valkey-admin --scan --pattern 'rl:*' | head -1)"
+
+MGMT_IP="$(detect_net_prefix).$(lb_octet mgmt).10"
+for port in 5432 6379; do
+  check "mgmt veri girişine ($port) mesh sertifikası olmadan erişilemiyor" "000" \
+    "$(MSYS_NO_PATHCONV=1 docker run --rm --network kind "$LOADGEN_IMAGE" curl -sk -o /dev/null -w '%{http_code}' \
+       --max-time 5 "https://$MGMT_IP:$port/" 2>/dev/null || true)"
+done
+check "DMZ egress'te PostgreSQL çıkışı tanımlı değil (yalnızca Valkey 16379)" "16379" \
+  "$(kubectl --context "$(ctx dmz)" -n istio-egress get gateway.networking.istio.io data-exit -o jsonpath='{.spec.servers[*].port.number}')"
+check "PostgreSQL ve Valkey imzalı image'larla (digest)" "2" \
+  "$(kubectl --context "$(ctx mgmt)" -n data get pods -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}' \
+     | grep -c "^$LAB_REGISTRY/lab/.*@sha256:" || true)"
 
 log "7) Politika (Kyverno, admission)"
 for c in $CLUSTERS; do

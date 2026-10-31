@@ -71,4 +71,4 @@ spec:
             methods: [GET, POST]
       when:
         - key: request.headers[x-partner-id]
-          values: ["acme"]
+          values: ["acme", "initech"]   # initech: düşük global kotalı partner (26-global-rate-limit.yaml)

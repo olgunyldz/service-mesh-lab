@@ -9,6 +9,18 @@ metadata:
     istio.io/use-waypoint: waypoint    # L7 politikalar için namespace waypoint'i
     pod-security.kubernetes.io/enforce: restricted
 ---
+# account-api (07 · data): veritabanını kullanan internal servis
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: account-api
+  labels:
+    zone: internal
+    istio.io/dataplane-mode: ambient
+    istio.io/use-waypoint: waypoint
+    policy.corp.mesh/image-source: lab-registry
+    pod-security.kubernetes.io/enforce: restricted
+---
 apiVersion: v1
 kind: Namespace
 metadata:

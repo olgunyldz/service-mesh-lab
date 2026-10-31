@@ -54,3 +54,15 @@ metadata:
     istio.io/dataplane-mode: ambient
     policy.corp.mesh/image-source: lab-registry
     pod-security.kubernetes.io/enforce: restricted
+---
+# Global rate limit servisi (07 · data): sayaçlar mgmt'teki Valkey'de
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ratelimit
+  labels:
+    zone: dmz
+    istio.io/dataplane-mode: ambient
+    istio.io/use-waypoint: waypoint
+    policy.corp.mesh/image-source: lab-registry
+    pod-security.kubernetes.io/enforce: restricted

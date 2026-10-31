@@ -8,6 +8,13 @@ service:
     - name: https
       port: 443
       targetPort: 443
+    # Veri çıkışı (07 · data): waypoint'ten gelen mTLS'li TCP, mgmt'e iletilir
+    - name: tls-postgres
+      port: 15432
+      targetPort: 15432
+    - name: tls-valkey
+      port: 16379
+      targetPort: 16379
 autoscaling:
   enabled: false
 replicaCount: 1
