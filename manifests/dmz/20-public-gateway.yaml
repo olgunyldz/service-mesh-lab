@@ -1,5 +1,5 @@
-# DMZ ingress gateway: edge-waf'tan gelen *.apps.example.local trafiğini karşılar.
-# Internal'a doğrudan gitmez; her şeyi DMZ egress gateway'e verir (zone geçişinde tek kapı).
+# Web kanalı: dmz-ingressgateway, edge-waf'tan gelen www.apps.example.local trafiğini web-bff'e verir.
+# Internal'a kendisi çıkamaz (dmz-egressgateway yalnızca kanal gateway'lerini ve BFF'in waypoint'ini kabul eder).
 apiVersion: networking.istio.io/v1
 kind: Gateway
 metadata:
@@ -25,33 +25,38 @@ spec:
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
-  name: api-a
+  name: web
   namespace: istio-ingress
 spec:
   hosts:
-    - api-a.apps.example.local
+    - www.apps.example.local
   gateways:
     - public-gateway
   http:
-    - route:
+    - headers:
+        request:
+          # Kanal etiketi gateway'de yazılır; dışarıdan gelen değer ezilir. Partner kimliği bu kanalda yok sayılır.
+          set:
+            x-channel: web
+          remove:
+            - x-partner-id
+      # Tarayıcı kanalı: yalnızca kendi origin'imizden gelen çapraz istekler (lab'de 8443 portuyla da)
+      corsPolicy:
+        allowOrigins:
+          - exact: https://www.apps.example.local
+          - exact: https://www.apps.example.local:8443
+        allowMethods: [GET, POST]
+        allowHeaders: [content-type, authorization, x-request-id]
+        exposeHeaders: [x-request-id]
+        allowCredentials: true
+        maxAge: 1h
+      route:
         - destination:
-            host: dmz-egressgateway.istio-egress.svc.cluster.local
+            host: web-bff.web-bff.svc.cluster.local
             port:
-              number: 443
+              number: 8080
       timeout: 10s
       retries:
         attempts: 2
         perTryTimeout: 4s
----
-# ingress gw -> egress gw: mesh kimlikleriyle mTLS
-apiVersion: networking.istio.io/v1
-kind: DestinationRule
-metadata:
-  name: dmz-egressgateway
-  namespace: istio-ingress
-spec:
-  host: dmz-egressgateway.istio-egress.svc.cluster.local
-  trafficPolicy:
-    tls:
-      mode: ISTIO_MUTUAL
 # api-b rotası: cluster-b/21-api-b-route.yaml (yalnızca cluster-b aktifken uygulanır)

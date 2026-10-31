@@ -1,0 +1,2 @@
+/usr/local/etc/haproxy/certs/edge.pem
+/usr/local/etc/haproxy/certs/edge.pem [verify required ca-file /usr/local/etc/haproxy/certs/partner-ca.pem] partner-api.apps.example.local

@@ -14,3 +14,43 @@ metadata:
   labels:
     zone: dmz
     pod-security.kubernetes.io/enforce: restricted
+---
+# Kanal gateway'leri (06 · dmz-channels): her kanalın kendi namespace'i (ayrı RBAC, secret, politika sınırı)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-mobile
+  labels:
+    zone: dmz
+    channel: mobile
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-partner
+  labels:
+    zone: dmz
+    channel: partner
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-branch
+  labels:
+    zone: dmz
+    channel: branch
+    pod-security.kubernetes.io/enforce: restricted
+---
+# Web kanalının arka ucu (BFF). Ambient mesh'te; yalnızca imzalı image'lar (Kyverno)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: web-bff
+  labels:
+    zone: dmz
+    channel: web
+    istio.io/dataplane-mode: ambient
+    policy.corp.mesh/image-source: lab-registry
+    pod-security.kubernetes.io/enforce: restricted

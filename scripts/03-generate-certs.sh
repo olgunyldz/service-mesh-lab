@@ -69,6 +69,59 @@ if [[ ! -f edge-dmz/waf-client.crt ]]; then
     -extfile edge-dmz/client-ext.cnf -out edge-dmz/waf-client.crt
 fi
 
+# Partner kanalı: partner'lar edge'e kendi istemci sertifikalarıyla bağlanır. Ayrı bir "Partner CA";
+# gerçekte her partner'ın sertifikası kurumun partner PKI'ından (onboarding sırasında) verilir.
+#   acme   : izin listesinde (geçerli partner)
+#   globex : aynı CA'dan ama izin listesinde değil (gateway AuthZ'de 403)
+#   rogue  : başka bir CA'dan, CN=acme (edge'de TLS el sıkışması reddedilir)
+mkdir -p partner
+if [[ ! -f partner/acme.crt ]]; then
+  log "Partner CA ve partner istemci sertifikaları üretiliyor"
+  openssl req -x509 -new -nodes -newkey rsa:2048 -sha256 -days 3650 \
+    -keyout partner/ca-key.pem -out partner/ca.pem \
+    -subj "/O=${MESH_ID}/CN=Partner CA" \
+    -addext "basicConstraints=critical,CA:true" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign"
+  printf 'basicConstraints=CA:false\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth\n' \
+    > partner/client-ext.cnf
+  for p in acme globex; do
+    openssl req -new -nodes -newkey rsa:2048 -sha256 \
+      -keyout "partner/$p.key" -out "partner/$p.csr" -subj "/O=$p/CN=$p"
+    openssl x509 -req -sha256 -days 397 -in "partner/$p.csr" \
+      -CA partner/ca.pem -CAkey partner/ca-key.pem -CAcreateserial \
+      -extfile partner/client-ext.cnf -out "partner/$p.crt"
+  done
+  openssl req -x509 -new -nodes -newkey rsa:2048 -sha256 -days 397 \
+    -keyout partner/rogue.key -out partner/rogue.crt -subj "/O=acme/CN=acme" \
+    -addext "extendedKeyUsage=clientAuth"
+fi
+
+# Şube kanalı: şube terminalleri cihaz sertifikasıyla bağlanır. "Branch CA" hem terminal sertifikalarını hem de
+# branch-gateway'in sunucu sertifikasını (iç alan adı) verir. Gerçekte kurumsal iç PKI (ör. AD CS) ve cihaz yönetimi.
+mkdir -p branch
+if [[ ! -f "branch/${BRANCH_DEVICE}.crt" ]]; then
+  log "Branch CA, branch-gateway sunucu sertifikası ve terminal sertifikası üretiliyor"
+  openssl req -x509 -new -nodes -newkey rsa:2048 -sha256 -days 3650 \
+    -keyout branch/ca-key.pem -out branch/ca.pem \
+    -subj "/O=${MESH_ID}/CN=Branch CA" \
+    -addext "basicConstraints=critical,CA:true" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign"
+  openssl req -new -nodes -newkey rsa:2048 -sha256 \
+    -keyout branch/gateway.key -out branch/gateway.csr -subj "/CN=${BRANCH_HOST}"
+  printf 'basicConstraints=CA:false\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:%s\n' \
+    "$BRANCH_HOST" > branch/server-ext.cnf
+  openssl x509 -req -sha256 -days 397 -in branch/gateway.csr \
+    -CA branch/ca.pem -CAkey branch/ca-key.pem -CAcreateserial \
+    -extfile branch/server-ext.cnf -out branch/gateway.crt
+  openssl req -new -nodes -newkey rsa:2048 -sha256 \
+    -keyout "branch/${BRANCH_DEVICE}.key" -out "branch/${BRANCH_DEVICE}.csr" -subj "/O=branch/OU=sube-0001/CN=${BRANCH_DEVICE}"
+  printf 'basicConstraints=CA:false\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth\n' \
+    > branch/client-ext.cnf
+  openssl x509 -req -sha256 -days 397 -in "branch/${BRANCH_DEVICE}.csr" \
+    -CA branch/ca.pem -CAkey branch/ca-key.pem -CAcreateserial \
+    -extfile branch/client-ext.cnf -out "branch/${BRANCH_DEVICE}.crt"
+fi
+
 # Image imzalama anahtarı (cosign). Gerçekte özel anahtar KMS/HSM'de (ör. Vault Transit) durur ve yalnızca CI kullanır.
 mkdir -p cosign
 if [[ ! -f cosign/cosign.pub ]]; then

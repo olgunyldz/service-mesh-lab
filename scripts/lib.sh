@@ -60,11 +60,17 @@ start_registry_caches() {
 }
 
 # İmzalı uygulama image'larının tutulduğu iç registry (önbellek değil, asıl kaynak)
+# Host'a yalnızca 127.0.0.1'den açılır: kendi servislerimizin image'ları host'ta build edilip buraya itilir.
 start_lab_registry() {
   local name=${LAB_REGISTRY%%:*}
+  # Port yayını olmayan eski container (05 · policy) yeniden oluşturulur; veri volume'da kalır
+  if [[ -n "$(docker ps -q --filter "name=^${name}$")" && -z "$(docker port "$name" 5000 2>/dev/null)" ]]; then
+    docker rm -f "$name" >/dev/null
+  fi
   if [[ -z "$(docker ps -q --filter "name=^${name}$")" ]]; then
     docker rm -f "$name" >/dev/null 2>&1 || true
     docker run -d --restart=always --name "$name" --network kind \
+      -p "127.0.0.1:${LAB_REGISTRY_HOST_PORT}:5000" \
       -v "${name}:/var/lib/registry" "$REGISTRY_IMAGE" >/dev/null
     echo "  başlatıldı: $name"
   else

@@ -1,0 +1,21 @@
+# 08-verify.sh'in "web trafiği BFF'ten geçmek zorunda" negatif testi için geçici rota (test sonunda silinir).
+# Web gateway'i (dmz-ingressgateway), BFF'i atlayıp dmz-egressgateway'e DOĞRUDAN gönderir.
+# Egress gateway yalnızca web-bff waypoint'ini, mobile-gateway'i ve partner-gateway'i kabul ettiği için 403 (RBAC) beklenir.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: web-bypass-bff-test
+  namespace: istio-ingress
+spec:
+  hosts:
+    - bypass-test.apps.example.local
+  gateways:
+    - public-gateway
+  http:
+    - rewrite:
+        authority: api-a.apps.example.local
+      route:
+        - destination:
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443

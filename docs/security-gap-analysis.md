@@ -4,7 +4,7 @@
 
 Bu doküman, bankacılık ortamı için tanımlanmış 13 katmanlı güvenlik gereksinimlerini lab ortamının **bugünkü haliyle** karşılaştırır. Her madde için üç şey belirtilir: şu anki durum, kanıt (dosya veya yapılandırma) ve lab'da nasıl karşılanacağı.
 
-Analiz tarihi: 2026-10-31 · Kapsam: `policy` branch'i (00-setup → 05-policy). ✅/⚠️ işaretli maddelerin yanında hangi adımda değiştiği yazar.
+Analiz tarihi: 2026-10-31 · Kapsam: `dmz-channels` branch'i (00-setup → 06-dmz-channels). ✅/⚠️ işaretli maddelerin yanında hangi adımda değiştiği yazar.
 
 ## Gösterim
 
@@ -23,7 +23,7 @@ Analiz tarihi: 2026-10-31 · Kapsam: `policy` branch'i (00-setup → 05-policy).
 | 1 | Sağlayıcı / internet kenarı | 1 | 0 | 0 | 0 | 3 | Kapsam dışı; TLS on-prem sonlanıyor (`02-zones`) |
 | 2 | Edge (dış DMZ) | 4 | 2 | 0 | 0 | 1 | `02-zones` ve `03-hardening` ile büyük ölçüde kapandı; yönetim UI'ları ve gerçek firewall eksik |
 | 3 | DMZ cluster (platform) | 2 | 1 | 1 | 0 | 2 | Pod Security tamam; pod'ların doğrudan çıkışı ve secret yönetimi eksik |
-| 4 | API gateway / BFF / token handler | 1 | 0 | 4 | 3 | 0 | Hata yanıtları tek tip (`03`); geri kalanı planlı adımlara bağlı |
+| 4 | API gateway / BFF / token handler | 2 | 2 | 2 | 2 | 0 | Kanal gateway'leri, Web BFF, CORS, kanal kotası (`06`); token ve girdi doğrulama eksik |
 | 5 | Zone geçişi (DMZ → internal) | 3 | 2 | 1 | 0 | 0 | Tek kapı var (`02-zones`); yön kısıtı ağ seviyesinde eksik |
 | 6 | Internal cluster / service mesh | 2 | 0 | 2 | 1 | 2 | STRICT mTLS + varsayılan reddet (`03`); admission ve audit eksik; NetworkPolicy bu lab'da uygulanamıyor |
 | 7 | Uygulama (Spring Boot) | 0 | 0 | 0 | 0 | 6 | Örnek uygulama podinfo; gerçek servis yazılınca geçerli |
@@ -78,7 +78,7 @@ flowchart LR
 
 | Gereksinim | Durum | Mevcut hal | Lab'da nasıl |
 |------------|-------|------------|--------------|
-| İş mantığı ve veri yok; yalnızca doğrulama, dönüştürme, yönlendirme | ✅ | DMZ'de yalnızca edge-lb, ingress gateway ve loadgen (test aracı) var | Korunmalı. `dmz-channels` adımındaki Web BFF yalnızca birleştirme/dönüştürme yapmalı |
+| İş mantığı ve veri yok; yalnızca doğrulama, dönüştürme, yönlendirme | ✅ `06` | DMZ'de kanal gateway'leri, egress gateway ve Web BFF (yalnızca birleştirme ve iletme; veri tutmuyor) | Korunmalı: BFF'e iş mantığı eklenmemeli |
 | Kubernetes API internete kapalı; bastion + MFA + PAM | ➖ | kind API server'ı yalnızca `127.0.0.1`'de | Bastion/PAM organizasyonel; lab'da API zaten dışarıya kapalı |
 | Dışarı çıkış kapalı (`REGISTRY_ONLY`); tek çıkış egress gateway | ⚠️ `03` | `REGISTRY_ONLY` açık (`03`) ve egress gateway'e yalnızca waypoint girebiliyor. Ama **ambient'te pod'ların doğrudan çıkışı engellenmiyor** (ztunnel `REGISTRY_ONLY` uygulamıyor) | Egress NetworkPolicy (bu lab'da uygulanamıyor; gerçek ortamda OVN-K / EgressFirewall) |
 | Node sertleştirme (CIS), SSH kapalı, otomatik yama | ➖ | kind node'ları container | Gerçek node gerektirir. `kube-bench` ile CIS raporu alınabilir (bilgi amaçlı) |
@@ -91,11 +91,11 @@ flowchart LR
 |------------|-------|------------|--------------|
 | Token doğrulama: imza, exp, aud, iss, DPoP | 📅 | Kullanıcı kimliği yok | `token-exchange`: `RequestAuthentication` (imza, iss, aud, exp). DPoP ❌: auth-service'te `DPoP` proof doğrulaması ayrıca yazılmalı |
 | Token exchange: dış token internal'a geçmesin | 📅 | Planlandı | `token-exchange` adımı ([README](../README.md#planlanan-kullanıcı-kimliği-yayılımı-token-exchange)) |
-| Kullanıcı, cihaz, IP, partner bazında rate limit ve kota | 📅 | Yok | `dmz-channels`: kanal gateway'lerinde Envoy local rate limit; kullanıcı bazlı için global rate limit servisi (Redis, mgmt) |
+| Kullanıcı, cihaz, IP, partner bazında rate limit ve kota | ⚠️ `06` | Edge'de IP başına (100/10 sn); kanal gateway'lerinde kanal toplamı (Envoy local rate limit: web 50, mobil 30, partner 5 rps; 429 + `x-ratelimit-scope`). Pod başına; kullanıcı/partner başına ve cluster genelinde kota yok | `07 · data`: global rate limit servisi (Redis, mgmt); partner/kullanıcı bazlı descriptor'lar |
 | Girdi doğrulama: şema, boyut, content-type; bilinmeyen alan reddi | ❌ | Yok | Coraza'da body/content-type kuralları; OpenAPI şema doğrulaması BFF'te veya gateway'de (Envoy ext_proc) |
 | Genel hata yanıtları; stack trace / iç IP sızmasın | ✅ `03` | Edge'de `Server`/`x-envoy-*` siliniyor, 5xx gövdeleri tek tip JSON (test edildi) | podinfo normal yanıtta hostname döndürüyor (örnek servis Go ile yazılınca) |
-| Cookie HttpOnly/Secure/SameSite=Strict, CSRF, CSP, X-Frame-Options | ❌ | Web kanalı yok | `dmz-channels` Web BFF'te; güvenlik header'ları gateway'de `response.headers.add` ile |
-| CORS yalnızca izinli origin'lere, `*` yok | ❌ | Tanımsız | VirtualService `corsPolicy` ile açık origin listesi |
+| Cookie HttpOnly/Secure/SameSite=Strict, CSRF, CSP, X-Frame-Options | ⚠️ `06` | Web BFF her yanıta CSP (`default-src 'none'`), `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Cache-Control: no-store` ekliyor. Oturum (cookie) ve CSRF yok | `08 · token-exchange`: BFF'te oturum cookie'si (HttpOnly/Secure/SameSite=Strict) ve CSRF koruması |
+| CORS yalnızca izinli origin'lere, `*` yok | ✅ `06` | Yalnızca web kanalında, VirtualService `corsPolicy` ile `https://www.apps.example.local`. WAF image'ının 403'lere eklediği `Allow-Origin: *` kapatıldı (test edildi) | – |
 | Loglarda token, parola, OTP, kart verisi maskelensin | ❌ | Envoy access log'ları stdout'a varsayılan formatla yazıyor | Access log formatından `authorization` header'ının çıkarılması; uygulama loglarında maskeleme |
 
 ## 5. Zone geçişi (DMZ → internal)

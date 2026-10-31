@@ -1,0 +1,199 @@
+# Web kanalının arka ucu (BFF, services/web-bff). Akış:
+#   dmz-ingressgateway (web) -> web-bff -> [api-a Service, waypoint] -> dmz-egressgateway -> cluster-a
+# web-bff, internal'a doğrudan çıkamaz: çıkış yalnızca waypoint üzerinden ve yalnızca egress gateway'e.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: web-bff
+  namespace: web-bff
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-bff
+  namespace: web-bff
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web-bff
+  template:
+    metadata:
+      labels:
+        app: web-bff
+        version: v1
+    spec:
+      serviceAccountName: web-bff
+      automountServiceAccountToken: false   # Kubernetes API'ye ihtiyacı yok
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532   # distroless "nonroot"
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bff
+          image: lab-registry:5000/lab/web-bff:0.1.0   # build + imza: 03b-publish-images.sh
+          env:
+            - name: API_URL
+              value: http://api-a.web-bff.svc.cluster.local   # aşağıdaki seçicisiz Service (waypoint'e gider)
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-bff
+  namespace: web-bff
+spec:
+  selector:
+    app: web-bff
+  ports:
+    - name: http
+      port: 8080
+---
+# --- Çıkış: api-a (zone'lar arası iç ad api-a.apps.example.local) ---
+# Seçicisiz Service: arkasında pod yok, yalnızca BFF'in çağıracağı bir ad ve VIP. Trafiği waypoint alır
+# ve dmz-egressgateway'e yönlendirir (cluster-a'daki httpbin çıkışıyla aynı desen).
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-a
+  namespace: web-bff
+  labels:
+    istio.io/use-waypoint: waypoint
+spec:
+  ports:
+    - name: http
+      port: 80
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: api-a-via-egress
+  namespace: web-bff
+spec:
+  hosts:
+    - api-a.web-bff.svc.cluster.local
+  http:
+    - rewrite:
+        authority: api-a.apps.example.local   # egress gateway ve cluster-a bu adla yönlendirir
+      route:
+        - destination:
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443
+      timeout: 10s
+---
+# Waypoint: web-bff namespace'i için L7 proxy (yalnızca servis trafiği; bkz. cluster-a/20-waypoint.yaml)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: waypoint-options
+  namespace: web-bff
+data:
+  deployment: |
+    spec:
+      template:
+        spec:
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: waypoint
+  namespace: web-bff
+  labels:
+    istio.io/waypoint-for: service
+spec:
+  gatewayClassName: istio-waypoint
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: waypoint-options
+  listeners:
+    - name: mesh
+      port: 15008
+      protocol: HBONE
+---
+# --- Yetkilendirme: varsayılan reddet ---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-nothing
+  namespace: web-bff
+spec: {}
+---
+# BFF'e yalnızca web kanalının gateway'i erişebilir (ztunnel, L4)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: web-bff-allow-web-gateway
+  namespace: web-bff
+spec:
+  selector:
+    matchLabels:
+      app: web-bff
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/dmz-ingressgateway
+      to:
+        - operation:
+            ports: ["8080"]
+---
+# Çıkış servisini yalnızca BFF kullanabilir (waypoint, L7)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: api-a-upstream-allow-bff
+  namespace: web-bff
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: api-a
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/web-bff/sa/web-bff
+---
+# Waypoint pod'una yalnızca BFF ulaşabilir (ztunnel, L4). allow-nothing waypoint'i de kapsar.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: waypoint-allow-bff
+  namespace: web-bff
+spec:
+  selector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: waypoint
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/web-bff/sa/web-bff

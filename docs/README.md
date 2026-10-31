@@ -23,6 +23,9 @@ gitGraph
     branch policy
     checkout policy
     commit id: "Kyverno + imzalı image"
+    branch dmz-channels
+    checkout dmz-channels
+    commit id: "web BFF + mobil + partner + şube"
 ```
 
 Her adım bittiğinde ortam sıfırlanır ve baştan kurulur (`99-destroy.sh` → `setup.sh` → `08-verify.sh`). Böylece o adımın elle müdahale olmadan, sıfırdan çalıştığı doğrulanır.
@@ -52,6 +55,7 @@ Ana [README](../README.md) ortamın güncel ve toplu halini anlatır. Bu klasör
 | 03 | [Sıkılaştırma (hardening)](03-hardening.md) | `hardening` | ✅ Tamamlandı (33/33 test) |
 | 04 | [Management cluster ve merkezi gözlemlenebilirlik](04-mgmt.md) | `mgmt` | ✅ Tamamlandı (40/40 test) |
 | 05 | [Politika (Kyverno ve imzalı image)](05-policy.md) | `policy` | ✅ Tamamlandı (57/57 test) |
+| 06 | [DMZ kanalları (web BFF, mobil, partner, şube)](06-dmz-channels.md) | `dmz-channels` | ✅ Tamamlandı (86/86 test) |
 
 ## Diğer dokümanlar
 

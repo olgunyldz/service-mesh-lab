@@ -1,0 +1,7 @@
+# edge-waf -> DMZ kanal gateway'i: Host'a göre hedef (DMZ MetalLB VIP'leri, 06b-deploy-edge.sh doldurur).
+# Bilinmeyen host'lar web gateway'ine gider; orada rota yoksa 404.
+map $host $dmz_gateway {
+    default            ${DMZ_WEB_GW};
+    ${MOBILE_HOST}     ${DMZ_MOBILE_GW};
+    ${PARTNER_HOST}    ${DMZ_PARTNER_GW};
+}

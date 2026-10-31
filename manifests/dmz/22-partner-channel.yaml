@@ -1,0 +1,74 @@
+# Partner kanalı: partner-gateway (istio-partner), partner-api.apps.example.local.
+#   partner --mTLS (Partner CA)--> edge-lb --> edge-waf --mTLS--> partner-gateway --mTLS--> dmz-egressgateway
+# Partner'ın istemci sertifikasını edge-lb doğrular (TLS orada sonlanır ki WAF trafiği görebilsin) ve
+# sertifikanın CN'ini x-partner-id olarak yazar. Bu gateway'e yalnızca edge-waf bağlanabildiği (MUTUAL,
+# Edge-DMZ Zone CA) için header'a güvenilir; edge-lb dışarıdan gelen x-partner-id'yi her zaman siler.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: partner-gateway
+  namespace: istio-partner
+spec:
+  selector:
+    istio: partner-gateway
+  servers:
+    - port:
+        number: 443
+        name: https-mtls
+        protocol: HTTPS
+      tls:
+        mode: MUTUAL
+        credentialName: dmz-ingress-mtls
+        minProtocolVersion: TLSV1_2
+      hosts:
+        - partner-api.apps.example.local
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: partner
+  namespace: istio-partner
+spec:
+  hosts:
+    - partner-api.apps.example.local
+  gateways:
+    - partner-gateway
+  http:
+    - match:
+        - uri:
+            prefix: /partner/v1/
+      rewrite:
+        uri: /
+        authority: api-a.apps.example.local
+      headers:
+        request:
+          set:
+            x-channel: partner
+      route:
+        - destination:
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443
+      timeout: 10s
+---
+# Partner izin listesi: yalnızca onaylı partner'lar (sertifika CN'i), yalnızca partner API yolları.
+# Aynı Partner CA'dan sertifikası olsa bile listede olmayan partner 403 alır.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: partner-allowlist
+  namespace: istio-partner
+spec:
+  selector:
+    matchLabels:
+      istio: partner-gateway
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            hosts: ["partner-api.apps.example.local", "partner-api.apps.example.local:*"]
+            paths: ["/partner/v1/*"]
+            methods: [GET, POST]
+      when:
+        - key: request.headers[x-partner-id]
+          values: ["acme"]
