@@ -1,5 +1,6 @@
 # ztunnel: her node'da DaemonSet, L4 mTLS (HBONE). clusterName / network scriptte verilir.
 profile: ambient
+hub: docker.io/istio   # bkz. istiod.yaml
 resources:
   requests:
     cpu: 50m

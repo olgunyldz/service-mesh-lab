@@ -1,0 +1,9 @@
+# Yalnızca cluster-b aktifken uygulanır. 10-api-a.yaml'dan önce uygulanır ki pod'lar
+# ilk açılışta backend adresini alsın.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-a-backend
+  namespace: api-a
+data:
+  PODINFO_BACKEND_URL: http://api-b.apps.example.local/echo

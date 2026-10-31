@@ -1,4 +1,5 @@
-# api-a: podinfo. /api/echo çağrısı backend olarak api-b'ye (cluster-b) egress üzerinden gider.
+# api-a: podinfo. cluster-b aktifken /api/echo çağrısı backend olarak api-b'ye egress üzerinden gider
+# (backend adresi cluster-b/05-api-a-backend.yaml ConfigMap'inden gelir; yoksa yalnızca echo yapar).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -35,7 +36,10 @@ spec:
             - ./podinfo
             - --port=9898
             - --level=info
-            - --backend-url=http://api-b.apps.example.local/echo
+          envFrom:
+            - configMapRef:
+                name: api-a-backend   # PODINFO_BACKEND_URL
+                optional: true
           env:
             - name: PODINFO_UI_MESSAGE
               value: "api-a @ cluster-a"

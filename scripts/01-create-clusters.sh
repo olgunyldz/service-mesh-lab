@@ -10,6 +10,13 @@ for c in $CLUSTERS; do
   kind create cluster --config "$ROOT_DIR/clusters/$c.yaml" --image "$K8S_NODE_IMAGE"
 done
 
+# kind docker ağı ilk cluster ile oluşur; önbellek container'ları bu ağa bağlanır
+log "Registry önbelleği"
+start_registry_caches
+for c in $CLUSTERS; do
+  configure_node_mirrors "$c"
+done
+
 log "Gateway API CRD'leri ($GATEWAY_API_VERSION)"
 for c in $CLUSTERS; do
   kubectl --context "$(ctx "$c")" apply -f \

@@ -1,0 +1,18 @@
+# Yalnızca cluster-b aktifken uygulanır. Internal zone içinde A <-> B serbest:
+# cluster-b'nin egress gateway'i de cluster-a'nın ingress gateway'ine girebilir.
+# Not: ortak trust domain yüzünden bu kimlik cluster-a'nın kendi egress'iyle aynıdır.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-cluster-b-egress
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-egress/sa/istio-egressgateway

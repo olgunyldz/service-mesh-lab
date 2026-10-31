@@ -1,0 +1,19 @@
+# 08-verify.sh'in "tek kapı" negatif testi için geçici rota (test sonunda silinir).
+# DMZ ingress gateway'i, egress gateway'i atlayıp cluster-a'ya DOĞRUDAN gönderir.
+# cluster-a yalnızca dmz-egressgateway kimliğini kabul ettiği için 403 (RBAC) beklenir.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: zone-direct-path-test
+  namespace: istio-ingress
+spec:
+  hosts:
+    - zone-test.apps.example.local
+  gateways:
+    - public-gateway
+  http:
+    - route:
+        - destination:
+            host: cluster-a.internal.mesh
+            port:
+              number: 443

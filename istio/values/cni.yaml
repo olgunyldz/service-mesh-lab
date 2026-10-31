@@ -4,3 +4,4 @@ global:
   # Docker Desktop WSL2 kernel'inde xt_CONNMARK modülü yok; iptables yolu pod ağını kuramıyor.
   # Native nftables doğrudan conntrack (ct mark) kullanır.
   nativeNftables: true
+  hub: docker.io/istio   # bkz. istiod.yaml

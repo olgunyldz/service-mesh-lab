@@ -12,6 +12,14 @@ for c in $CLUSTERS; do
     "https://raw.githubusercontent.com/metallb/metallb/${METALLB_VERSION}/config/manifests/metallb-native.yaml"
   kubectl --context "$context" -n metallb-system wait --for=condition=Available deploy --all --timeout=180s
   kubectl --context "$context" -n metallb-system rollout status ds/speaker --timeout=180s
-  sed "s/__POOL_PREFIX__/${pool}/g" "$ROOT_DIR/infra/metallb/ipaddresspool.yaml" \
-    | kubectl --context "$context" apply -f -
+  # Controller "Available" olsa da doğrulama webhook'u birkaç saniye geç hazır olabiliyor
+  # (image'lar önbellekten hızlı gelince belirgin oldu); hazır olana kadar yeniden dene
+  for i in $(seq 1 30); do
+    if sed "s/__POOL_PREFIX__/${pool}/g" "$ROOT_DIR/infra/metallb/ipaddresspool.yaml" \
+        | kubectl --context "$context" apply -f - 2>/dev/null; then
+      break
+    fi
+    [[ $i -eq 30 ]] && { echo "MetalLB webhook hazır olmadı"; exit 1; }
+    sleep 2
+  done
 done

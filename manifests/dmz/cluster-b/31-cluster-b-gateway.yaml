@@ -1,0 +1,47 @@
+# Yalnızca cluster-b aktifken uygulanır. __NET_PREFIX__ scriptte doldurulur.
+# DMZ egress gateway -> cluster-b ingress gw
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: cluster-b-gateway
+  namespace: istio-egress
+spec:
+  hosts:
+    - cluster-b.internal.mesh
+  location: MESH_EXTERNAL
+  resolution: STATIC
+  ports:
+    - number: 443
+      name: http-mtls
+      protocol: HTTP
+  endpoints:
+    - address: __NET_PREFIX__.202.10
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: cluster-b-gateway
+  namespace: istio-egress
+spec:
+  host: cluster-b.internal.mesh
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      sni: api-b.apps.example.local
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: zone-exit-api-b
+  namespace: istio-egress
+spec:
+  hosts:
+    - api-b.apps.example.local
+  gateways:
+    - zone-exit
+  http:
+    - route:
+        - destination:
+            host: cluster-b.internal.mesh
+            port:
+              number: 443

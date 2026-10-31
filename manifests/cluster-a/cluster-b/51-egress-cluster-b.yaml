@@ -1,0 +1,82 @@
+# Yalnızca cluster-b aktifken uygulanır. __NET_PREFIX__ scriptte doldurulur.
+# Akış: api-a pod -> ztunnel -> waypoint (api-a ns) -> istio-egressgateway --mTLS--> cluster-b ingress gw
+
+# --- Dış hedef (api-a namespace'inde; waypoint bunu işler) ---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: api-b-remote
+  namespace: api-a
+  labels:
+    istio.io/use-waypoint: waypoint
+spec:
+  hosts:
+    - api-b.apps.example.local
+  location: MESH_EXTERNAL
+  resolution: DNS
+  ports:
+    - number: 80
+      name: http
+      protocol: HTTP
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: via-egress-api-b
+  namespace: api-a
+spec:
+  hosts:
+    - api-b.apps.example.local
+  http:
+    - route:
+        - destination:
+            host: istio-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443
+---
+# --- Egress gateway tarafı ---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: cluster-b-gateway
+  namespace: istio-egress
+spec:
+  hosts:
+    - cluster-b.internal.mesh
+  location: MESH_EXTERNAL
+  resolution: STATIC
+  ports:
+    - number: 443
+      name: http-mtls
+      protocol: HTTP
+  endpoints:
+    - address: __NET_PREFIX__.202.10
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: cluster-b-gateway
+  namespace: istio-egress
+spec:
+  host: cluster-b.internal.mesh
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      sni: api-b.apps.example.local
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: egress-api-b
+  namespace: istio-egress
+spec:
+  hosts:
+    - api-b.apps.example.local
+  gateways:
+    - egress
+  http:
+    - route:
+        - destination:
+            host: cluster-b.internal.mesh
+            port:
+              number: 443

@@ -1,23 +1,29 @@
-# DMZ cluster: dış dünyaya açık tek cluster.
-# Host'tan 8080/8443 -> edge-lb (HAProxy) NodePort 30080/30443
+# DMZ cluster (iç DMZ): internet paketini doğrudan almaz; yalnızca edge-waf'tan gelen trafiği alır.
+# Host'a uygulama portu açmaz (8080/8443 edge-lb container'ında, bkz. scripts/06b-deploy-edge.sh).
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: dmz
+# Registry mirror tanımlarını /etc/containerd/certs.d altından oku (bkz. scripts/lib.sh configure_node_mirrors)
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
 networking:
   podSubnet: 10.10.0.0/16
   serviceSubnet: 10.110.0.0/16
+# Tek node: makinenin RAM'i (15,7 GB) 4 cluster × 2 node'a yetmiyor. kind, worker yoksa
+# control-plane taint'ini kaldırır; tüm pod'lar bu node'da çalışır. İleride 2 node'a çıkmak için
+# aşağıya "- role: worker" eklenir (bkz. docs/01-kiali.md).
 nodes:
   - role: control-plane
     labels:
       zone: dmz
-    extraPortMappings:
-      - containerPort: 30080
-        hostPort: 8080
-        protocol: TCP
-      - containerPort: 30443
-        hostPort: 8443
-        protocol: TCP
-  - role: worker
-    labels:
-      zone: dmz
       node-role: infra   # node-role.kubernetes.io/* kubelet tarafından eklenemez
+    extraPortMappings:
+      # Yalnızca yönetim araçları: Kiali / Grafana NodePort
+      - containerPort: 30201
+        hostPort: 20001
+        protocol: TCP
+      - containerPort: 30300
+        hostPort: 3001
+        protocol: TCP

@@ -34,11 +34,13 @@ spec:
             port:
               number: 80
 ---
-# Sadece DMZ ingress gateway kimliği bu gateway'e erişebilir.
+# Zone geçişinde tek kapı: yalnızca DMZ egress gateway kimliği girebilir.
+# dmz-ingressgateway artık doğrudan kabul edilmez. cluster-b aktifken onun egress'i de
+# cluster-b/35-allow-cluster-b-egress.yaml ile eklenir (ALLOW politikaları toplanır).
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
-  name: allow-only-dmz
+  name: allow-only-dmz-egress
   namespace: istio-ingress
 spec:
   selector:
@@ -49,4 +51,4 @@ spec:
     - from:
         - source:
             principals:
-              - corp.mesh/ns/istio-ingress/sa/dmz-ingressgateway
+              - corp.mesh/ns/istio-egress/sa/dmz-egressgateway
