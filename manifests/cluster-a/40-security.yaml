@@ -1,0 +1,30 @@
+# Mesh içi zorunlu mTLS
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT
+---
+# api-a'ya sadece internal ingress gateway erişebilir (waypoint'te L7 olarak uygulanır)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: api-a-allow-ingress
+  namespace: api-a
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: api-a
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            methods: ["GET", "POST"]

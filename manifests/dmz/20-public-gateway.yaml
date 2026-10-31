@@ -1,0 +1,56 @@
+# DMZ ingress gateway: *.apps.example.local trafiğini karşılar,
+# host'a göre internal cluster'ların ingress gateway'lerine mTLS ile iletir.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: public-gateway
+  namespace: istio-ingress
+spec:
+  selector:
+    istio: dmz-ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "*.apps.example.local"
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: api-a
+  namespace: istio-ingress
+spec:
+  hosts:
+    - api-a.apps.example.local
+  gateways:
+    - public-gateway
+  http:
+    - route:
+        - destination:
+            host: cluster-a.internal.mesh
+            port:
+              number: 443
+      timeout: 10s
+      retries:
+        attempts: 2
+        perTryTimeout: 4s
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: api-b
+  namespace: istio-ingress
+spec:
+  hosts:
+    - api-b.apps.example.local
+  gateways:
+    - public-gateway
+  http:
+    - route:
+        - destination:
+            host: cluster-b.internal.mesh
+            port:
+              number: 443
+      timeout: 10s

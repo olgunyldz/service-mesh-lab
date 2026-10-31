@@ -1,0 +1,94 @@
+# Egress akışı: api-b pod -> ztunnel -> waypoint -> istio-egressgateway -> httpbin.org
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: httpbin-ext
+  namespace: api-b
+  labels:
+    istio.io/use-waypoint: waypoint
+spec:
+  hosts:
+    - httpbin.org
+  location: MESH_EXTERNAL
+  resolution: DNS
+  ports:
+    - number: 80
+      name: http
+      protocol: HTTP
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: via-egress
+  namespace: api-b
+spec:
+  hosts:
+    - httpbin.org
+  http:
+    - route:
+        - destination:
+            host: istio-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: egressgateway
+  namespace: api-b
+spec:
+  host: istio-egressgateway.istio-egress.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+---
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: egress
+  namespace: istio-egress
+spec:
+  selector:
+    istio: egressgateway
+  servers:
+    - port:
+        number: 443
+        name: https-mtls
+        protocol: HTTPS
+      tls:
+        mode: ISTIO_MUTUAL
+      # bkz. cluster-a/50-egress.yaml: waypoint iç SNI gönderir
+      hosts:
+        - "*"
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: httpbin-ext
+  namespace: istio-egress
+spec:
+  hosts:
+    - httpbin.org
+  location: MESH_EXTERNAL
+  resolution: DNS
+  ports:
+    - number: 80
+      name: http
+      protocol: HTTP
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: egress-routes
+  namespace: istio-egress
+spec:
+  hosts:
+    - httpbin.org
+  gateways:
+    - egress
+  http:
+    - route:
+        - destination:
+            host: httpbin.org
+            port:
+              number: 80

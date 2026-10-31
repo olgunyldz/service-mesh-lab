@@ -1,0 +1,15 @@
+# Internal cluster B: dışarıya port açmaz, sadece DMZ'den ve cluster-a egress'inden erişilir.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: cluster-b
+networking:
+  podSubnet: 10.30.0.0/16
+  serviceSubnet: 10.130.0.0/16
+nodes:
+  - role: control-plane
+    labels:
+      zone: internal
+  - role: worker
+    labels:
+      zone: internal
+      node-role: worker
