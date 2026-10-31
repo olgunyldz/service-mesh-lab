@@ -1,0 +1,89 @@
+# Politika istisnaları. Yalnızca kyverno namespace'inde tanımlanabilir (values.yaml: features.policyExceptions);
+# böylece istisnalar tek yerde toplanır ve uygulama ekipleri kendi namespace'lerinde istisna yazamaz.
+# Her istisna yalnızca gereken kuralı kapsar ve namespace + etiketle daraltılır. Etiketler hem pod'da hem de
+# onu oluşturan DaemonSet/Deployment'ta bulunur (Kyverno autogen ikisini de denetler).
+# Not: etiket eşleşmesi, o namespace'e pod yazma yetkisi olan birinin aynı etiketi kullanmasını engellemez;
+# bu namespace'lere yazma yetkisi yalnızca platform ekibindedir (RBAC).
+---
+# ztunnel: CNI ile node üzerindeki soketi paylaşır (hostPath /var/run/ztunnel) ve pod ağ namespace'lerine
+# girmek için NET_ADMIN/SYS_ADMIN yetenekleri ister (allowPrivilegeEscalation kapatılamıyor).
+apiVersion: policies.kyverno.io/v1
+kind: PolicyException
+metadata:
+  name: istio-ztunnel
+  namespace: kyverno
+spec:
+  policyRefs:
+    - { kind: ValidatingPolicy, name: disallow-host-path }
+    - { kind: ValidatingPolicy, name: disallow-privileged }
+  matchConditions:
+    - name: ztunnel
+      expression: >-
+        object.metadata.namespace == 'istio-system' &&
+        object.metadata.?labels['app.kubernetes.io/name'].orValue('') == 'ztunnel'
+---
+# istio-cni: CNI eklentisini ve yapılandırmasını node'a yazar (/opt/cni/bin, /etc/cni/net.d), /proc'u okur.
+apiVersion: policies.kyverno.io/v1
+kind: PolicyException
+metadata:
+  name: istio-cni
+  namespace: kyverno
+spec:
+  policyRefs:
+    - { kind: ValidatingPolicy, name: disallow-host-path }
+  matchConditions:
+    - name: istio-cni-node
+      expression: >-
+        object.metadata.namespace == 'istio-system' &&
+        object.metadata.?labels['app.kubernetes.io/name'].orValue('') == 'istio-cni'
+---
+# MetalLB speaker: L2 modunda VIP için ARP yanıtı verir; node ağında (hostNetwork) çalışmak zorunda.
+apiVersion: policies.kyverno.io/v1
+kind: PolicyException
+metadata:
+  name: metallb-speaker
+  namespace: kyverno
+spec:
+  policyRefs:
+    - { kind: ValidatingPolicy, name: disallow-privileged }
+  matchConditions:
+    - name: speaker
+      expression: >-
+        object.metadata.namespace == 'metallb-system' &&
+        object.metadata.?labels['component'].orValue('') == 'speaker'
+---
+# Istio gateway Deployment'ları image olarak "auto" yazar; gerçek image pod oluşturulurken Istio'nun
+# mutating webhook'u tarafından enjekte edilir. Pod'un kendisi bu istisnanın dışındadır ve normal denetlenir.
+apiVersion: policies.kyverno.io/v1
+kind: PolicyException
+metadata:
+  name: istio-gateway-image-auto
+  namespace: kyverno
+spec:
+  policyRefs:
+    - { kind: ValidatingPolicy, name: disallow-latest-tag }
+  matchConditions:
+    - name: injected-gateway-template
+      expression: >-
+        object.kind in ['Deployment', 'ReplicaSet'] &&
+        object.spec.template.metadata.?annotations['inject.istio.io/templates'].orValue('') == 'gateway' &&
+        object.spec.template.spec.containers.all(c, c.image == 'auto')
+---
+# İmzalı image zorunlu namespace'lerde (require-lab-registry) Istio'nun yönettiği waypoint proxy'si.
+# Waypoint'i istiod oluşturur ve image'ı Istio'nun hub'ından gelir. Gerçekte Istio image'ları da iç registry'ye
+# kopyalanıp imzalanır (hub = iç registry) ve bu istisnaya gerek kalmaz.
+apiVersion: policies.kyverno.io/v1
+kind: PolicyException
+metadata:
+  name: istio-waypoint
+  namespace: kyverno
+spec:
+  policyRefs:
+    - { kind: ValidatingPolicy, name: require-lab-registry }
+  matchConditions:
+    - name: istio-managed-waypoint
+      expression: >-
+        object.metadata.?labels['gateway.istio.io/managed'].orValue('') == 'istio.io-mesh-controller' &&
+        object.metadata.?labels['gateway.networking.k8s.io/gateway-class-name'].orValue('') == 'istio-waypoint' &&
+        (has(object.spec.template) ? object.spec.template.spec.containers : object.spec.containers)
+          .all(c, c.image.startsWith('docker.io/istio/proxyv2:'))

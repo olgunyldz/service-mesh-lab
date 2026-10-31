@@ -30,7 +30,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: api
-          image: ghcr.io/stefanprodan/podinfo:6.7.1
+          image: lab-registry:5000/lab/podinfo:6.7.1   # imzalı kopya (03b-publish-images.sh)
           command:
             - ./podinfo
             - --port=9898

@@ -108,8 +108,10 @@ echo "    bu lab'da NetworkPolicy uygulanamıyor (bkz. docs/03-hardening.md)."
 
 log "Internal: varsayılan reddet (cluster-a, api-a namespace'inde test pod'u)"
 K="kubectl --context $(ctx cluster-a) -n api-a"
+# api-a namespace'i yalnızca lab registry'deki imzalı image'ları kabul eder (05 · policy)
+PROBE_IMAGE="$LAB_REGISTRY/lab/curl:8.11.1"
 $K delete pod authz-probe --ignore-not-found --wait=true >/dev/null 2>&1
-$K run authz-probe --image="$LOADGEN_IMAGE" --restart=Never --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":100,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"p","image":"'"$LOADGEN_IMAGE"'","command":["sleep","300"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' >/dev/null
+$K run authz-probe --image="$PROBE_IMAGE" --restart=Never --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":100,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"p","image":"'"$PROBE_IMAGE"'","command":["sleep","300"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' >/dev/null
 $K wait --for=condition=Ready pod/authz-probe --timeout=90s >/dev/null
 pod_ip=$($K get pod -l app=api-a -o jsonpath='{.items[0].status.podIP}')
 check "Pod IP ile waypoint'i atlama engelleniyor (ztunnel L4)" "000" \
@@ -163,6 +165,40 @@ done
 check "mgmt girişine mesh sertifikası olmadan erişilemiyor" "000" \
   "$(MSYS_NO_PATHCONV=1 docker run --rm --network kind "$LOADGEN_IMAGE" curl -sk -o /dev/null -w '%{http_code}' --max-time 5 \
      --resolve "$METRICS_HOST:443:$(detect_net_prefix).$(lb_octet mgmt).10" "https://$METRICS_HOST/api/v1/write" 2>/dev/null || true)"
+
+log "7) Politika (Kyverno, admission)"
+for c in $CLUSTERS; do
+  check "$c: 6 politika hazır ve $POLICY_ACTION modunda" "6/6" \
+    "$(kubectl --context "$(ctx "$c")" get validatingpolicies,imagevalidatingpolicies -o json 2>/dev/null \
+       | grep -cE '"ready": true' || true)/$(kubectl --context "$(ctx "$c")" get validatingpolicies,imagevalidatingpolicies \
+       -o jsonpath='{range .items[*]}{.spec.validationActions[0]}{"\n"}{end}' 2>/dev/null | grep -c "$POLICY_ACTION" || true)"
+done
+
+# Sunucu tarafı dry-run: admission zincirinden geçer ama pod oluşturulmaz. Çıktı: kabul -> "pod/<ad>", ret -> politika adı
+admit() {  # admit <namespace> <image> [pod spec ek alanları] [container ek alanları]
+  kubectl --context "$(ctx cluster-a)" -n "$1" run "policy-probe" --image="$2" --restart=Never --dry-run=server -o name \
+    --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":100,"seccompProfile":{"type":"RuntimeDefault"}}'"${3:-}"',"containers":[{"name":"p","image":"'"$2"'","command":["sleep","1"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}'"${4:-}"'}]}}' 2>&1 \
+    | grep -oE "^pod/policy-probe|Policy [a-z-]+ failed" | head -1 || true
+}
+C="curlimages/curl:8.11.1"
+check "latest tag'li image reddediliyor" "disallow-latest-tag" "$(admit default curlimages/curl:latest)"
+check "Tag'siz image reddediliyor" "disallow-latest-tag" "$(admit default curlimages/curl)"
+check "privileged container reddediliyor" "disallow-privileged" "$(admit default "$C" '' ',"securityContext":{"privileged":true}')"
+check "hostNetwork reddediliyor" "disallow-privileged" "$(admit default "$C" ',"hostNetwork":true')"
+check "hostPath volume reddediliyor" "disallow-host-path" "$(admit default "$C" ',"volumes":[{"name":"h","hostPath":{"path":"/etc"}}]')"
+check "İzinsiz registry reddediliyor" "restrict-image-registries" "$(admit default evil.example.com/curl:8.11.1)"
+check "Kurala uyan pod kabul ediliyor" "pod/policy-probe" "$(admit default "$C")"
+check "api-a: lab registry dışından image reddediliyor" "require-lab-registry" "$(admit api-a "$C")"
+check "api-a: bizim anahtarla imzasız image reddediliyor" "verify-image-signatures" \
+  "$(admit api-a "$LAB_REGISTRY/$LAB_UNSIGNED_IMAGE")"
+check "api-a: imzalı image kabul ediliyor" "pod/policy-probe" "$(admit api-a "$PROBE_IMAGE")"
+check "api-a pod'ları imzalı image'ın digest'iyle çalışıyor" "$LAB_REGISTRY/lab/podinfo:6.7.1@sha256:" \
+  "$(kubectl --context "$(ctx cluster-a)" -n api-a get pod -l app=api-a -o jsonpath='{.items[0].spec.containers[0].image}')"
+for c in $CLUSTERS; do
+  check "$c: istisnalı sistem bileşenleri çalışıyor (ztunnel, istio-cni, speaker)" "3" \
+    "$(kubectl --context "$(ctx "$c")" get ds -A -o jsonpath='{range .items[*]}{.metadata.name}={.status.numberReady}{"\n"}{end}' \
+       | grep -cE '^(ztunnel|istio-cni-node|speaker)=[1-9]' || true)"
+done
 
 log "Sonuç: $PASS başarılı, $FAIL başarısız"
 [[ $FAIL -eq 0 ]]

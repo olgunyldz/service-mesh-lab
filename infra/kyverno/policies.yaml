@@ -1,0 +1,199 @@
+# Kyverno politikaları (policies.kyverno.io/v1, CEL). Tüm cluster'larda aynı.
+# __ACTION__: Deny | Audit (config.env POLICY_ACTION), __COSIGN_PUB__: certs/cosign/cosign.pub (03c-install-kyverno.sh doldurur)
+#
+# Kapsam dışı namespace'ler: Kubernetes'in kendi bileşenleri ve Kyverno. Istio ve MetalLB'nin node ajanları
+# kapsam dışı değil; yalnızca gerekli kurallar için tek tek istisna tanımlanır (exceptions.yaml).
+# Pod'u oluşturan Deployment/DaemonSet/StatefulSet/Job'lar da otomatik denetlenir (Kyverno autogen).
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/description: Image'lar sabit bir sürüm tag'i (veya digest) ile verilmeli; latest ya da tag'siz yasak.
+spec:
+  validationActions: [__ACTION__]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kube-public, kube-node-lease, local-path-storage, kyverno]
+  variables:
+    - name: containers
+      expression: >-
+        object.spec.containers + object.spec.?initContainers.orValue([]) + object.spec.?ephemeralContainers.orValue([])
+  validations:
+    - expression: >-
+        variables.containers.all(c, c.image.contains('@') ||
+          (c.image.substring(c.image.lastIndexOf('/') + 1).contains(':') && !c.image.endsWith(':latest')))
+      messageExpression: >-
+        'latest ya da tag\'siz image yasak: ' + variables.containers.filter(c, !c.image.contains('@') &&
+          (!c.image.substring(c.image.lastIndexOf('/') + 1).contains(':') || c.image.endsWith(':latest'))).map(c, c.image).join(', ')
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: disallow-privileged
+  annotations:
+    policies.kyverno.io/description: Privileged container, yetki yükseltme ve host namespace'leri (PID/IPC/network) yasak.
+spec:
+  validationActions: [__ACTION__]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kube-public, kube-node-lease, local-path-storage, kyverno]
+  variables:
+    - name: containers
+      expression: >-
+        object.spec.containers + object.spec.?initContainers.orValue([]) + object.spec.?ephemeralContainers.orValue([])
+  validations:
+    - expression: "variables.containers.all(c, !c.?securityContext.?privileged.orValue(false))"
+      message: privileged container yasak
+    - expression: "variables.containers.all(c, !c.?securityContext.?allowPrivilegeEscalation.orValue(false))"
+      message: allowPrivilegeEscalation=true yasak
+    - expression: >-
+        !object.spec.?hostPID.orValue(false) && !object.spec.?hostIPC.orValue(false) && !object.spec.?hostNetwork.orValue(false)
+      message: hostPID / hostIPC / hostNetwork yasak
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: disallow-host-path
+  annotations:
+    policies.kyverno.io/description: Node dosya sistemini pod'a bağlayan hostPath volume'ları yasak.
+spec:
+  validationActions: [__ACTION__]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kube-public, kube-node-lease, local-path-storage, kyverno]
+  validations:
+    - expression: "object.spec.?volumes.orValue([]).all(v, !has(v.hostPath))"
+      messageExpression: >-
+        'hostPath volume yasak: ' + object.spec.volumes.filter(v, has(v.hostPath)).map(v, v.name).join(', ')
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: restrict-image-registries
+  annotations:
+    policies.kyverno.io/description: Image'lar yalnızca izinli registry'lerden çekilebilir (registry belirtilmemişse docker.io sayılır).
+spec:
+  validationActions: [__ACTION__]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kube-public, kube-node-lease, local-path-storage, kyverno]
+  variables:
+    - name: containers
+      expression: >-
+        object.spec.containers + object.spec.?initContainers.orValue([]) + object.spec.?ephemeralContainers.orValue([])
+    # Gerçekte yalnızca iç registry (+ onun proxy'lediği upstream'ler); lab'de önbellekli registry'ler de izinli
+    - name: allowed
+      expression: "['docker.io/', 'quay.io/', 'ghcr.io/', '__LAB_REGISTRY__/']"
+    # İlk parça '.' / ':' içeriyorsa ya da localhost ise registry adıdır; değilse docker.io varsayılır
+    - name: denied
+      expression: >-
+        variables.containers.map(c, c.image).filter(i, i.contains('/') && i.split('/')[0].matches('[.:]|^localhost$') &&
+          !variables.allowed.exists(r, i.startsWith(r)))
+  validations:
+    - expression: "size(variables.denied) == 0"
+      messageExpression: "'izinsiz registry: ' + variables.denied.join(', ')"
+---
+# İmzalı image zorunlu namespace'ler (etiket: policy.corp.mesh/image-source=lab-registry): tüm image'lar lab
+# registry'den gelmeli. İmza doğrulamasını (verify-image-signatures) atlatmak için başka registry kullanılamaz.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: require-lab-registry
+  annotations:
+    policies.kyverno.io/description: Etiketli namespace'lerde yalnızca imzalı image'ların bulunduğu lab registry kullanılabilir.
+spec:
+  validationActions: [__ACTION__]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+    namespaceSelector:
+      matchLabels:
+        policy.corp.mesh/image-source: lab-registry
+  variables:
+    - name: containers
+      expression: >-
+        object.spec.containers + object.spec.?initContainers.orValue([]) + object.spec.?ephemeralContainers.orValue([])
+  validations:
+    - expression: "variables.containers.all(c, c.image.startsWith('__LAB_REGISTRY__/'))"
+      messageExpression: >-
+        'bu namespace\'te yalnızca __LAB_REGISTRY__ kullanılabilir: ' +
+          variables.containers.filter(c, !c.image.startsWith('__LAB_REGISTRY__/')).map(c, c.image).join(', ')
+---
+# Lab registry'deki her image bizim cosign anahtarımızla imzalı olmalı. Kabul edilen image digest'e çevrilir
+# (mutateDigest): tag sonradan başka içeriğe taşınsa bile pod imzalanan içerikle çalışır.
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: verify-image-signatures
+  annotations:
+    policies.kyverno.io/description: Lab registry image'ları kurumsal cosign anahtarıyla imzalı olmalı.
+spec:
+  validationActions: [__ACTION__]
+  webhookConfiguration:
+    timeoutSeconds: 20
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kube-public, kube-node-lease, local-path-storage, kyverno]
+  matchImageReferences:
+    - glob: "__LAB_REGISTRY__/*"
+  credentials:
+    allowInsecureRegistry: true   # lab registry düz HTTP
+  attestors:
+    - name: corp
+      cosign:
+        key:
+          data: |
+__COSIGN_PUB__
+        # İmzalar Rekor'a yazılmadı (iç ortam, internete çıkış yok)
+        ctlog:
+          insecureIgnoreTlog: true
+          insecureIgnoreSCT: true
+  validations:
+    - expression: >-
+        images.containers.map(i, verifyImageSignatures(i, [attestors.corp])).all(n, n > 0)
+      message: image kurumsal anahtarla imzalı değil

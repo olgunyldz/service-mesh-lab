@@ -11,8 +11,9 @@ for c in $CLUSTERS; do
 done
 
 # kind docker ağı ilk cluster ile oluşur; önbellek container'ları bu ağa bağlanır
-log "Registry önbelleği"
+log "Registry önbelleği ve lab registry"
 start_registry_caches
+start_lab_registry
 for c in $CLUSTERS; do
   configure_node_mirrors "$c"
 done

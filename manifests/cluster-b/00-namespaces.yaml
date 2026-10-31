@@ -3,6 +3,7 @@ kind: Namespace
 metadata:
   name: api-b
   labels:
+    policy.corp.mesh/image-source: lab-registry   # yalnızca imzalı image'lar (Kyverno, 05)
     zone: internal
     istio.io/dataplane-mode: ambient   # pod trafiği ztunnel tarafından yakalanır
     istio.io/use-waypoint: waypoint    # L7 politikalar için namespace waypoint'i

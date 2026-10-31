@@ -36,6 +36,9 @@ for arg in "$@"; do
         log "Önbellek siliniyor: $name"
         docker rm -f "$name" >/dev/null 2>&1 || true
         docker volume rm "$name" >/dev/null 2>&1 || true
-      done ;;
+      done
+      log "Lab registry siliniyor"
+      docker rm -f "${LAB_REGISTRY%%:*}" >/dev/null 2>&1 || true
+      docker volume rm "${LAB_REGISTRY%%:*}" >/dev/null 2>&1 || true ;;
   esac
 done
