@@ -599,4 +599,4 @@ sequenceDiagram
 - [ ] Gözlemlenebilirlik: Kiali, Prometheus, Grafana, Jaeger
 - [ ] Waypoint üzerinde L7 politikaları (rate limit, header bazlı yetkilendirme)
 - [ ] Trafik yönetimi: canary (v1/v2), fault injection, circuit breaker
-- [ ] Ambient multicluster (east-west gateway) senaryosu
+- [ ] *(En son, opsiyonel)* Ambient multicluster (east-west gateway): cluster-a ve cluster-b'yi tek mesh'te birleştirmek, DMZ'yi izole tutmak. Mevcut tasarım bilerek multicluster değildir; her cluster bağımsız bir mesh'tir ve cluster'lar yalnızca gateway'ler üzerinden konuşur
