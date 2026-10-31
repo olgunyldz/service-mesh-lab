@@ -1,0 +1,103 @@
+# Metriklerin mgmt'e çıkışı (Prometheus remote_write). __NET_PREFIX__ scriptte doldurulur.
+#   prometheus (istio-system) --HTTP:80--> istio-egressgateway --mTLS--> mgmt ingress gw --> merkezi Prometheus
+# Prometheus mesh dışında olduğu için cluster içi kısım düz HTTP; cluster'lar arası kısım mTLS.
+
+# Prometheus'un remote_write adresi: egress gateway pod'larına giden ayrı bir servis adı
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-mgmt
+  namespace: istio-egress
+spec:
+  selector:
+    istio: egressgateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: metrics-exit
+  namespace: istio-egress
+spec:
+  selector:
+    istio: egressgateway
+  servers:
+    - port:
+        number: 80
+        name: http-metrics
+        protocol: HTTP
+      hosts:
+        - prometheus-mgmt.istio-egress.svc.cluster.local
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: mgmt-gateway
+  namespace: istio-egress
+spec:
+  hosts:
+    - mgmt.internal.mesh
+  location: MESH_EXTERNAL
+  resolution: STATIC
+  ports:
+    - number: 443
+      name: http-mtls
+      protocol: HTTP
+  endpoints:
+    - address: __NET_PREFIX__.203.10
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: mgmt-gateway
+  namespace: istio-egress
+spec:
+  host: mgmt.internal.mesh
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      sni: prometheus.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: metrics-exit
+  namespace: istio-egress
+spec:
+  hosts:
+    - prometheus-mgmt.istio-egress.svc.cluster.local
+  gateways:
+    - metrics-exit
+  http:
+    - match:
+        - uri:
+            exact: /api/v1/write
+      rewrite:
+        authority: prometheus.mgmt.internal
+      route:
+        - destination:
+            host: mgmt.internal.mesh
+            port:
+              number: 443
+---
+# Egress gateway'in 80 portuna yalnızca metrik gönderimi (düz HTTP, kimlik yok: host/yol/metot ile sınırlı)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-metrics-push
+  namespace: istio-egress
+spec:
+  selector:
+    matchLabels:
+      istio: egressgateway
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            hosts: ["prometheus-mgmt.istio-egress.svc.cluster.local"]
+            ports: ["80"]
+            methods: ["POST"]
+            paths: ["/api/v1/write"]

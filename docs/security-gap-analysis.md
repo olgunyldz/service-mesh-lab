@@ -4,7 +4,7 @@
 
 Bu doküman, bankacılık ortamı için tanımlanmış 13 katmanlı güvenlik gereksinimlerini lab ortamının **bugünkü haliyle** karşılaştırır. Her madde için üç şey belirtilir: şu anki durum, kanıt (dosya veya yapılandırma) ve lab'da nasıl karşılanacağı.
 
-Analiz tarihi: 2026-10-31 · Kapsam: `hardening` branch'i (00-setup → 03-hardening). ✅/⚠️ işaretli maddelerin yanında hangi adımda değiştiği yazar.
+Analiz tarihi: 2026-10-31 · Kapsam: `mgmt` branch'i (00-setup → 04-mgmt). ✅/⚠️ işaretli maddelerin yanında hangi adımda değiştiği yazar.
 
 ## Gösterim
 
@@ -66,7 +66,7 @@ flowchart LR
 
 | Gereksinim | Durum | Mevcut hal | Lab'da nasıl |
 |------------|-------|------------|--------------|
-| Dış firewall'da yalnızca LB VIP'e 443; yönetim portları internetten görünmesin | ⚠️ | Uygulama yalnızca edge-lb'de: 8443 (TLS) ve 8080 (yalnızca 301). **Kiali (20001-2) ve Grafana (3001-2) hâlâ host'a açık**, anonim erişimle | Yönetim UI'ları `mgmt` adımında tek noktaya toplanacak; lab istisnası |
+| Dış firewall'da yalnızca LB VIP'e 443; yönetim portları internetten görünmesin | ⚠️ `04` | Uygulama yalnızca edge-lb'de: 8443 (TLS) ve 8080 (yalnızca 301). Yönetim arayüzleri tek noktada: mgmt'te Kiali (20001) ve Grafana (3001); anonim erişim (lab istisnası) | Gerçekte yalnızca yönetim ağından, bastion üzerinden, OpenID ile |
 | WAF: OWASP CRS + API şema doğrulaması; önce detect sonra block; virtual patch | ⚠️ `02` | ModSecurity v3 + OWASP CRS 4 (paranoia 1), **engelleme modunda**; SQLi ve XSS testleri 403 | API şema doğrulaması yok (katman 4). Gerçekte önce `DetectionOnly` (`WAF_MODE`) |
 | TLS 1.2+/1.3, zayıf cipher kapalı, HSTS preload, OCSP stapling | ✅ `02` | TLS 1.2/1.3, yalnızca ECDHE + AEAD; TLS 1.1 reddediliyor (test edildi); HSTS `preload` | OCSP stapling ➖ (lab CA'sının OCSP'si yok) |
 | Dışarıdan gelen X-Forwarded-* header'larını sil, yeniden yaz | ✅ `02` | HAProxy `X-Forwarded-*`, `X-Real-IP`, `Forwarded`, `x-user-jwt` siliyor, yeniden yazıyor; Envoy `numTrustedProxies: 2` (test edildi) | – |
@@ -185,7 +185,7 @@ Keycloak `mgmt` cluster'ında planlandı (`token-exchange` adımı). Maddelerin 
 
 | Gereksinim | Durum | Mevcut hal | Lab'da nasıl |
 |------------|-------|------------|--------------|
-| Tüm katmanlardan ortak alanlarla (correlationId, zone, channel) SIEM'e log; NTP | ⚠️ | Metrikler Prometheus'ta (cluster başına). **Merkezi log yok.** Envoy `x-request-id` üretiyor ama uçtan uca taşınmıyor | mgmt'e Loki (veya OpenSearch) + Fluent Bit; access log'lara `zone`, `channel`, `x-request-id` alanları. NTP ➖ (host saati) |
+| Tüm katmanlardan ortak alanlarla (correlationId, zone, channel) SIEM'e log; NTP | ⚠️ `04` | **Metrikler merkezde** (mgmt Prometheus, `cluster` etiketiyle). Merkezi log yok. Envoy `x-request-id` üretiyor ama uçtan uca taşınmıyor | `10 · logging`: mgmt'e Loki + Fluent Bit; access log'lara `zone`, `channel`, `x-request-id`. NTP ➖ (host saati) |
 | Loglar değiştirilemez (WORM) | ➖ | – | Object lock'lu depolama gerektirir |
 | Korelasyon kuralları, SOAR playbook (IP engelleme, oturum iptali) | ❌ | Yok | Grafana alerting + basit otomasyon (ör. edge'de IP engelleme listesi). Tam SOAR ➖ |
 | Olay müdahale planı, tatbikat | ➖ | – | Organizasyonel |

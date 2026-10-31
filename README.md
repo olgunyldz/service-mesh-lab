@@ -4,9 +4,9 @@ Bu proje, kurumsal bir OpenShift yapısını yerelde **kind** ile simüle eder:
 
 - **DMZ cluster**: dış dünyaya açık tek katman. Edge load balancer ve public Istio ingress gateway burada çalışır.
 - **cluster-a** ve **cluster-b**: internal cluster'lar. API'ler burada çalışır, dışarıdan doğrudan erişilemez.
-- **mgmt** *(04. adımda gelecek)*: paylaşılan ürünler (veri, Keycloak, Vault, merkezi gözlemlenebilirlik).
+- **mgmt**: paylaşılan ürünler. Şu an merkezi gözlemlenebilirlik (tek Kiali, tek Grafana, merkezi Prometheus); ileride veri, Keycloak, Vault.
 
-> **Şu an aktif cluster'lar: `dmz` ve `cluster-a`** (her biri tek node). **cluster-b RAM kısıtı nedeniyle şimdilik kapalı** ve yol haritasının son adımında (17 · `cluster-b`) geri gelecek. Bu README'deki mimari ve akış anlatımları cluster-b dahil hedef tasarımı gösterir; cluster-b'ye bağlı kısımlar *(cluster-b kapalı)* olarak işaretlidir. Bkz. [Kaynak kısıtları](#kaynak-kısıtları).
+> **Şu an aktif cluster'lar: `dmz`, `cluster-a` ve `mgmt`** (her biri tek node). **cluster-b RAM kısıtı nedeniyle şimdilik kapalı** ve yol haritasının son adımında (17 · `cluster-b`) geri gelecek. Bu README'deki mimari ve akış anlatımları cluster-b dahil hedef tasarımı gösterir; cluster-b'ye bağlı kısımlar *(cluster-b kapalı)* olarak işaretlidir. Bkz. [Kaynak kısıtları](#kaynak-kısıtları).
 - **Istio Ambient Mesh**: sidecar yoktur. L4 mTLS'i **ztunnel**, L7 politikaları **waypoint** üstlenir. Giriş trafiği **ingress gateway**, çıkış trafiği **egress gateway** üzerinden geçer.
 
 > **Adım adım geçmiş:** Her yol haritası maddesinin ayrıntılı dokümanı (yapılanlar, değişen dosyalar, sorunlar, doğrulama) [docs/](docs/README.md) altındadır.
@@ -34,7 +34,7 @@ Giriş noktası: **https://api-a.apps.example.local:8443** (host'ta `--resolve .
 | 3 | api-a → cluster-a egress → cluster-b → api-b | ⏸️ cluster-b kapalı |
 | 4 | api-a → egress gateway → httpbin.org | ✅ |
 | – | api-a ambient mesh'te ve waypoint kullanıyor | ✅ |
-| – | Kiali ve Grafana erişimi | ✅ |
+| – | Merkezi gözlemlenebilirlik: tek Kiali ve tek Grafana (mgmt), merkezi Prometheus'ta dmz ve cluster-a metrikleri, Kiali üç cluster'ı görüyor, mgmt girişi mesh dışına kapalı | ✅ |
 
 Adım adım doğrulama sonuçları: [docs/](docs/README.md).
 
@@ -79,13 +79,16 @@ flowchart LR
     subgraph docker["Docker · kind ağı 172.18.0.0/16"]
         direction LR
         subgraph dmz["kind-dmz · pod 10.10/16 · svc 10.110/16"]
-            dmzcp["dmz-control-plane · node-role=infra<br/>20001→Kiali · 3001→Grafana"]
+            dmzcp["dmz-control-plane · node-role=infra"]
         end
         subgraph ca["kind-cluster-a · pod 10.20/16 · svc 10.120/16"]
-            cacp["cluster-a-control-plane · node-role=worker<br/>20002→Kiali · 3002→Grafana"]
+            cacp["cluster-a-control-plane · node-role=worker"]
         end
         subgraph cb["kind-cluster-b · ŞİMDİLİK KAPALI · pod 10.30/16 · svc 10.130/16"]
-            cbcp["cluster-b-control-plane · node-role=worker<br/>20003→Kiali · 3003→Grafana"]
+            cbcp["cluster-b-control-plane · node-role=worker"]
+        end
+        subgraph mg["kind-mgmt · pod 10.40/16 · svc 10.140/16"]
+            mgcp["mgmt-control-plane · node-role=infra<br/>20001→Kiali · 3001→Grafana"]
         end
         subgraph caches["registry önbelleği · kalıcı"]
             rc["cache-docker-io<br/>cache-quay-io<br/>cache-ghcr-io"]
@@ -93,17 +96,19 @@ flowchart LR
         lbd(["MetalLB VIP<br/>172.18.200.10"])
         lba(["MetalLB VIP<br/>172.18.201.10"])
         lbb(["MetalLB VIP<br/>172.18.202.10"])
+        lbm(["MetalLB VIP<br/>172.18.203.10"])
     end
 
     host -->|"port mapping 8080/8443"| elb
     lg --> elb
     elb --> ewaf
     ewaf -->|"WAF iki ağa da bağlı"| lbd
-    host -.->|"Kiali / Grafana"| dmzcp
+    host -.->|"Kiali / Grafana"| mgcp
     lbd -.- dmz
     lba -.- ca
     lbb -.- cb
-    dmz & ca & cb -.->|"image çekme"| caches
+    lbm -.- mg
+    dmz & ca & mg -.->|"image çekme"| caches
 ```
 
 Her cluster'da `istio-system` altında aynı Istio bileşenleri çalışır:
@@ -410,51 +415,50 @@ Ayrıntılı tehdit analizi: [docs/02-zones.md → STRIDE](docs/02-zones.md#stri
 
 ## Gözlemlenebilirlik (Kiali, Prometheus, Grafana)
 
-Her cluster'da kendi Prometheus, Grafana ve Kiali'si çalışır. Cluster'lar ayrı mesh'ler olduğu için her Kiali yalnızca kendi cluster'ını gösterir.
+Gözlemlenebilirlik **mgmt cluster'ında merkezi**dir (`04 · mgmt`). Her cluster'daki Prometheus metrik toplar ve kendi egress gateway'i üzerinden mgmt'e gönderir. Tek Kiali ve tek Grafana merkezi Prometheus'tan okur.
 
-| Cluster | Kiali | Grafana |
-|---------|-------|---------|
-| dmz | http://localhost:20001/kiali | http://localhost:3001 |
-| cluster-a | http://localhost:20002/kiali | http://localhost:3002 |
-| cluster-b *(kapalı)* | http://localhost:20003/kiali | http://localhost:3003 |
+| Arayüz | Adres | Not |
+|--------|-------|-----|
+| **Kiali** | http://localhost:20001/kiali | Üç cluster tek arayüzde (çoklu cluster), salt okunur (`view_only_mode`) |
+| **Grafana** | http://localhost:3001 | Istio dashboard'ları, merkezi Prometheus |
 
 ```mermaid
 flowchart LR
-    subgraph cluster["Her cluster · ns istio-system"]
-        zt["ztunnel<br/>L4 metrikler"]
-        gw["gateway'ler<br/>L7 metrikler"]
-        wp["waypoint'ler<br/>L7 metrikler"]
-        prom["Prometheus<br/>:9090"]
-        kiali["Kiali<br/>NodePort 30201"]
-        graf["Grafana<br/>NodePort 30300"]
-        zt -->|scrape :15020| prom
-        gw -->|scrape :15020| prom
-        wp -->|scrape :15020| prom
-        prom --> kiali
-        prom --> graf
+    subgraph D["dmz / cluster-a · ns istio-system"]
+        zt["ztunnel · gateway'ler · waypoint'ler"] -->|scrape :15020| p["Prometheus<br/>(2 saat yerel)"]
+        p -->|"remote_write · HTTP :80"| eg["egress gateway"]
     end
-    host["💻 localhost<br/>2000x / 300x"] -->|kind port mapping| kiali
-    host -->|kind port mapping| graf
+    subgraph M["mgmt"]
+        mgw["istio-ingressgateway<br/>AuthZ: yalnızca egress kimlikleri"]
+        cp["Prometheus (merkezi)<br/>remote-write receiver"]
+        k["Kiali<br/>NodePort 30201"]
+        g["Grafana<br/>NodePort 30300"]
+        mgw --> cp --> k & g
+    end
+    eg ==>|"mTLS :443"| mgw
+    k -.->|"Kubernetes API (salt okunur SA, mesh dışı)"| D
+    host["💻 localhost:20001 / :3001"] -->|kind port mapping| k & g
 ```
 
-- **Erişim:** Kiali ve Grafana NodePort ile açılır, kind `extraPortMappings` ile host'a bağlanır (bkz. [clusters/](clusters/)). Internal cluster'lar uygulama trafiği için host'a kapalıdır; açık olan yalnızca bu yönetim araçlarıdır.
+- **Metrik akışı:** Prometheus → egress gateway (`prometheus-mgmt.istio-egress`, düz HTTP; host/yol/metot ile sınırlı) → mTLS → mgmt girişi (yalnızca `dmz-egressgateway` / `istio-egressgateway` kimlikleri, yalnızca `POST /api/v1/write`) → merkezi Prometheus. Ayrıntılar: [docs/04-mgmt.md](docs/04-mgmt.md).
+- **Kiali çoklu cluster:** Uzak cluster'larda salt okunur `kiali` ServiceAccount'u (`kiali-viewer` ClusterRole); mgmt'te bunların kubeconfig'leri `kiali.io/multiCluster=true` etiketli secret'larda.
 - **Kimlik doğrulama:** Kiali `anonymous`, Grafana anonim admin kullanır. Bu ayar lab içindir; gerçek ortamda OpenID veya OpenShift OAuth kullanılmalıdır.
 - **Sürekli trafik:** `loadgen` container'ı ([scripts/06b-deploy-edge.sh](scripts/06b-deploy-edge.sh)) bir internet istemcisi gibi `edge-net` ağından edge-lb'ye HTTPS istekleri atar: her saniye Akış 1'i (cluster-b aktifse 2 ve 3'ü de) tetikler, her 10 turda bir de `/status/500` çağırır. Böylece grafiklerde hata oranı da görünür. Akış 4 (httpbin.org) dış servisi yormamak için loadgen'e eklenmedi; elle tetiklenir.
 
-Kiali'de görülen graph (workload görünümü, loadgen çalışırken ölçüldü; cluster-b kapalı):
+Kiali'de görülen birleşik graph (workload görünümü, loadgen çalışırken ölçüldü; cluster-b kapalı):
 
-| Cluster | Kenarlar |
-|---------|----------|
-| dmz | `dmz-ingressgateway` → `dmz-egressgateway` → `cluster-a-gateway` (~2,6 rps, ~%3 hata) |
-| cluster-a | `istio-ingressgateway` → `waypoint` → `api-a` (mTLS, ~%5 hata) · `waypoint` → `api-a` (TCP, ztunnel) |
-
-cluster-b aktifken ek olarak görülenler (`01-kiali` ilk doğrulaması): dmz'de `dmz-ingressgateway` → `cluster-b-gateway`; cluster-a'da `api-a` → `istio-egressgateway` (HTTP, mTLS) → `cluster-b-gateway`; cluster-b'de `istio-ingressgateway` → `waypoint` → `api-b`.
+| Kenar | Trafik |
+|-------|--------|
+| `dmz/dmz-ingressgateway` → `dmz/dmz-egressgateway` → `dmz/cluster-a-gateway` | Akış 1, ~1,5 rps |
+| `cluster-a/istio-ingressgateway` → `cluster-a/waypoint` → `cluster-a/api-a` | Akış 1, mTLS |
+| `dmz/dmz-egressgateway` → `dmz/mgmt-gateway` · `cluster-a/istio-egressgateway` → `cluster-a/mgmt-gateway` | Metrik gönderimi (~1 rps her biri) |
+| `mgmt/istio-ingressgateway` → `mgmt/prometheus` | Merkeze gelen metrikler (~2 rps) |
 
 Graph'ı okurken dikkat edilecekler:
-- **Cluster'lar arası hedefler ServiceEntry adıyla görünür** (`cluster-a-gateway`, `cluster-b-gateway`). Kiali bu kenarlarda mTLS kilidi göstermez, ama trafik `ISTIO_MUTUAL` ile şifrelidir.
-- **Gateway'e gelen trafiğin kaynağı görünmez.** Gateway'ler yalnızca kendi giden trafiğini raporlar. Bu yüzden edge (HAProxy, WAF) graph'ta görünmez; cluster-b'de de trafiğin bir kısmının cluster-a egress'inden geldiği ayrıca görünmez.
-- **Aynı çağrı iki katmanda görünür:** ztunnel L4 (`api-a → waypoint`, TCP bayt/sn), waypoint ise L7 (`api-a → istio-egressgateway`, HTTP istek/sn) olarak raporlar.
-- **Hata oranı** loadgen'in her 10 turda bir yaptığı `/status/500` çağrısından gelir (son hedef host'a; cluster-b kapalıyken api-a).
+- **Cluster'lar arası hedefler ServiceEntry adıyla görünür** (`cluster-a-gateway`, `mgmt-gateway`). Kiali bu kenarlarda mTLS kilidi göstermez, ama trafik `ISTIO_MUTUAL` ile şifrelidir. Karşı cluster'daki devamı (ör. cluster-a'nın ingress gateway'i) aynı graph'ta ayrı bir düğüm olarak görünür, ama iki düğüm arasında ok çizilmez: cluster'lar bağımsız mesh'ler.
+- **Gateway'e gelen trafiğin kaynağı görünmez.** Gateway'ler yalnızca kendi giden trafiğini raporlar. Bu yüzden edge (HAProxy, WAF) ve Prometheus graph'ta kaynak olarak görünmez.
+- **Aynı çağrı iki katmanda görünür:** ztunnel L4 (TCP bayt/sn), waypoint ise L7 (HTTP istek/sn) olarak raporlar.
+- **Hata oranı** loadgen'in her 10 turda bir yaptığı `/status/500` çağrısından gelir.
 
 ---
 
@@ -475,8 +479,10 @@ Graph'ı okurken dikkat edilecekler:
 | istio-egressgateway | a, b | istio-egress | helm `istio/gateway` |
 | waypoint | a, b | api-a / api-b | Gateway API (`istio-waypoint`) |
 | api-a / api-b (podinfo) | a / b | api-a / api-b | `manifests/cluster-*` |
-| Prometheus, Grafana | hepsi | istio-system | Istio `samples/addons` |
-| Kiali | hepsi | istio-system | helm `kiali/kiali-server` |
+| Prometheus | hepsi (mgmt'te merkezi, diğerlerinde `remote_write` ile ileten) | istio-system | Istio `samples/addons` (script'te uyarlanır) |
+| Grafana | mgmt | istio-system | Istio `samples/addons` |
+| Kiali | mgmt (uzak cluster'larda yalnızca salt okunur SA) | istio-system | helm `kiali/kiali-server` |
+| mgmt ingress / egress gateway | mgmt | istio-ingress / istio-egress | helm `istio/gateway` |
 
 ## Dizin yapısı
 
@@ -484,9 +490,10 @@ Graph'ı okurken dikkat edilecekler:
 service-mesh/
 ├── config.env                  # versiyonlar, mesh id, trust domain, IP planı
 ├── clusters/                   # kind cluster tanımları
-│   ├── dmz.yaml                #   host'a yalnızca Kiali/Grafana portları
+│   ├── dmz.yaml                #   host'a hiç port açmaz
 │   ├── cluster-a.yaml
-│   └── cluster-b.yaml
+│   ├── cluster-b.yaml
+│   └── mgmt.yaml               #   host'a Kiali (20001) ve Grafana (3001)
 ├── edge/
 │   ├── haproxy.cfg             # edge LB: TLS, HSTS, limitler, header ve hata gövdesi temizliği
 │   └── waf-proxy-backend-ssl.conf.template  # WAF -> DMZ karşılıklı TLS
@@ -502,6 +509,7 @@ service-mesh/
 │   │   ├── 20-public-gateway.yaml      # Gateway + VirtualService → dmz-egressgateway
 │   │   ├── 30-internal-clusters.yaml   # egress: zone-exit Gateway, AuthZ, cluster-a ServiceEntry/DR/VS
 │   │   ├── 40-security.yaml            # PeerAuthentication STRICT
+│   │   ├── 60-metrics-exit.yaml        # Prometheus -> dmz-egressgateway -> mgmt (remote_write)
 │   │   └── cluster-b/                  # yalnızca cluster-b aktifken: api-b rotası ve çıkışı
 │   ├── cluster-a/
 │   │   ├── 00-namespaces.yaml          # ambient + waypoint etiketleri
@@ -510,8 +518,13 @@ service-mesh/
 │   │   ├── 30-internal-gateway.yaml    # ISTIO_MUTUAL gateway + AuthZ
 │   │   ├── 40-security.yaml            # STRICT mTLS, allow-nothing, L4/L7 AuthZ, egress gw AuthZ
 │   │   ├── 50-egress.yaml              # ServiceEntry → waypoint → egress gw → httpbin.org
+│   │   ├── 60-metrics-exit.yaml        # Prometheus -> istio-egressgateway -> mgmt (remote_write)
 │   │   └── cluster-b/                  # yalnızca cluster-b aktifken: api-a backend, api-b'ye egress
-│   └── cluster-b/                      # cluster-b'nin kendisi (şimdilik kapalı): api-b, httpbin egress
+│   ├── cluster-b/                      # cluster-b'nin kendisi (şimdilik kapalı): api-b, httpbin egress
+│   └── mgmt/
+│       ├── 00-namespaces.yaml          # istio-ingress, istio-egress (restricted)
+│       ├── 10-metrics-entry.yaml       # mgmt girişi: Gateway + VS + AuthZ (yalnızca egress kimlikleri)
+│       └── 40-security.yaml            # STRICT mTLS, mgmt egress varsayılan reddi
 ├── scripts/
 │   ├── setup.sh                # hepsini sırayla çalıştırır
 │   ├── lib.sh                  # ortak yardımcılar (__NET_PREFIX__ doldurma vb.)
@@ -523,8 +536,8 @@ service-mesh/
 │   ├── 05-install-gateways.sh  # ingress / egress gateway'ler
 │   ├── 06-deploy-manifests.sh
 │   ├── 06b-deploy-edge.sh      # edge-net, edge-waf, edge-lb, loadgen (Docker)
-│   ├── 07-install-observability.sh  # Prometheus, Grafana, Kiali
-│   ├── 08-verify.sh            # uçtan uca testler + Kiali/Grafana erişimi
+│   ├── 07-install-observability.sh  # merkezi Prometheus + remote_write, tek Grafana, tek Kiali (çoklu cluster)
+│   ├── 08-verify.sh            # uçtan uca testler (✔/✘ özeti)
 │   └── 99-destroy.sh           # --certs, --cache
 ├── tests/
 │   └── zone-direct-path.yaml   # "tek kapı" negatif testi için geçici rota
@@ -545,6 +558,7 @@ kind docker ağı genelde `172.18.0.0/16` olur. Scriptler bunu otomatik tespit e
 | dmz | 10.10.0.0/16 | 10.110.0.0/16 | 172.18.200.10-50 | 172.18.200.10 |
 | cluster-a | 10.20.0.0/16 | 10.120.0.0/16 | 172.18.201.10-50 | 172.18.201.10 |
 | cluster-b *(kapalı, ayrılmış)* | 10.30.0.0/16 | 10.130.0.0/16 | 172.18.202.10-50 | 172.18.202.10 |
+| mgmt | 10.40.0.0/16 | 10.140.0.0/16 | 172.18.203.10-50 | 172.18.203.10 |
 
 > Windows/Docker Desktop'ta MetalLB IP'lerine host'tan erişilemez. Bu IP'ler yalnızca cluster'lar arasında (aynı docker ağında) kullanılır. Host'tan giriş noktası `localhost:8080` adresidir.
 
@@ -573,11 +587,11 @@ Lab, 15,7 GB fiziksel RAM'li ve 16 çekirdekli bir makinede geliştiriliyor. WSL
 | Etki | cluster-b'nin kube-apiserver'ı çöküp yeniden başladı; Kiali/Grafana 5-10 sn'de yanıt verdi |
 
 Bu yüzden:
-- **cluster-b şimdilik kapalı.** Aktif cluster'lar `dmz` ve `cluster-a`; `mgmt` 04. adımda eklenecek. cluster-b, yol haritasının son adımında (17) geri gelecek. cluster-b'ye bağlı tanımlar `manifests/*/cluster-b/` klasörlerinde duruyor ve `CLUSTERS` listesinde cluster-b varsa otomatik uygulanıyor.
+- **cluster-b şimdilik kapalı.** Aktif cluster'lar `dmz`, `cluster-a` ve `mgmt`. cluster-b, yol haritasının son adımında (17) geri gelecek. cluster-b'ye bağlı tanımlar `manifests/*/cluster-b/` klasörlerinde duruyor ve `CLUSTERS` listesinde cluster-b varsa otomatik uygulanıyor.
 - **Her cluster şimdilik tek node.** Her node kendi kubelet, containerd, ztunnel, istio-cni ve kindnet'ini çalıştırdığı için node başına birkaç yüz MB tasarruf olur. kind, worker yoksa control-plane taint'ini kaldırır; tüm pod'lar o node'da çalışır. Zone ayrımı aynen korunur.
 - **2 node'a çıkış** kaynak yeterli olduğunda yapılacak: her cluster dosyasına `- role: worker` eklenir.
 - **Docker Desktop'ın kendi Kubernetes'i kapatılmalı** (Settings → Kubernetes); kapatıldı. Lab bunu kullanmaz, ama bellek ve CPU tüketir.
-- `mgmt` adımında cluster başına Kiali/Grafana tek kopyaya indirilecek.
+- `mgmt` adımında cluster başına Kiali/Grafana tek kopyaya indirildi; ancak mgmt cluster'ı eklendiği için kullanılabilir bellek ~6,7 GB'tan ~5,2 GB'a indi (`04-mgmt` ölçümü).
 - Ek tasarruf gerekirse: loadgen yalnızca izlerken açık tutulur (`kubectl --context kind-dmz -n loadgen scale deploy/loadgen --replicas=0`), uygulama kopyaları 1'e indirilir.
 
 ## Kurulum
@@ -616,7 +630,7 @@ Tarayıcıdan denemek için `certs/edge/ca.pem`'i güvenilir kök sertifika olar
 Faydalı komutlar:
 
 ```bash
-kubectl config get-contexts                                   # kind-dmz, kind-cluster-a (cluster-b kapalı)
+kubectl config get-contexts                                   # kind-dmz, kind-cluster-a, kind-mgmt (cluster-b kapalı)
 istioctl --context kind-cluster-a ztunnel-config workloads     # ambient'e alınmış pod'lar
 istioctl --context kind-cluster-a waypoint list -n api-a
 kubectl --context kind-dmz -n istio-ingress logs deploy/dmz-ingressgateway -f
@@ -771,7 +785,7 @@ sequenceDiagram
 
 ## Hedef katman modeli (planlanan)
 
-> **Kısmen uygulandı.** `02 · zones` ile dış DMZ (edge Kubernetes dışında, WAF, TLS), DMZ egress gateway ve "internal yalnızca DMZ egress'ten" kuralı hayata geçti. Kanal gateway'leri (`dmz-channels`), mgmt ve veri (`data`) sonraki adımlarda.
+> **Kısmen uygulandı.** `02 · zones` ile dış DMZ (edge Kubernetes dışında, WAF, TLS), DMZ egress gateway ve "internal yalnızca DMZ egress'ten" kuralı; `04 · mgmt` ile management zone'u ve merkezi gözlemlenebilirlik hayata geçti. Kanal gateway'leri (`dmz-channels`) ve veri (`data`) sonraki adımlarda.
 
 | Katman | İnternet paketini doğrudan alır mı? | İçinde ne var |
 |--------|-------------------------------------|---------------|
@@ -834,7 +848,7 @@ Her adım ayrı bir branch'te yapılır; her branch bir önceki biten branch'ten
 | 01 | `kiali` | Gözlemlenebilirlik: cluster başına Kiali, Prometheus, Grafana + loadgen; registry önbelleği | ✅ |
 | 02 | `zones` | Edge'i Kubernetes dışına almak (HAProxy + ModSecurity/OWASP CRS WAF, ayrı Docker container'ları); TLS 1.2+/1.3 ve HSTS; X-Forwarded-* temizliği, istek/bağlantı limitleri; DMZ egress gateway; internal AuthZ'nin `dmz-egressgateway` + karşı internal egress ile sınırlanması | ✅ |
 | 03 | `hardening` | `readOnlyRootFilesystem`; namespace başına `allow-nothing` AuthorizationPolicy; default-deny NetworkPolicy; gateway namespace'lerine `restricted`; DMZ'de STRICT mTLS; `REGISTRY_ONLY`; `server` header gizleme ve tek tip hata yanıtları | ✅ |
-| 04 | `mgmt` | mgmt cluster'ı; merkezi Prometheus (`remote_write`, gateway üzerinden), tek Kiali, tek Grafana; cluster başına Kiali/Grafana kaldırılır | ⏳ |
+| 04 | `mgmt` | mgmt cluster'ı; merkezi Prometheus (`remote_write`, gateway üzerinden), tek Kiali, tek Grafana; cluster başına Kiali/Grafana kaldırılır | ✅ |
 | 05 | `policy` | Kyverno: `latest` tag, privileged pod, hostPath reddi; cosign ile imzalı image zorunluluğu | ⏳ |
 | 06 | `dmz-channels` | Mobile GW ve Partner GW (ayrı Istio gateway'ler), Web BFF; ingress host bazlı yönlendirme, internal'a egress üzerinden; kanal bazlı rate limit, CORS, güvenlik header'ları | ⏳ |
 | 07 | `data` | mgmt'te PostgreSQL ve Redis; internal servislerden mgmt gateway üzerinden mTLS (TCP) erişim; servis başına DB kullanıcısı | ⏳ |

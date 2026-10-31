@@ -1,0 +1,62 @@
+# mgmt girişi: diğer cluster'ların egress gateway'lerinden gelen metrikler (Prometheus remote_write).
+#   <cluster> egress gw --mTLS (ISTIO_MUTUAL)--> mgmt istio-ingressgateway --> prometheus:9090
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: mgmt-entry
+  namespace: istio-ingress
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 443
+        name: https-mtls
+        protocol: HTTPS
+      tls:
+        mode: ISTIO_MUTUAL
+      hosts:
+        - prometheus.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: prometheus-remote-write
+  namespace: istio-ingress
+spec:
+  hosts:
+    - prometheus.mgmt.internal
+  gateways:
+    - mgmt-entry
+  http:
+    - match:
+        - uri:
+            exact: /api/v1/write
+      route:
+        - destination:
+            host: prometheus.istio-system.svc.cluster.local
+            port:
+              number: 9090
+---
+# Yalnızca egress gateway kimlikleri, yalnızca POST /api/v1/write (sorgu, silme vb. yok)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-metrics-from-egress
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-egress/sa/dmz-egressgateway
+              - corp.mesh/ns/istio-egress/sa/istio-egressgateway
+      to:
+        - operation:
+            hosts: ["prometheus.mgmt.internal"]
+            methods: ["POST"]
+            paths: ["/api/v1/write"]
