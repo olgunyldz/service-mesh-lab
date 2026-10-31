@@ -1,0 +1,16 @@
+# kiali/kiali-server chart. Grafana external_url scriptte cluster'a göre verilir.
+auth:
+  strategy: anonymous   # lab ortamı; gerçek ortamda openid / openshift
+deployment:
+  service_type: NodePort
+server:
+  node_port: 30201      # kind extraPortMappings -> host 20001/20002/20003
+  web_root: /kiali
+external_services:
+  prometheus:
+    url: http://prometheus.istio-system:9090
+  grafana:
+    enabled: true
+    internal_url: http://grafana.istio-system:3000
+  tracing:
+    enabled: false

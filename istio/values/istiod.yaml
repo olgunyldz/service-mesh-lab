@@ -2,6 +2,10 @@
 profile: ambient
 global:
   nativeNftables: true   # bkz. cni.yaml
+  # Varsayılan registry.istio.io, registry:2 önbelleğiyle uyumsuz (Content-Length göndermiyor).
+  # Aynı image'lar docker.io/istio'da da var; cache-docker-io üzerinden gelir.
+  # Gateway ve waypoint'lerin proxy image'ı da buradan (injection) gelir.
+  hub: docker.io/istio
 meshConfig:
   accessLogFile: /dev/stdout
   defaultConfig:

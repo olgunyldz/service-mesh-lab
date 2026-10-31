@@ -1,7 +1,13 @@
-# Internal cluster A: dışarıya port açmaz, sadece DMZ'den erişilir.
+# Internal cluster A: uygulama trafiği için dışarıya port açmaz, sadece DMZ'den erişilir.
+# Host'a yalnızca yönetim araçları (Kiali / Grafana) açılır.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: cluster-a
+# Registry mirror tanımlarını /etc/containerd/certs.d altından oku (bkz. scripts/lib.sh configure_node_mirrors)
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
 networking:
   podSubnet: 10.20.0.0/16
   serviceSubnet: 10.120.0.0/16
@@ -9,6 +15,13 @@ nodes:
   - role: control-plane
     labels:
       zone: internal
+    extraPortMappings:
+      - containerPort: 30201
+        hostPort: 20002
+        protocol: TCP
+      - containerPort: 30300
+        hostPort: 3002
+        protocol: TCP
   - role: worker
     labels:
       zone: internal

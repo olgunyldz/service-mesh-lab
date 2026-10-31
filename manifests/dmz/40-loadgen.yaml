@@ -1,0 +1,56 @@
+# Kiali grafiklerinin canlı görünmesi için sürekli trafik üretir.
+# edge-lb'ye DMZ içinden istek atar: Akış 1, Akış 2, Akış 3 ve ara sıra hata (500).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: loadgen
+  labels:
+    zone: dmz
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadgen
+  namespace: loadgen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loadgen
+  template:
+    metadata:
+      labels:
+        app: loadgen
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100   # imajdaki "curl_user"
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: curl
+          image: curlimages/curl:8.11.1
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              LB=http://edge-lb.edge-lb.svc.cluster.local
+              i=0
+              while true; do
+                i=$((i+1))
+                curl -s -o /dev/null -H "Host: api-a.apps.example.local" $LB/
+                curl -s -o /dev/null -H "Host: api-b.apps.example.local" $LB/
+                curl -s -o /dev/null -X POST -d ping -H "Host: api-a.apps.example.local" $LB/api/echo
+                if [ $((i % 10)) -eq 0 ]; then
+                  curl -s -o /dev/null -H "Host: api-b.apps.example.local" $LB/status/500
+                fi
+                sleep 1
+              done
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi

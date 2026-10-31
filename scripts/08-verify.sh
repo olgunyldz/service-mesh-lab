@@ -19,3 +19,11 @@ kubectl --context "$(ctx cluster-a)" -n api-a exec deploy/api-a -- \
 
 log "5) Mesh durumu (ztunnel workload listesi, cluster-a)"
 istioctl --context "$(ctx cluster-a)" ztunnel-config workloads | grep -E "api-a|NAMESPACE" || true
+
+log "6) Gözlemlenebilirlik (Kiali / Grafana)"
+for c in $CLUSTERS; do
+  k=$(http_code "http://localhost:$(kiali_port "$c")/kiali/api/status")
+  g=$(http_code "http://localhost:$(grafana_port "$c")/api/health")
+  printf '  %-10s Kiali http://localhost:%s/kiali -> %s   Grafana http://localhost:%s -> %s\n' \
+    "$c" "$(kiali_port "$c")" "$k" "$(grafana_port "$c")" "$g"
+done
