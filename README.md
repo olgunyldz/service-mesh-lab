@@ -18,14 +18,17 @@ Ortam kuruldu ve aşağıdaki akışların hepsi uçtan uca doğrulandı (`scrip
 | 2 | İnternet → DMZ → cluster-b → api-b | ✅ |
 | 3 | api-a → cluster-a egress → cluster-b → api-b (cluster'lar arası) | ✅ |
 | 4 | api-a → egress gateway → httpbin.org (internete çıkış) | ✅ |
-| – | Mesh dışından internal gateway'e doğrudan erişim | ✅ reddediliyor (istemci sertifikası yok) |
+| – | Mesh dışından internal gateway'e doğrudan erişim | ✅ reddediliyor (istemci sertifikası yok; `00-setup` adımında test edildi) |
+| – | Kiali (20001-20003) ve Grafana (3001-3003) erişimi, Kiali graph'larının dolu gelmesi | ✅ (bkz. [Gözlemlenebilirlik](#gözlemlenebilirlik-kiali-prometheus-grafana)) |
+
+Son doğrulama: `01-kiali` adımının sıfırdan kurulumu ([docs/01-kiali.md](docs/01-kiali.md#doğrulama)).
 
 Kullanılan sürümler:
 
 | Bileşen | Sürüm | Not |
 |---------|-------|-----|
 | kind / Kubernetes | 0.33.0 / v1.36.4 | Her cluster 1 control-plane + 1 worker |
-| Istio (kontrol düzlemi) | 1.30.7 | 1.31 GA chart'ları helm reposunda yok |
+| Istio (kontrol düzlemi) | 1.30.7 | 1.31 GA chart'ları helm reposunda yok. Image'lar `docker.io/istio`'dan (registry önbelleği uyumu) |
 | istioctl | 1.31.3 | n-1 kontrol düzlemi desteği |
 | Istio dataplane modu | ambient + **native nftables** | WSL2 kernel'inde iptables CONNMARK yok |
 | Gateway API CRD | v1.6.0 | |
@@ -34,6 +37,7 @@ Kullanılan sürümler:
 | Uygulama | podinfo 6.7.1 | |
 | Kiali | 2.26.0 | Istio 1.30 addon'undaki sürüm |
 | Prometheus / Grafana | Istio 1.30 `samples/addons` | |
+| Registry önbelleği | `registry:2.8.3` | docker.io, quay.io, ghcr.io için pull-through cache (bkz. [Registry önbelleği](#registry-önbelleği)) |
 
 ---
 
@@ -453,7 +457,12 @@ service-mesh/
 │   ├── 06-deploy-manifests.sh
 │   ├── 07-install-observability.sh  # Prometheus, Grafana, Kiali
 │   ├── 08-verify.sh            # uçtan uca testler + Kiali/Grafana erişimi
-│   └── 99-destroy.sh
+│   └── 99-destroy.sh           # --certs, --cache
+├── docs/
+│   ├── README.md               # adımların listesi
+│   ├── 00-setup.md             # her adımın dokümanı: yapılanlar, değişen dosyalar,
+│   ├── 01-kiali.md             #   sorunlar, doğrulama
+│   └── security-gap-analysis.md  # 13 katmanlı güvenlik boşluk analizi
 └── certs/                      # üretilen sertifikalar (gitignore)
 ```
 
