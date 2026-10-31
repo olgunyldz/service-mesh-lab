@@ -35,6 +35,7 @@ Giriş noktası: **https://api-a.apps.example.local:8443** (host'ta `--resolve .
 | 4 | api-a → egress gateway → httpbin.org | ✅ |
 | – | api-a ambient mesh'te ve waypoint kullanıyor | ✅ |
 | – | Merkezi gözlemlenebilirlik: tek Kiali ve tek Grafana (mgmt), merkezi Prometheus'ta dmz ve cluster-a metrikleri, Kiali üç cluster'ı görüyor, mgmt girişi mesh dışına kapalı | ✅ |
+| – | Politika (Kyverno, Deny): `latest`/tag'siz image, privileged, hostNetwork, hostPath ve izinsiz registry reddediliyor; api-a'da lab registry dışı ve imzasız image reddediliyor, imzalı image digest'e sabitlenerek kabul ediliyor | ✅ |
 
 Adım adım doğrulama sonuçları: [docs/](docs/README.md).
 
@@ -54,6 +55,9 @@ Kullanılan sürümler:
 | Kiali | 2.26.0 | Istio 1.30 addon'undaki sürüm |
 | Prometheus / Grafana | Istio 1.30 `samples/addons` | |
 | Registry önbelleği | `registry:2.8.3` | docker.io, quay.io, ghcr.io için pull-through cache (bkz. [Registry önbelleği](#registry-önbelleği)) |
+| Kyverno | 1.19.2 (chart 3.9.2) | Admission politikaları; CEL tabanlı `policies.kyverno.io/v1` API'si |
+| cosign | 2.5.3 | Image imzalama (container olarak çalışır, kurulum gerekmez) |
+| Lab registry | `registry:2.8.3` | `lab-registry:5000`: imzalı uygulama image'ları (kurumsal iç registry'nin karşılığı) |
 
 ---
 
@@ -91,7 +95,7 @@ flowchart LR
             mgcp["mgmt-control-plane · node-role=infra<br/>20001→Kiali · 3001→Grafana"]
         end
         subgraph caches["registry önbelleği · kalıcı"]
-            rc["cache-docker-io<br/>cache-quay-io<br/>cache-ghcr-io"]
+            rc["cache-docker-io<br/>cache-quay-io<br/>cache-ghcr-io<br/>lab-registry (imzalı image'lar)"]
         end
         lbd(["MetalLB VIP<br/>172.18.200.10"])
         lba(["MetalLB VIP<br/>172.18.201.10"])
@@ -409,6 +413,23 @@ Her workload sertifikası `spiffe://corp.mesh/ns/<namespace>/sa/<serviceaccount>
 - **Pod'ların doğrudan çıkışı açık:** `REGISTRY_ONLY` açık, ama ambient'te yalnızca waypoint ve gateway'leri etkiliyor; pod'lar ServiceEntry'si olmayan adreslere doğrudan çıkabiliyor. Bunu kapatacak egress NetworkPolicy bu lab'da uygulanamıyor (kindnet desteklemiyor, WSL2 kernel'inde `CONFIG_NFT_QUEUE` yok). Referans: [infra/network-policies/reference/](infra/network-policies/reference/).
 - **DMZ'de PeerAuthentication yok:** DMZ'de ambient workload olmadığı için henüz eklenmedi (`hardening` adımı).
 
+### Admission politikaları (Kyverno)
+
+Her cluster'da Kyverno, pod'ları Kubernetes API'ye kabul edilirken denetler. Istio'dan önce kurulur; sonraki her bileşen bu denetimden geçer. Ayrıntılar: [docs/05-policy.md](docs/05-policy.md).
+
+| Politika | Kapsam | Reddeder |
+|----------|--------|----------|
+| `disallow-latest-tag` | tüm namespace'ler* | `:latest` ya da tag'siz image |
+| `disallow-privileged` | tüm namespace'ler* | privileged, `allowPrivilegeEscalation: true`, hostPID/IPC/Network |
+| `disallow-host-path` | tüm namespace'ler* | hostPath volume |
+| `restrict-image-registries` | tüm namespace'ler* | docker.io, quay.io, ghcr.io ve lab-registry dışı |
+| `require-lab-registry` | `policy.corp.mesh/image-source=lab-registry` etiketli (api-a) | lab-registry dışı image |
+| `verify-image-signatures` | lab-registry image'ları | kurumsal cosign anahtarıyla imzasız image; kabul edileni digest'e sabitler |
+
+\* `kube-system`, `kube-public`, `kube-node-lease`, `local-path-storage` ve `kyverno` hariç. Node erişimi gereken sistem bileşenleri (ztunnel, istio-cni, MetalLB speaker) yalnızca gereken kural için istisnalı ([infra/kyverno/exceptions.yaml](infra/kyverno/exceptions.yaml)). Mod `config.env` → `POLICY_ACTION` (Deny | Audit).
+
+İmzalı image hattı: `03b-publish-images.sh` uygulama image'larını registry önbelleğinden `lab-registry:5000/lab/...` altına kopyalar ve `certs/cosign/cosign.key` ile imzalar (CI'ın lab karşılığı). Açık anahtar Kyverno politikasına gömülür.
+
 Ayrıntılı tehdit analizi: [docs/02-zones.md → STRIDE](docs/02-zones.md#stride-tehdit-modeli) ve [Güvenlik boşluk analizi](docs/security-gap-analysis.md).
 
 ---
@@ -483,6 +504,8 @@ Graph'ı okurken dikkat edilecekler:
 | Grafana | mgmt | istio-system | Istio `samples/addons` |
 | Kiali | mgmt (uzak cluster'larda yalnızca salt okunur SA) | istio-system | helm `kiali/kiali-server` |
 | mgmt ingress / egress gateway | mgmt | istio-ingress / istio-egress | helm `istio/gateway` |
+| Kyverno (admission + reports controller) | hepsi | kyverno | helm `kyverno/kyverno` + `infra/kyverno/` |
+| lab-registry | – (Docker, `kind`) | – | `scripts/lib.sh` (`start_lab_registry`) |
 
 ## Dizin yapısı
 
@@ -498,6 +521,7 @@ service-mesh/
 │   ├── haproxy.cfg             # edge LB: TLS, HSTS, limitler, header ve hata gövdesi temizliği
 │   └── waf-proxy-backend-ssl.conf.template  # WAF -> DMZ karşılıklı TLS
 ├── infra/
+│   ├── kyverno/                # helm values, politikalar, istisnalar
 │   ├── metallb/                # IP havuzu şablonu (cluster başına ayrı /24)
 │   ├── network-policies/reference/  # NetworkPolicy referansı (bu lab'da uygulanmıyor)
 │   └── observability/          # Grafana NodePort servisi
@@ -531,7 +555,9 @@ service-mesh/
 │   ├── 00-check-prereqs.sh
 │   ├── 01-create-clusters.sh   # kind + Gateway API CRD
 │   ├── 02-install-metallb.sh
-│   ├── 03-generate-certs.sh    # root CA + intermediate CA -> cacerts
+│   ├── 03-generate-certs.sh    # root CA + intermediate CA -> cacerts; cosign anahtarı
+│   ├── 03b-publish-images.sh   # image'ları lab-registry'ye kopyala + cosign ile imzala
+│   ├── 03c-install-kyverno.sh  # Kyverno + politikalar + istisnalar (Istio'dan önce)
 │   ├── 04-install-istio.sh     # base, istiod, cni, ztunnel
 │   ├── 05-install-gateways.sh  # ingress / egress gateway'ler
 │   ├── 06-deploy-manifests.sh
@@ -592,6 +618,7 @@ Bu yüzden:
 - **2 node'a çıkış** kaynak yeterli olduğunda yapılacak: her cluster dosyasına `- role: worker` eklenir.
 - **Docker Desktop'ın kendi Kubernetes'i kapatılmalı** (Settings → Kubernetes); kapatıldı. Lab bunu kullanmaz, ama bellek ve CPU tüketir.
 - `mgmt` adımında cluster başına Kiali/Grafana tek kopyaya indirildi; ancak mgmt cluster'ı eklendiği için kullanılabilir bellek ~6,7 GB'tan ~5,2 GB'a indi (`04-mgmt` ölçümü).
+- `policy` adımında Kyverno üç cluster'a kuruldu: kullanılabilir bellek ~5,2 GB'tan ~3,6 GB'a indi. Kyverno pod'ları cluster başına ~160 MB; asıl maliyet, Kyverno'nun CRD şemalarını tutan kube-apiserver (`05-policy` ölçümü).
 - Ek tasarruf gerekirse: loadgen yalnızca izlerken açık tutulur (`kubectl --context kind-dmz -n loadgen scale deploy/loadgen --replicas=0`), uygulama kopyaları 1'e indirilir.
 
 ## Kurulum
@@ -604,6 +631,8 @@ bash scripts/setup.sh
 bash scripts/01-create-clusters.sh
 bash scripts/02-install-metallb.sh
 bash scripts/03-generate-certs.sh
+bash scripts/03b-publish-images.sh
+bash scripts/03c-install-kyverno.sh   # Audit modu için: ... Audit
 bash scripts/04-install-istio.sh
 bash scripts/05-install-gateways.sh
 bash scripts/06-deploy-manifests.sh
@@ -666,7 +695,7 @@ Kurulum sırasında karşılaşılan ve repoda çözülmüş sorunlar:
 ```bash
 bash scripts/99-destroy.sh           # cluster'ları siler (registry önbelleği korunur)
 bash scripts/99-destroy.sh --certs   # sertifikaları da siler
-bash scripts/99-destroy.sh --cache   # registry önbelleğini de siler
+bash scripts/99-destroy.sh --cache   # registry önbelleğini ve lab-registry'yi de siler
 ```
 
 ### Registry önbelleği
@@ -849,7 +878,7 @@ Her adım ayrı bir branch'te yapılır; her branch bir önceki biten branch'ten
 | 02 | `zones` | Edge'i Kubernetes dışına almak (HAProxy + ModSecurity/OWASP CRS WAF, ayrı Docker container'ları); TLS 1.2+/1.3 ve HSTS; X-Forwarded-* temizliği, istek/bağlantı limitleri; DMZ egress gateway; internal AuthZ'nin `dmz-egressgateway` + karşı internal egress ile sınırlanması | ✅ |
 | 03 | `hardening` | `readOnlyRootFilesystem`; namespace başına `allow-nothing` AuthorizationPolicy; default-deny NetworkPolicy; gateway namespace'lerine `restricted`; DMZ'de STRICT mTLS; `REGISTRY_ONLY`; `server` header gizleme ve tek tip hata yanıtları | ✅ |
 | 04 | `mgmt` | mgmt cluster'ı; merkezi Prometheus (`remote_write`, gateway üzerinden), tek Kiali, tek Grafana; cluster başına Kiali/Grafana kaldırılır | ✅ |
-| 05 | `policy` | Kyverno: `latest` tag, privileged pod, hostPath reddi; cosign ile imzalı image zorunluluğu | ⏳ |
+| 05 | `policy` | Kyverno: `latest` tag, privileged pod, hostPath reddi; cosign ile imzalı image zorunluluğu | ✅ |
 | 06 | `dmz-channels` | Mobile GW ve Partner GW (ayrı Istio gateway'ler), Web BFF; ingress host bazlı yönlendirme, internal'a egress üzerinden; kanal bazlı rate limit, CORS, güvenlik header'ları | ⏳ |
 | 07 | `data` | mgmt'te PostgreSQL ve Redis; internal servislerden mgmt gateway üzerinden mTLS (TCP) erişim; servis başına DB kullanıcısı | ⏳ |
 | 08 | `token-exchange` | DMZ'de auth-service (access token → iç JWT), Keycloak mgmt'te (MFA, kısa ömürlü token, kanal client'ları); header'ları aktaran örnek mikroservis; ayrıntılar: [Planlanan: Kullanıcı kimliği yayılımı](#planlanan-kullanıcı-kimliği-yayılımı-token-exchange) | ⏳ |

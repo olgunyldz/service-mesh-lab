@@ -4,7 +4,7 @@
 
 Bu doküman, bankacılık ortamı için tanımlanmış 13 katmanlı güvenlik gereksinimlerini lab ortamının **bugünkü haliyle** karşılaştırır. Her madde için üç şey belirtilir: şu anki durum, kanıt (dosya veya yapılandırma) ve lab'da nasıl karşılanacağı.
 
-Analiz tarihi: 2026-10-31 · Kapsam: `mgmt` branch'i (00-setup → 04-mgmt). ✅/⚠️ işaretli maddelerin yanında hangi adımda değiştiği yazar.
+Analiz tarihi: 2026-10-31 · Kapsam: `policy` branch'i (00-setup → 05-policy). ✅/⚠️ işaretli maddelerin yanında hangi adımda değiştiği yazar.
 
 ## Gösterim
 
@@ -119,7 +119,7 @@ flowchart LR
 | Namespace'ler arası default-deny NetworkPolicy | ➖ `03` | Bu lab'da uygulanamıyor: kindnet NetworkPolicy uygulamıyor; kube-network-policies WSL2 kernel'inde `CONFIG_NFT_QUEUE` olmadığı için çalışmadı | Referans manifest: `infra/network-policies/reference/` (gerçek ortam için, doğrulanmadı) |
 | prod / test / dev ayrı cluster'larda | ➖ | Lab tek ortam | Gerçek ortamda ayrı cluster/hesap |
 | Kubernetes audit log → SIEM | ❌ | Kapalı | kind config'te `audit-policy` + log dosyası; merkezi log sistemine gönderim (katman 12) |
-| Admission kontrolü: imzasız image, `latest`, privileged, hostPath reddi | ❌ | Yok. Versiyonlar sabitlenmiş (latest kullanılmıyor), ama zorunlu kılan bir mekanizma yok | Kyverno: `disallow-latest-tag`, `disallow-privileged`, `disallow-host-path`, `verify-images` (cosign) |
+| Admission kontrolü: imzasız image, `latest`, privileged, hostPath reddi | ✅ `05` | Kyverno (Deny), üç cluster'da: `disallow-latest-tag`, `disallow-privileged` (privileged, yetki yükseltme, host namespace'leri), `disallow-host-path`, `restrict-image-registries`, `require-lab-registry`, `verify-image-signatures`. Sistem bileşenleri için kural bazında dar istisnalar. Tek replika, fail-closed | Gerçekte 3 replika + PDB; Kubernetes audit log'u ayrı madde |
 
 ## 7. Uygulama (Spring Boot servisleri)
 
@@ -174,7 +174,7 @@ Keycloak `mgmt` cluster'ında planlandı (`token-exchange` adımı). Maddelerin 
 
 | Gereksinim | Durum | Mevcut hal | Lab'da nasıl |
 |------------|-------|------------|--------------|
-| Minimal image (distroless / UBI-micro) + cosign imzası; cluster yalnızca imzalı image kabul etsin | ❌ | Upstream image'lar (podinfo, haproxy alpine, curl); imza doğrulaması yok | Kyverno `verifyImages` + cosign; kendi servislerimiz distroless |
+| Minimal image (distroless / UBI-micro) + cosign imzası; cluster yalnızca imzalı image kabul etsin | ⚠️ `05` | **İmza doğrulaması var:** uygulama image'ları iç registry'ye (`lab-registry`) kopyalanıp cosign ile imzalanıyor; Kyverno api-a namespace'inde yalnızca imzalı image'ı kabul edip digest'e sabitliyor. İmzalama elle (script), anahtar diskte; platform image'ları (Istio, Kiali) imzasız; kendi distroless servislerimiz yok | `15 · ci`: imzalama CI'da, anahtar Vault Transit'te (`13`); Go servisleri distroless |
 | Pipeline'da SAST, SCA, secret, image (Trivy), IaC taraması | ❌ | CI yok | GitHub Actions: Trivy (image + IaC/config), gitleaks, Semgrep |
 | SBOM üretimi ve saklanması | ❌ | Yok | Syft / Trivy ile SBOM, artifact olarak |
 | Branch koruması: zorunlu review, imzalı commit | ❌ | `main`/`setup` korumasız; commit'ler imzasız | GitHub branch protection kuralları (repo ayarı) |

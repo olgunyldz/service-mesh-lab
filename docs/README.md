@@ -20,6 +20,9 @@ gitGraph
     branch mgmt
     checkout mgmt
     commit id: "mgmt + merkezi gözlemlenebilirlik"
+    branch policy
+    checkout policy
+    commit id: "Kyverno + imzalı image"
 ```
 
 Her adım bittiğinde ortam sıfırlanır ve baştan kurulur (`99-destroy.sh` → `setup.sh` → `08-verify.sh`). Böylece o adımın elle müdahale olmadan, sıfırdan çalıştığı doğrulanır.
@@ -48,6 +51,7 @@ Ana [README](../README.md) ortamın güncel ve toplu halini anlatır. Bu klasör
 | 02 | [Zone'lar: Edge, WAF, TLS ve tek kapı](02-zones.md) | `zones` | ✅ Tamamlandı (20/20 test) |
 | 03 | [Sıkılaştırma (hardening)](03-hardening.md) | `hardening` | ✅ Tamamlandı (33/33 test) |
 | 04 | [Management cluster ve merkezi gözlemlenebilirlik](04-mgmt.md) | `mgmt` | ✅ Tamamlandı (40/40 test) |
+| 05 | [Politika (Kyverno ve imzalı image)](05-policy.md) | `policy` | ✅ Tamamlandı (57/57 test) |
 
 ## Diğer dokümanlar
 

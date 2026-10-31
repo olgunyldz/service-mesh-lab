@@ -59,6 +59,19 @@ start_registry_caches() {
   done
 }
 
+# İmzalı uygulama image'larının tutulduğu iç registry (önbellek değil, asıl kaynak)
+start_lab_registry() {
+  local name=${LAB_REGISTRY%%:*}
+  if [[ -z "$(docker ps -q --filter "name=^${name}$")" ]]; then
+    docker rm -f "$name" >/dev/null 2>&1 || true
+    docker run -d --restart=always --name "$name" --network kind \
+      -v "${name}:/var/lib/registry" "$REGISTRY_IMAGE" >/dev/null
+    echo "  başlatıldı: $name"
+  else
+    echo "  çalışıyor: $name"
+  fi
+}
+
 # Node'daki containerd'ye her registry için önbelleği mirror olarak tanıtır.
 # Önbellek erişilemezse containerd asıl registry'ye (server) düşer.
 configure_node_mirrors() {
@@ -74,6 +87,13 @@ server = "$url"
   capabilities = ["pull", "resolve"]
 EOF
     done
+    # Lab registry düz HTTP (lab istisnası); containerd'ye bunu söylemek gerekir
+    docker exec -i "$node" sh -c "mkdir -p /etc/containerd/certs.d/$LAB_REGISTRY && cat > /etc/containerd/certs.d/$LAB_REGISTRY/hosts.toml" <<EOF
+server = "http://$LAB_REGISTRY"
+
+[host."http://$LAB_REGISTRY"]
+  capabilities = ["pull", "resolve"]
+EOF
   done
 }
 

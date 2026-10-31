@@ -69,6 +69,13 @@ if [[ ! -f edge-dmz/waf-client.crt ]]; then
     -extfile edge-dmz/client-ext.cnf -out edge-dmz/waf-client.crt
 fi
 
+# Image imzalama anahtarı (cosign). Gerçekte özel anahtar KMS/HSM'de (ör. Vault Transit) durur ve yalnızca CI kullanır.
+mkdir -p cosign
+if [[ ! -f cosign/cosign.pub ]]; then
+  log "cosign anahtar çifti üretiliyor"
+  docker run --rm -v "$CERT_DIR/cosign:/keys" -w /keys -e COSIGN_PASSWORD= "$COSIGN_IMAGE" generate-key-pair
+fi
+
 for c in $CLUSTERS; do
   mkdir -p "$c"
   if [[ ! -f "$c/ca-cert.pem" ]]; then
