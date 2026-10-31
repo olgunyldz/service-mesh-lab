@@ -1,0 +1,13 @@
+# Ortak istiod değerleri (ambient). clusterName / network / meshID scriptte --set ile verilir.
+profile: ambient
+global:
+  nativeNftables: true   # bkz. cni.yaml
+meshConfig:
+  accessLogFile: /dev/stdout
+  defaultConfig:
+    holdApplicationUntilProxyStarts: true
+pilot:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi

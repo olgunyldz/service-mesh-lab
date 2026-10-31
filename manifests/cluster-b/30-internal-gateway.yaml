@@ -1,0 +1,53 @@
+# Internal ingress gateway: DMZ ingress ve cluster-a egress gateway'inden mTLS ile gelen trafiği kabul eder.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: internal-gateway
+  namespace: istio-ingress
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 443
+        name: https-mtls
+        protocol: HTTPS
+      tls:
+        mode: ISTIO_MUTUAL
+      hosts:
+        - api-b.apps.example.local
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: api-b
+  namespace: istio-ingress
+spec:
+  hosts:
+    - api-b.apps.example.local
+  gateways:
+    - internal-gateway
+  http:
+    - route:
+        - destination:
+            host: api-b.api-b.svc.cluster.local
+            port:
+              number: 80
+---
+# Not: trust domain tüm cluster'larda ortak (corp.mesh); kimlikler SA adlarıyla ayrışır.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-dmz-and-egress
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/dmz-ingressgateway
+              - corp.mesh/ns/istio-egress/sa/istio-egressgateway

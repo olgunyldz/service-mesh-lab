@@ -1,0 +1,6 @@
+# Istio CNI (ambient trafik yakalama). Gerçek OpenShift'te ek olarak: global.platform=openshift
+profile: ambient
+global:
+  # Docker Desktop WSL2 kernel'inde xt_CONNMARK modülü yok; iptables yolu pod ağını kuramıyor.
+  # Native nftables doğrudan conntrack (ct mark) kullanır.
+  nativeNftables: true

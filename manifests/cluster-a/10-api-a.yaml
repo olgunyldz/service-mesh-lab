@@ -1,0 +1,71 @@
+# api-a: podinfo. /api/echo çağrısı backend olarak api-b'ye (cluster-b) egress üzerinden gider.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api-a
+  namespace: api-a
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-a
+  namespace: api-a
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-a
+  template:
+    metadata:
+      labels:
+        app: api-a
+        version: v1
+    spec:
+      serviceAccountName: api-a
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100   # imajdaki "app" kullanıcısı
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: ghcr.io/stefanprodan/podinfo:6.7.1
+          command:
+            - ./podinfo
+            - --port=9898
+            - --level=info
+            - --backend-url=http://api-b.apps.example.local/echo
+          env:
+            - name: PODINFO_UI_MESSAGE
+              value: "api-a @ cluster-a"
+          ports:
+            - name: http
+              containerPort: 9898
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 9898
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-a
+  namespace: api-a
+  labels:
+    istio.io/ingress-use-waypoint: "true"   # ingress gateway trafiği de waypoint'ten geçsin
+spec:
+  selector:
+    app: api-a
+  ports:
+    - name: http
+      port: 80
+      targetPort: 9898

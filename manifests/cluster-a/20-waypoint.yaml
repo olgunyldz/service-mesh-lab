@@ -1,0 +1,35 @@
+# Waypoint: api-a namespace'i için L7 proxy (Gateway API, istio-waypoint class).
+# Namespace "restricted" Pod Security kullandığı için üretilen deployment'a seccomp eklenir
+# (OpenShift'te restricted-v2 SCC bunu otomatik yapar).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: waypoint-options
+  namespace: api-a
+data:
+  deployment: |
+    spec:
+      template:
+        spec:
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: waypoint
+  namespace: api-a
+  labels:
+    istio.io/waypoint-for: all   # hem service hem workload trafiği
+spec:
+  gatewayClassName: istio-waypoint
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: waypoint-options
+  listeners:
+    - name: mesh
+      port: 15008
+      protocol: HBONE

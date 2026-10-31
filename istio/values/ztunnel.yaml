@@ -1,0 +1,6 @@
+# ztunnel: her node'da DaemonSet, L4 mTLS (HBONE). clusterName / network scriptte verilir.
+profile: ambient
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
