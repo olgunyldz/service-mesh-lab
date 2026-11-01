@@ -30,11 +30,12 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
+        fsGroup: 65532   # secret dosyası (attest.pub, 0440) grup okunabilir olsun
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: auth
-          image: lab-registry:5000/lab/auth-service:0.3.0   # build + imza: 03b-publish-images.sh
+          image: lab-registry:5000/lab/auth-service:0.4.0   # build + imza: 03b-publish-images.sh
           env:
             - name: ISSUER_BASE   # token'ların issuer öneki (Keycloak KC_HOSTNAME)
               value: https://sso.apps.example.local:8443/realms/
@@ -42,9 +43,22 @@ spec:
               value: http://keycloak.auth.svc.cluster.local/realms/
             - name: INTERNAL_AUDIENCE
               value: internal-apis
+            # Mobil kanal (09c · mobile-binding): DPoP, attestation, kayıtlı cihaz
+            - name: MOBILE_ORIGIN       # DPoP htu: istemcinin gördüğü adres
+              value: https://mobile-api.apps.example.local:8443
+            - name: MIN_APP_VERSION     # GW-06
+              value: "3.0.0"
+            - name: REGISTRY_URL        # aşağıdaki seçicisiz Service (waypoint -> egress -> mgmt)
+              value: http://device-registry.auth.svc.cluster.local
+            - name: VALKEY_ADDR
+              value: valkey.auth.svc.cluster.local:6379
+            - name: ATTEST_PUBLIC_KEY
+              value: /attest/attest.pub
           envFrom:
             - secretRef:
                 name: auth-exchange-clients   # AUTH_{WEB,MOBILE,PARTNER,BRANCH}_SECRET (05b-create-data-secrets.sh)
+            - secretRef:
+                name: auth-dpop-store         # VALKEY_USER, VALKEY_PASSWORD: DPoP jti tekrar deposu (09c)
           ports:
             - name: http
               containerPort: 8080
@@ -63,6 +77,15 @@ spec:
               memory: 16Mi
             limits:
               memory: 64Mi
+          volumeMounts:
+            - name: attest
+              mountPath: /attest
+              readOnly: true
+      volumes:
+        - name: attest
+          secret:
+            secretName: attest-public   # yalnızca açık anahtar (05b-create-data-secrets.sh)
+            defaultMode: 0440
 ---
 apiVersion: v1
 kind: Service
@@ -140,6 +163,60 @@ spec:
       port: 15008
       protocol: HBONE
 ---
+# --- Çıkış: device-registry (mgmt, yalnızca sorgu) ve DPoP jti deposu (mgmt Valkey), 09c ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: device-registry
+  namespace: auth
+spec:
+  ports:
+    - name: http
+      port: 80
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: device-registry-via-egress
+  namespace: auth
+spec:
+  hosts:
+    - device-registry.auth.svc.cluster.local
+  http:
+    - rewrite:
+        authority: devices.mgmt.internal   # egress gateway ve mgmt girişi bu adla yönlendirir
+      route:
+        - destination:
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443
+      timeout: 3s
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey
+  namespace: auth
+spec:
+  ports:
+    - name: tcp-valkey
+      port: 6379
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: valkey-via-egress
+  namespace: auth
+spec:
+  hosts:
+    - valkey.auth.svc.cluster.local
+  tcp:
+    - route:
+        - destination:
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 16379
+---
 # --- Yetkilendirme ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -195,3 +272,42 @@ spec:
             paths: ["/realms/customers/protocol/openid-connect/token", "/realms/customers/protocol/openid-connect/token/introspect",
                     "/realms/partners/protocol/openid-connect/token", "/realms/partners/protocol/openid-connect/token/introspect",
                     "/realms/staff/protocol/openid-connect/token", "/realms/staff/protocol/openid-connect/token/introspect"]
+---
+# device-registry çıkışını yalnızca auth-service, yalnızca sorgu için (waypoint, L7)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: device-registry-allow-auth-service
+  namespace: auth
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: device-registry
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/auth/sa/auth-service
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/v1/devices/lookup"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: valkey-allow-auth-service
+  namespace: auth
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: valkey
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/auth/sa/auth-service

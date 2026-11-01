@@ -1,4 +1,5 @@
-# web-bff (services/web-bff): web kanalının BFF'i, internal'da (09a; dokümandaki channel-bff namespace'i). Akış:
+# Kanal BFF'leri (dokümandaki channel-bff namespace'i): web-bff (09a) ve mobile-bff (09c, dosyanın sonunda).
+# web-bff (services/web-bff): web kanalının BFF'i, internal'da. Akış:
 #   DMZ web-token-handler -> dmz-egressgateway -> internal ingress gw -> waypoint (channel-bff) -> web-bff
 #   -> waypoint (api-a / account-api) -> api-a / account-api
 # İç JWT her adımda doğrulanır: ingress gw, channel-bff waypoint'i ve domain servislerinin waypoint'leri.
@@ -157,3 +158,134 @@ spec:
       when:
         - key: request.auth.claims[channel]
           values: ["web"]
+---
+# --- mobile-bff (services/mobile-bff, 09c · mobile-binding): mobil kanalın BFF'i ---
+#   DMZ mobile-gateway (DPoP, attestation, kayıtlı cihaz) -> dmz-egressgateway -> internal ingress gw
+#   -> waypoint (channel-bff) -> mobile-bff -> api-a / account-api; cihaz kaydı -> device-registry (mgmt)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mobile-bff
+  namespace: channel-bff
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mobile-bff
+  namespace: channel-bff
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mobile-bff
+  template:
+    metadata:
+      labels:
+        app: mobile-bff
+        version: v1
+    spec:
+      serviceAccountName: mobile-bff
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bff
+          image: lab-registry:5000/lab/mobile-bff:0.1.0   # build + imza: 03b-publish-images.sh
+          env:
+            - name: API_URL
+              value: http://api-a.api-a.svc.cluster.local
+            - name: ACCOUNTS_URL
+              value: http://account-api.account-api.svc.cluster.local:8080
+            - name: REGISTRY_URL   # seçicisiz Service (56-devices-exit.yaml): waypoint -> egress -> mgmt
+              value: http://device-registry.channel-bff.svc.cluster.local
+            - name: PUBLIC_BASE    # DPoP kanıtındaki adres (istemcinin gördüğü)
+              value: https://mobile-api.apps.example.local:8443/mobile/v1
+            - name: ATTEST_PUBLIC_KEY
+              value: /attest/attest.pub
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: attest
+              mountPath: /attest
+              readOnly: true
+      volumes:
+        - name: attest
+          secret:
+            secretName: attest-public   # yalnızca açık anahtar (05b-create-data-secrets.sh)
+            defaultMode: 0440
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mobile-bff
+  namespace: channel-bff
+  labels:
+    istio.io/ingress-use-waypoint: "true"   # ingress gateway trafiği de waypoint'ten geçsin (L7 AuthZ, JWT)
+spec:
+  selector:
+    app: mobile-bff
+  ports:
+    - name: http
+      port: 8080
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: mobile-bff-allow-waypoint
+  namespace: channel-bff
+spec:
+  selector:
+    matchLabels:
+      app: mobile-bff
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/channel-bff/sa/waypoint
+---
+# L7: mobile-bff'e yalnızca internal ingress gateway, müşteri realm'inin iç JWT'siyle ve yalnızca mobil kanaldan
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: mobile-bff-allow-mobile-channel
+  namespace: channel-bff
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: mobile-bff
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*"]
+      to:
+        - operation:
+            methods: ["GET", "POST", "DELETE"]
+      when:
+        - key: request.auth.claims[channel]
+          values: ["mobile"]

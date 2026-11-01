@@ -7,14 +7,14 @@ CA="$ROOT_DIR/certs/edge/ca.pem"
 PASS=0; FAIL=0
 
 # edge üzerinden istek: edge <host-öneki> <yol> [ek curl argümanları]
-# Kanallar kimlik ister (NOAUTH=1 ile eklenmez): mobile-api'ye müşteri token'ı; www'ye token değil oturum cookie'si
-# ve CSRF header'ı (09a: web'de tarayıcı token görmez). Web'de /api/* token handler'dan internal'daki web-bff'e gider.
+# Kanallar kimlik ister (NOAUTH=1 ile eklenmez): www'ye token değil oturum cookie'si ve CSRF header'ı (09a: web'de
+# tarayıcı token görmez; /api/* token handler'dan internal'daki web-bff'e gider). Mobil kanal cihaz anahtarı, DPoP ve
+# attestation ister (09c): mobil istekler mobile() ile mobile-sim üzerinden; edge mobile-api yalnızca negatif testlerde.
 edge() {
   local host="$1.$H" path=$2 auth=(); shift 2
   if [[ -z ${NOAUTH:-} ]]; then
     case $host in
       www.*) auth=(-H "Cookie: __Host-sid=${WSID:-}" -H "X-CSRF-Token: ${WCSRF:-}") ;;
-      mobile-api.*) auth=(-H "Authorization: Bearer ${TM:-}") ;;
     esac
   fi
   # --ssl-no-revoke: Windows curl'ü (schannel) CRL/OCSP kontrolü yapar; lab CA'sının iptal listesi yok
@@ -95,6 +95,33 @@ check() {  # check <açıklama> <beklenen> <gerçek>
   fi
 }
 
+# OTP kodu tekrar kullanılamaz (Keycloak): aynı 30 sn'lik pencerede iki giriş (web step-up, mobil) çakışmasın
+otp_fresh() {
+  local w=$(( $(date +%s) / 30 ))
+  while (( w <= ${LAST_OTP_WINDOW:-0} )); do sleep 2; w=$(( $(date +%s) / 30 )); done
+  LAST_OTP_WINDOW=$w
+}
+# Mobil uygulama (09c): mobile-sim container'ı (services/mobile-sim). Cihaz anahtarı container'da üretilir; her istek
+# DPoP kanıtı ve attestation taşır. msim <ortam...> -- <komut...>: docker exec
+MSIM_IMAGE="localhost:$LAB_REGISTRY_HOST_PORT/lab/mobile-sim:$(echo "$LAB_BUILDS" | tr ' ' '\n' | sed -n 's/^mobile-sim://p')"
+msim() {
+  local envs=()
+  while [[ $# -gt 0 && $1 != -- ]]; do envs+=(-e "$1"); shift; done
+  shift
+  MSYS_NO_PATHCONV=1 docker exec "${envs[@]}" mobile-sim /mobile-sim "$@" 2>&1 || true
+}
+mobile_setup() {  # mobile_setup: container, seviye 2 giriş (OTP), cihaz kaydı
+  docker rm -f mobile-sim >/dev/null 2>&1 || true
+  docker pull -q "$MSIM_IMAGE" >/dev/null 2>&1 || true
+  MSYS_NO_PATHCONV=1 docker run -d --name mobile-sim --network "$EDGE_NETWORK" --tmpfs /state:uid=65532,gid=65532 \
+    -e USERNAME=ayse -e PASSWORD="$(pwf kc-customer-ayse)" -e OTP_SECRET="$(pwf kc-customer-ayse-otp)" \
+    -v "$ROOT_DIR/certs/edge/ca.pem:/ca.pem:ro" -v "$ROOT_DIR/certs/attest/attest.key:/attest/attest.key:ro" \
+    "$MSIM_IMAGE" daemon >/dev/null
+  otp_fresh
+  MLOGIN=$(msim -- login --acr 2)
+  MBIND=$(msim -- bind)
+}
+
 log "Kimlik sağlayıcı (Keycloak) hazır mı?"
 for i in $(seq 1 60); do
   refresh_tokens
@@ -104,6 +131,8 @@ done
 check "Kimlik: web oturumu, mobil, partner ve personel token'ı alınabiliyor" "4" \
   "$( (( ${#WSID} > 30 )) && (( ${#TM} > 100 )) && (( ${#TPA} > 100 )) && (( ${#TS} > 100 )) && echo 4 \
      || echo "web=${#WSID} mobil=${#TM} partner=${#TPA} personel=${#TS}")"
+mobile_setup
+check "Mobil: uygulama girişi (Authorization Code + PKCE, seviye 2) ve cihaz kaydı" '"device_id"' "$MLOGIN$MBIND"
 
 log "1) İnternet -> edge -> web gateway -> token handler -> DMZ egress -> cluster-a -> web-bff -> waypoint -> api-a"
 check "HTTPS ile api-a'ya ulaşılıyor (web oturumuyla)" '"message": "api-a @ cluster-a"' "$(edge www /api/)"
@@ -185,7 +214,7 @@ partner() {  # partner <sertifika adı|-> <curl argümanları>; token: PTOKEN (v
     "curl -s --max-time 10 --cacert /ca.pem $cert $auth --resolve $PARTNER_HOST:8443:\$(getent hosts edge-lb | cut -d' ' -f1) $*" \
     2>/dev/null || true
 }
-mobile() { local path=$1; shift; edge mobile-api "$path" "$@"; }
+mobile() { local path=$1; shift; msim -- call "$@" "$path"; }   # mobil uygulama (mobile-sim): DPoP + attestation
 
 check "Web: BFF dashboard (internal web-bff, api-a'nın iki ucunu birleştiriyor)" '"channel":"web"' "$(edge www /api/bff/v1/dashboard)"
 check "Web: güvenlik header'ları (CSP, X-Frame-Options)" "x-frame-options: deny" \
@@ -402,7 +431,7 @@ check "PostgreSQL ve Valkey imzalı image'larla (digest)" "2" \
 log "9) Kimlik: introspection, IdP token exchange ve iç JWT"
 refresh_tokens
 check "Oturumsuz istek reddediliyor: web /api (401)" "401" "$(NOAUTH=1 edge www /api/ -o /dev/null -w '%{http_code}')"
-check "Token'sız istek reddediliyor: mobil (401)" "401" "$(NOAUTH=1 mobile /mobile/v1/accounts -o /dev/null -w '%{http_code}')"
+check "Token'sız istek reddediliyor: mobil (401)" "401" "$(NOAUTH=1 edge mobile-api /mobile/v1/accounts -o /dev/null -w '%{http_code}')"
 check "Token'sız istek reddediliyor: partner (401)" "401" \
   "$(PTOKEN=- partner acme "-o /dev/null -w '%{http_code}' https://$PARTNER_HOST:8443/partner/v1/")"
 check "Token'sız istek reddediliyor: şube (401)" "401" \
@@ -411,7 +440,7 @@ check "Token'sız istek reddediliyor: şube (401)" "401" \
 # tutmaz -> IdP introspection: aktif değil
 tampered="$(echo "$TM" | cut -d. -f1).$(jwt_payload "$TM" | sed 's/"jti":"[^"]*"/"jti":"saldirgan"/' | base64 -w0 | tr '+/' '-_' | tr -d '=').$(echo "$TM" | cut -d. -f3)"
 check "Değiştirilmiş token (imza tutmuyor) reddediliyor (401)" "401" \
-  "$(NOAUTH=1 mobile /mobile/v1/accounts -H "Authorization: Bearer $tampered" -o /dev/null -w '%{http_code}')"
+  "$(NOAUTH=1 edge mobile-api /mobile/v1/accounts -H "Authorization: Bearer $tampered" -o /dev/null -w '%{http_code}')"
 check "Web kanalı bearer token kabul etmiyor (mobil token, cookie yok: 401)" "401" \
   "$(NOAUTH=1 edge www /api/ -H "Authorization: Bearer $TM" -o /dev/null -w '%{http_code}')"
 check "Müşteri token'ı şube kanalında reddediliyor (403)" "403" \
@@ -473,13 +502,14 @@ check "Web: logout sonrası aynı cookie geçersiz (401)" "401" "$(edge www /api
 
 # IdP'de oturum kapatılırsa (ör. "tüm cihazlardan çıkış", SOC) dış token introspection'da aktif değil olur. auth-service
 # iç JWT'yi en fazla 30 sn önbellekte tutar; iptal en geç bu sürede etkili olur.
-mresp=$(kc_full customers -d grant_type=password -d client_id=mobile-app -d username=ayse --data-urlencode "password=$(pwf kc-customer-ayse)")
-mt=$(sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p' <<<"$mresp"); mr=$(sed -n 's/.*"refresh_token":"\([^"]*\)".*/\1/p' <<<"$mresp")
-before=$(NOAUTH=1 mobile /mobile/v1/accounts -H "Authorization: Bearer $mt" -o /dev/null -w '%{http_code}')
-kc_logout customers -d client_id=mobile-app -d "refresh_token=$mr"
+# Ayrı token durumu (STATE=/state/revoke), aynı kayıtlı cihaz anahtarı: ana mobil oturum etkilenmez
+RV=(STATE=/state/revoke DEVICE_KEY=/state/device.key)
+msim "${RV[@]}" -- login >/dev/null
+before=$(msim "${RV[@]}" -- call -o /dev/null -w '%{http_code}' /mobile/v1/accounts)
+msim "${RV[@]}" -- idp-logout >/dev/null
 sleep 31
 check "IdP'de kapatılan oturumun token'ı 30 sn içinde reddediliyor (200 -> 401)" "200 -> 401" \
-  "$before -> $(NOAUTH=1 mobile /mobile/v1/accounts -H "Authorization: Bearer $mt" -o /dev/null -w '%{http_code}')"
+  "$before -> $(msim "${RV[@]}" -- call -o /dev/null -w '%{http_code}' /mobile/v1/accounts)"
 
 check "Keycloak yönetim konsolu internetten kapalı (/admin, 403)" "403" \
   "$(NOAUTH=1 edge sso /admin/ -o /dev/null -w '%{http_code}')"
@@ -516,10 +546,14 @@ check "Şube personeli tüm hesapları görüyor (4 hesap, erişim loglanıyor)"
   "$(branch device "https://$BRANCH_HOST/branch/v1/accounts" | grep -o '"id":[0-9]*' | wc -l | tr -d ' ')"
 
 # Doğrulama seviyesi ve step-up: transfer son 5 dk içinde seviye 2 (parola + OTP) ister
+# Seviye 1 oturum: ayrı token durumu, kayıtlı cihaz anahtarı (ana mobil oturum seviye 2)
+L1=(STATE=/state/level1 DEVICE_KEY=/state/device.key)
+msim "${L1[@]}" -- login >/dev/null
 check "Mobil (seviye 1) transfer: 401 insufficient_user_authentication" "insufficient_user_authentication" \
-  "$(mobile /mobile/v1/accounts/1/transfers -X POST -H 'Content-Type: application/json' -d "$TRX")"
+  "$(msim "${L1[@]}" -- call -X POST -H 'Content-Type: application/json' -d "$TRX" /mobile/v1/accounts/1/transfers)"
 wresp=$(edge www /api/accounts/1/transfers -X POST -H 'Content-Type: application/json' -d "$TRX" -D -)
 check "Web (seviye 1) transfer: 401 + step-up ipucu (RFC 9470)" 'acr_values="2"' "$wresp"
+otp_fresh
 STEPUP=1 web_login
 check "Step-up: açık IdP oturumunda yalnızca OTP soruluyor" "otp " "$(sed -n 's/^STEPUP_STEPS=//p' <<<"$WLOGIN")"
 claims2=$(jwt_payload "$(edge www /api/headers | grep -A1 '"X-User-Jwt"' | tail -1 | tr -d ' "')")
@@ -532,6 +566,43 @@ check "Şube (gişe rolü) transfer kabul (202)" "202" \
   "$(branch device "-o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '$TRX' https://$BRANCH_HOST/branch/v1/accounts/2/transfers")"
 check "account-api transferi kullanıcı ve seviyeyle logluyor" "TRANSFER kabul" \
   "$(kubectl --context "$(ctx cluster-a)" -n account-api logs deploy/account-api --tail=30 2>/dev/null)"
+
+log "11) Mobil cihaz bağlama: DPoP, attestation, kayıtlı cihaz, mobile-bff"
+otp_fresh
+msim -- login --acr 2 >/dev/null   # taze seviye 2: cihaz kaydı ve transfer son 5 dk içinde seviye 2 ister
+mcode() { msim "$@" -- call -o /dev/null -w '%{http_code}' /mobile/v1/accounts; }
+check "Kayıtlı cihaz, geçerli DPoP ve attestation (200)" "200" "$(mcode)"
+check "AC-04: çalınan token başka cihazdan (kayıtsız anahtar, 403)" "403" "$(mcode DEVICE_KEY=/state/attacker.key)"
+check "DPoP kanıtı yok (401)" "401" "$(mcode NO_DPOP=1)"
+check "Bearer şemasıyla (cihaza bağlı değil, 401)" "401" "$(mcode SCHEME=Bearer)"
+check "Aynı DPoP kanıtı ikinci kez (tekrar, 401)" "401" "$(mcode REPLAY=1)"
+check "Başka adres için üretilmiş kanıt (htu, 401)" "401" "$(mcode HTU=https://evil.example.com/mobile/v1/accounts)"
+check "Uygulama bütünlük kanıtı yok (403)" "403" "$(mcode NO_ATTEST=1)"
+check "Root'lu / bütünlüğü bozuk cihaz (403)" "403" "$(mcode INTEGRITY=FAILS_DEVICE_INTEGRITY)"
+check "Minimum sürümün altı (426 Upgrade Required)" "426" "$(mcode APP_VERSION=2.9.0)"
+check "Seviye 1 oturumla cihaz kaydı reddediliyor (step-up gerekli)" "insufficient_user_authentication" \
+  "$(msim STATE=/state/l1 DEVICE_KEY=/state/l1.key -- login >/dev/null; msim STATE=/state/l1 DEVICE_KEY=/state/l1.key -- bind)"
+check "Cihaz listesi: kayıtlı cihaz ve uygulama sürümü" '"app_version":"3.2.0"' "$(msim -- devices)"
+check "Mobil: seviye 2 (son 5 dk) ile transfer kabul (202)" "202" \
+  "$(msim -- call -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$TRX" /mobile/v1/accounts/1/transfers)"
+
+# Cihaz kaydını silme (kayıp / çalınan telefon): ikinci bir cihaz bağlanır, silinir, en geç 30 sn'de (DMZ önbelleği) reddedilir
+d2=$(msim DEVICE_KEY=/state/d2.key -- bind | sed -n 's/.*"device_id":"\([^"]*\)".*/\1/p')
+before=$(mcode DEVICE_KEY=/state/d2.key)
+msim -- unbind "$d2" >/dev/null
+sleep 31
+check "Silinen cihaz 30 sn içinde reddediliyor (200 -> 403)" "200 -> 403" "$before -> $(mcode DEVICE_KEY=/state/d2.key)"
+
+check "Mobil trafik internal'da mobile-bff'e gidiyor (DMZ rotası)" "mobile-bff.apps.example.local" \
+  "$(kubectl --context "$(ctx dmz)" -n istio-mobile get virtualservice mobile -o jsonpath='{.spec.http[0].rewrite.authority}')"
+check "Cihaz kaydı DMZ'den yapılamıyor (mgmt girişi DMZ'ye yalnızca sorgu açık)" "GET /v1/devices/lookup" \
+  "$(kubectl --context "$(ctx mgmt)" -n istio-ingress get authorizationpolicy allow-devices -o jsonpath='{.spec.rules[0].to[0].operation.methods[0]} {.spec.rules[0].to[0].operation.paths[0]}')"
+check "DPoP tekrar deposu: yalnızca dpop: önekli anahtarlar, dpop kullanıcısı okuyamıyor (ACL)" "NOPERM" \
+  "$(vk dpop valkey-dpop GET sess:x)"
+check "device-registry ve mobile-bff imzalı image'larla (digest)" "2" \
+  "$( (kubectl --context "$(ctx mgmt)" -n iam get pod -l app=device-registry -o jsonpath='{.items[0].spec.containers[0].image}'; echo; \
+       kubectl --context "$(ctx cluster-a)" -n channel-bff get pod -l app=mobile-bff -o jsonpath='{.items[0].spec.containers[0].image}') \
+     | grep -c "^$LAB_REGISTRY/lab/.*@sha256:" || true)"
 
 log "7) Politika (Kyverno, admission)"
 for c in $CLUSTERS; do

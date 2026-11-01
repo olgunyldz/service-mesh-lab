@@ -98,10 +98,16 @@ flowchart TB
     subgraph A["kind-cluster-a"]
         ig["istio-ingressgateway<br/>.201.10"]
         bff["channel-bff/web-bff"]
+        mbff["channel-bff/mobile-bff"]
+        txs["security/tx-signing<br/>AÇIK NOKTA: yok"]:::open
         api["api-a (podinfo)"]
         acc["account-api"]
         aeg["istio-egressgateway"]
         ig --> bff
+        ig --> mbff
+        mbff --> api
+        mbff --> acc
+        mbff -.->|"imza doğrulama yok"| txs
         ig --> api
         ig --> acc
         bff --> api
@@ -110,9 +116,11 @@ flowchart TB
     subgraph M["kind-mgmt"]
         mig["istio-ingressgateway<br/>.203.10"]
         kc["iam/keycloak"]
+        dr["iam/device-registry"]
         db["data/postgres · data/valkey"]
         obs["istio-system: Prometheus,<br/>Grafana, Kiali"]
         mig --> kc
+        mig --> dr
         mig --> db
     end
     user -->|"HTTPS :8443"| lb
@@ -123,9 +131,10 @@ flowchart TB
     acc ==> aeg
     aeg ==>|"mTLS"| mig
     aeg -->|"HTTP"| net(["httpbin.org"])
+    classDef open stroke:#c00,stroke-width:2px,stroke-dasharray:5 5,color:#c00
 ```
 
-Kalın oklar mTLS'tir. Cluster'lar birbirine yalnızca gateway'lerin LoadBalancer IP'leri (MetalLB) üzerinden ulaşır.
+Kalın oklar mTLS'tir. Kırmızı kesikli kutu **açık noktadır**: hedefte olan ama pilotta bilinçli olarak atlanan bileşen. Cluster'lar birbirine yalnızca gateway'lerin LoadBalancer IP'leri (MetalLB) üzerinden ulaşır.
 
 | Katman | Pilottaki bileşen | Pilottaki ad | Hedefteki karşılığı |
 |--------|-------------------|--------------|---------------------|
@@ -144,7 +153,9 @@ Kalın oklar mTLS'tir. Cluster'lar birbirine yalnızca gateway'lerin LoadBalance
 | DMZ | Global kota | `ratelimit/ratelimit` (Envoy ratelimit) | gateway ürününün kotası |
 | DMZ | Egress gateway | `istio-egress/dmz-egressgateway` | `dmz-egressgw` |
 | Internal | Ingress gateway | `istio-ingress/istio-ingressgateway` | `int-ingressgw` |
-| Internal | Kanal BFF'i | `channel-bff/web-bff` (Go) | `channel-bff` (`mobile-bff`, `web-bff`, `branch-bff`) |
+| Internal | Kanal BFF'leri | `channel-bff/web-bff`, `channel-bff/mobile-bff` (Go) | `channel-bff` (`mobile-bff`, `web-bff`, `branch-bff`) |
+| Kimlik | Cihaz kayıtları | `iam/device-registry` (Go, PostgreSQL `devices`) | `device-registry` |
+| Internal | İşlem imzası doğrulama | **Yok — açık nokta** (`09d` atlandı) | `security/tx-signing-svc` |
 | Internal | Domain servisleri | `account-api/account-api` (Go, hesaplar), `api-a/api-a` (podinfo, genel bilgi uçları) | domain namespace'leri (`hesap`, `odeme` …) |
 | Internal | Egress gateway | `istio-egress/istio-egressgateway` | `int-egressgw` |
 | Kimlik | IdP | `iam/keycloak` (realm'ler: `customers`, `partners`, `staff`) | `keycloak-a/b` (RHBK) |
@@ -180,10 +191,10 @@ Hedefteki tablolarla aynı biçimde. Ortak işler (log, metrik) tekrar yazılmad
 | # | Zone | Servis | Yapılan işlem | Hedeften fark |
 |---|------|--------|---------------|---------------|
 | 1–3 | Edge | `edge-lb`, `edge-waf` | Web ile aynı | – |
-| 4 | DMZ | `mobile-gateway` | Yalnızca `/mobile/v1/*` (önek kaldırılır); `x-channel: mobile`; 30 rps; ext_authz | DPoP, attestation, minimum sürüm yok (K-Kapsam) |
-| 5 | DMZ | `auth-service` | Introspection (lightweight dış token, `aud=auth-mobile`) + exchange → iç JWT | – |
+| 4 | DMZ | `mobile-gateway` | Yalnızca `/mobile/v1/*` (önek kaldırılır); `x-channel: mobile`; 30 rps; ext_authz | – |
+| 5 | DMZ | `auth-service` | `Authorization: DPoP`; DPoP kanıtı (cihaz anahtarı, `htm`/`htu`/`iat`/`ath`), `jti` tekrarı (Valkey); attestation (imza, bütünlük, cihaza bağ, minimum sürüm); introspection + exchange; anahtar bu kullanıcıya kayıtlı mı (device-registry) | Token'ı Keycloak değil DMZ cihaza bağlar (K-IdP: DPoP'lu token exchange edilemiyor); attestation simüle (K-Ürün) |
 | 6–7 | DMZ → Internal | `dmz-egressgateway` → `istio-ingressgateway` | Web ile aynı | – |
-| 8 | Internal | `account-api` / `api-a` waypoint + servis | **Doğrudan domain servisine**; scope, BOLA; transfer seviye 1 ile 401 | `mobile-bff` yok (K-Kapsam) |
+| 8 | Internal | `mobile-bff` → `account-api` / `api-a` | Tüm mobil trafik mobile-bff'ten; domain servisleri mobil kanalı yalnızca mobile-bff kimliğinden kabul eder; scope, BOLA; transfer seviye 2 | `device_id` iç JWT'de yok (K-IdP, kullanıcı kararı) |
 
 ### Partner — `partner-api.apps.example.local`
 
@@ -387,14 +398,14 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 
 | ID | Durum | Pilotta | Fark ve neden |
 |----|-------|---------|---------------|
-| CH-01 | 🟡 | Web'de Authorization Code + PKCE (token handler). Mobilde testler direct grant kullanır | Mobil uygulama yok; direct grant yalnızca lab test istemcisi için (K-Kapsam) |
-| CH-02 | ❌ | – | Cihaz bağlama mobil uygulama ve device-registry ister (K-Kapsam, `09c`) |
-| CH-03 | ❌ | – | CH-02'ye bağlı |
-| CH-04 | ❌ | – | Attestation servisi (Play Integrity / App Attest) yok (K-Ürün) |
+| CH-01 | ✅ | Web'de token handler, mobilde uygulama (mobile-sim) Authorization Code + PKCE ile | Direct grant yalnızca lab test istemcileri için açık |
+| CH-02 | 🟡 | Cihaz anahtar çifti, public key device-registry'de; kayıt seviye 2 (parola + OTP) ister (test) | Anahtar gerçek güvenli donanımda değil (mobile-sim); ayrı aktivasyon / SMS akışı yok |
+| CH-03 | 🟡 | Her istek cihaz anahtarıyla imzalı (DPoP) | Biyometri yok; girişte cihaz anahtarıyla challenge imzası yok (Keycloak'ta özel authenticator gerekir) |
+| CH-04 | 🟡 | Her istekte attestation (imza, uygulama kimliği, bütünlük, cihaz anahtarına bağ); kanıtsız ve bütünlüğü bozuk 403 (test) | Play Integrity / App Attest yerine lab sağlayıcısı (K-Ürün) |
 | CH-05 | ➖ | – | Uygulama tarafı |
 | CH-06 | ✅ | Tarayıcıda yalnızca `__Host-sid`; giriş boyunca yanıtlarda token yok (test) | – |
 | CH-07 | 🟡 | İkinci faktör (TOTP) seviye 2'de; seviye 1 girişte yalnızca parola | Pilotta ikinci faktör transfer için step-up'ta isteniyor, girişte değil; mobil push onayı yok |
-| CH-08 | 🟡 | Transfer seviye 2 (son 5 dk) ister; RFC 9470 step-up (test) | İşlem imzası / dinamik bağlama (seviye 3) yok (K-Kapsam) |
+| CH-08 | 🟡 | Transfer seviye 2 (son 5 dk) ister; RFC 9470 step-up (test) | **Açık nokta (atlandı):** işlem imzası / dinamik bağlama yok (seviye 3). Çalınmış oturumla ya da araya girip tutar / alıcı değiştirerek transfer engellenmiyor |
 | CH-09 | ✅ | Ayrı host, ayrı gateway, ayrı VIP; domain fronting reddi (test) | – |
 | CH-10 | 🟡 | mTLS (Partner CA) + client **secret**; token sertifikaya bağlı | `private_key_jwt` yerine client secret (K-Karar) |
 | CH-11 | 🟡 | Şube ağı → branch-fw → branch-gateway | MPLS ve AD / Kerberos SSO yok; personel direct grant ile (K-Ürün) |
@@ -426,9 +437,9 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 | GW-01 | ✅ | Edge'de TLS, DMZ'de mTLS; Host → kanal gateway'i | – |
 | GW-02 | ✅ | Gövde ≤ 1 MB, header temizliği, timeout'lar; `x-request-id` | – |
 | GW-03 | ✅ | Introspection + RFC 8693 exchange (Keycloak), lightweight dış token (test) | Opak yerine lightweight token: Keycloak gerçek opak token üretmiyor (K-IdP) |
-| GW-04 | ❌ | – | DPoP ve attestation yok (K-Kapsam, `09c`) |
+| GW-04 | ✅ | DPoP kanıtı ve attestation her istekte; geçersizse 401 / 403 (test) | Attestation simüle (K-Ürün) |
 | GW-05 | 🟡 | Kanal başına local kota (30 rps), edge'de IP başına | Cihaz ve kullanıcı bazlı kota yok |
-| GW-06 | 🟡 | `/mobile/v1/*` sürüm öneki | Minimum uygulama sürümü kontrolü yok |
+| GW-06 | ✅ | `/mobile/v1/*` sürüm öneki; minimum uygulama sürümü (426, test) | – |
 | GW-07 | ✅ | Token handler, oturum Valkey'de | Oturum deposu mgmt'te, kimlik zone'unda değil (K-Kaynak) |
 | GW-08 | ✅ | CSRF header'ı, CSP, HSTS, X-Frame-Options (test) | – |
 | GW-09 | ✅ | DMZ'de BFF yok; web-bff internal'da (test) | – |
@@ -448,11 +459,11 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 | IAM-01 | 🟡 | IdP erişilemezse iç JWT önbellekte en fazla 30 sn çalışır | Tek replika, tek DC (K-Kaynak) |
 | IAM-02 | ✅ | Kanal başına client; client başına scope (partner bazlı yetki, test) | – |
 | IAM-03 | 🟡 | Dış token 5 dk; refresh rotation (web) | Tekrar kullanımda tüm oturumun iptali ve SIEM alarmı test edilmedi |
-| IAM-04 | ❌ | – | DPoP yok (`09c`) |
+| IAM-04 | 🟡 | Mobil token, kullanıcının kayıtlı cihaz anahtarıyla DPoP kanıtı olmadan kullanılamaz (test) | Bağ token'da (`cnf`) değil DMZ'de; tek cihaza değil kullanıcının kayıtlı cihazlarına (K-IdP) |
 | IAM-05 | 🟡 | IdP üretiyor (exchange), 2 dk, `aud=internal-apis`, `sub`, `channel`, `sid`, `scope`, `partner_id`, `branch_id` | `acr` yerine `loa_map` (K-IdP); `device_id` yok; 3 issuer (Keycloak exchange realm içi, K-IdP) |
 | IAM-06 | ✅ | Idle 15 dk, absolute 8 saat; logout IdP oturumunu kapatıyor (test) | Süreler örnek |
 | IAM-07 | 🟡 | IdP'de kapatılan oturum en geç 30 sn'de reddediliyor (test) | Hedef ≤ 5 sn: oturum olaylarıyla önbellek temizliği yok |
-| IAM-08 | 🟡 | Seviye 1 (parola), seviye 2 (OTP); transfer seviye 2 | Seviye 3 yok; karar waypoint'te değil serviste (K-IdP) |
+| IAM-08 | 🟡 | Seviye 1 (parola), seviye 2 (OTP); transfer seviye 2 | Seviye 3 (işlem imzası) yok, açık nokta (`09d` atlandı); karar waypoint'te değil serviste (K-IdP) |
 | IAM-09 | 🟡 | Müşteri, partner ve personel ayrı realm'lerde | AD / Entra federasyonu yok |
 | IAM-10 | ❌ | – | `09f · consent` |
 | IAM-11 | ✅ | Brute force koruması (müşteri 5, personel 3 deneme) | SIEM'e olay yok |
@@ -468,7 +479,7 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 | INT-04 | ✅ | Internal ingress yalnızca `dmz-egressgateway` kimliği (test: DMZ ingress'ten doğrudan gidiş 403) | Şube trafiği de DMZ egress'ten geliyor (şube gateway'i DMZ'de) |
 | INT-05 | ✅ | RequestAuthentication (3 realm issuer'ı), JWT'siz istek reddi (`requestPrincipals`) | – |
 | INT-06 | 🟡 | Deny-by-default; servis kimliği + `channel` + `scope` (+ rol) | `acr` waypoint'te değil (K-IdP) |
-| INT-07 | 🟡 | `web-bff` | `mobile-bff`, `branch-bff` yok (K-Kapsam) |
+| INT-07 | 🟡 | `web-bff`, `mobile-bff` | `branch-bff` yok (`09e`) |
 | INT-08 | ✅ | STRICT mTLS; iç JWT her waypoint'te yeniden doğrulanıyor | – |
 | INT-09 | ❌ | – | Örnek transfer ucu gerçek işlem yapmıyor |
 | INT-10 / 11 | ❌ | Tek PostgreSQL | Replika, Kafka yok (K-Kaynak) |
@@ -523,7 +534,7 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 | AC-01 | İnternetten DMZ node'larına ve API'ye tarama | 🟡 DMZ'ye yalnızca WAF sertifikasıyla (sertifikasız HTTPS ve düz HTTP reddi) | ✔ |
 | AC-02 | DMZ pod'undan internete ve veri zone'una | 🟡 PostgreSQL'e yol yok; internet çıkışı NetworkPolicy olmadan kapatılamıyor | ✔ (veri) |
 | AC-03 | Dış token ile doğrudan internal ingress | ✅ mTLS ve iç JWT zorunlu; DMZ ingress'ten doğrudan gidiş 403 | ✔ |
-| AC-04 | Çalınmış mobil token başka cihazdan | ❌ DPoP yok (`09c`) | – |
+| AC-04 | Çalınmış mobil token başka cihazdan | ✅ 403 (kayıtsız anahtar) | ✔ |
 | AC-05 | Refresh token tekrar kullanımı | ❌ test edilmedi | – |
 | AC-06 | Seviye 1 oturumla transfer | ✅ 401 + step-up ipucu (hedefte 403) | ✔ |
 | AC-07 | Tarayıcıda token arama | ✅ yanıtlarda token yok, yalnızca HttpOnly cookie | ✔ |
@@ -549,6 +560,8 @@ Pilotta ortaya çıkan ve hedef dokümanı etkileyebilecek bulgular:
 | 7 | Kyverno digest'i Deployment şablonuna yazıyor; aynı etiketle yeniden build edilen image eski digest'le çalışmaya devam ediyor | Etiketler değişmez olmalı (her build yeni sürüm) |
 | 8 | Ambient'te ingress gateway, Service'te `istio.io/ingress-use-waypoint` yoksa waypoint'i atlıyor | Internal servis şablonlarında zorunlu etiket |
 | 9 | Ambient'te `REGISTRY_ONLY` pod'un doğrudan çıkışını engellemiyor | INT-16 / OUT-01 için NetworkPolicy (ya da OpenShift EgressFirewall) zorunlu |
+| 10 | Keycloak DPoP'a bağlı token'ı başka client exchange edemiyor ("Sender-constrained token exchange rejected") | IAM-04 + IAM-05 birlikte: ya IdP exchange'i bağlı token'la destekleyen bir ürün, ya bağlamanın gateway'de yapılması (pilotta bu) |
+| 11 | OWASP CRS varsayılan olarak DELETE'i ve içerik tipsiz gövdeyi engelliyor | WAF metot listesi API tasarımıyla birlikte yönetilmeli |
 
 ## Pilottan hedefe geçiş
 
@@ -562,8 +575,8 @@ Pilotta ortaya çıkan ve hedef dokümanı etkileyebilecek bulgular:
 | CI güvenlik taramaları (INT-14) | `15 · ci` |
 | GitOps (INT-01) | `16 · gitops` |
 | A/B cluster (INT, GW-16) | `17 · cluster-b` |
-| Mobil cihaz bağlama, DPoP, attestation, `mobile-bff` (CH-02..04, GW-04, GW-06, IAM-04, AC-04) | `09c · mobile-binding` |
-| Seviye 3 işlem imzası, dinamik bağlama (CH-08, IAM-08) | `09d · tx-signing` |
+| ~~Mobil cihaz bağlama, DPoP, attestation, `mobile-bff`~~ | ✅ `09c · mobile-binding` |
+| Seviye 3 işlem imzası, dinamik bağlama (CH-08, IAM-08) | **Açık nokta:** `09d · tx-signing` atlandı. Mimaride yeri belli (`tx-signing-svc`, cihaz anahtarı device-registry'de), eşik ve onay kuralları iş kararı |
 | `branch-bff`, dört göz onayı, mesai saati (CH-13) | `09e · branch-controls` |
 | Henüz yol haritasında olmayanlar | OCSP/CRL, dış çıkış zone'u, kullanıcı bazlı kota, refresh token tekrar kullanım testi, partner `private_key_jwt` + PAR (lab kararı: client secret) |
 
@@ -571,4 +584,6 @@ Pilotta ortaya çıkan ve hedef dokümanı etkileyebilecek bulgular:
 
 | Tarih | Değişiklik |
 | --- | --- |
+| Nov 1, 2026 (3) | `09d · tx-signing` atlandı: işlem imzası açık nokta olarak topolojide, isimlendirmede, CH-08 / IAM-08'de; topoloji diyagramına `mobile-bff`, `device-registry` eklendi |
+| Nov 1, 2026 (2) | `09c · mobile-binding`: CH-01..04, GW-04, GW-06, IAM-04, INT-07, AC-04 güncellendi; mobil istek yolu; bulgu 10-11 |
 | Nov 1, 2026 | İlk sürüm: pilot (`service-mesh-lab`, `09b · l7-policies` sonu) hedef dokümanla aynı yapıda; zone eşlemesi, isimlendirme, kanal istek yolları, sequence diyagramları, gereksinim bazında durum ve fark nedenleri, kabul kriterleri, pilot bulguları |

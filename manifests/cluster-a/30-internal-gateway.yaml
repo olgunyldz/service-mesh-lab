@@ -17,6 +17,7 @@ spec:
       hosts:
         - api-a.apps.example.local
         - web-bff.apps.example.local   # web kanalının BFF'i (09a): DMZ token handler -> egress -> buraya
+        - mobile-bff.apps.example.local   # mobil kanalın BFF'i (09c): DMZ mobile-gateway -> egress -> buraya
 ---
 apiVersion: networking.istio.io/v1
 kind: VirtualService
@@ -63,6 +64,25 @@ spec:
             host: web-bff.channel-bff.svc.cluster.local
             port:
               number: 8080
+---
+# Mobil kanal (09c): BFF internal'da; mobil trafik domain servislerine yalnızca mobile-bff üzerinden gider
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: mobile-bff
+  namespace: istio-ingress
+spec:
+  hosts:
+    - mobile-bff.apps.example.local
+  gateways:
+    - internal-gateway
+  http:
+    - route:
+        - destination:
+            host: mobile-bff.channel-bff.svc.cluster.local
+            port:
+              number: 8080
+      timeout: 10s
 ---
 # Zone geçişinde tek kapı: yalnızca DMZ egress gateway kimliği girebilir, ve yalnızca Keycloak'ın (realm başına issuer)
 # imzaladığı geçerli bir iç JWT ile (requestPrincipals: 45-request-authentication.yaml; 09a).

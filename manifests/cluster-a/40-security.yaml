@@ -35,8 +35,8 @@ spec:
             principals:
               - corp.mesh/ns/api-a/sa/waypoint
 ---
-# L7 (waypoint'te): api-a servisine yalnızca internal ingress gateway ve web-bff (channel-bff), GET/POST, geçerli iç JWT ile.
-# Kanal kuralı (09b): müşteri ve personel kanalları serbest; partner yalnızca info:read scope'u varsa (partner başına yetki).
+# L7 (waypoint'te): api-a'ya her kanal yalnızca kendi kapısından (web -> web-bff, mobil -> mobile-bff, şube ve partner ->
+# internal ingress), geçerli iç JWT ile. Partner yalnızca info:read scope'u varsa ve yalnızca GET (09b, 09c).
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -52,7 +52,6 @@ spec:
     - from:
         - source:
             principals:
-              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
               - corp.mesh/ns/channel-bff/sa/web-bff
             requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
                                 "https://sso.apps.example.local:8443/realms/partners/*",
@@ -62,12 +61,37 @@ spec:
             methods: ["GET", "POST"]
       when:
         - key: request.auth.claims[channel]
-          values: ["web", "mobile", "branch"]
+          values: ["web"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/channel-bff/sa/mobile-bff
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
+                                "https://sso.apps.example.local:8443/realms/partners/*",
+                                "https://sso.apps.example.local:8443/realms/staff/*"]
+      to:
+        - operation:
+            methods: ["GET", "POST"]
+      when:
+        - key: request.auth.claims[channel]
+          values: ["mobile"]
     - from:
         - source:
             principals:
               - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
-              - corp.mesh/ns/channel-bff/sa/web-bff
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
+                                "https://sso.apps.example.local:8443/realms/partners/*",
+                                "https://sso.apps.example.local:8443/realms/staff/*"]
+      to:
+        - operation:
+            methods: ["GET", "POST"]
+      when:
+        - key: request.auth.claims[channel]
+          values: ["branch"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
             requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
                                 "https://sso.apps.example.local:8443/realms/partners/*",
                                 "https://sso.apps.example.local:8443/realms/staff/*"]
@@ -81,7 +105,8 @@ spec:
           values: ["info:read"]
 ---
 # Egress gateway'e yalnızca api-a'nın waypoint'i girebilir (dışarıya çıkış tek ve bilinen bir kimlikten),
-# yalnızca 443'ten. Veri portları ayrı politikada (55-data-exit.yaml)
+# yalnızca 443'ten. Veri portları ayrı politikada (55-data-exit.yaml). channel-bff'in waypoint'i yalnızca
+# device-registry'ye (mgmt, 09c; 56-devices-exit.yaml)
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -100,3 +125,12 @@ spec:
       to:
         - operation:
             ports: ["443"]
+            notHosts: ["devices.mgmt.internal"]   # cihaz kayıtları yalnızca mobile-bff'ten
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/channel-bff/sa/waypoint
+      to:
+        - operation:
+            ports: ["443"]
+            hosts: ["devices.mgmt.internal"]

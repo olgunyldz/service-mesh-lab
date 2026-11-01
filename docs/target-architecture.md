@@ -20,9 +20,11 @@ DMZ cluster internete kapalıdır; yalnızca edge'den gelen trafiği alır. Şub
 
 ## Detaylı topoloji ve isimlendirme
 
-Her zone her DC'de ayrı bir OpenShift cluster'ıdır (A = DC1, B = DC2): `ocp-dmz`, `ocp-apps` (internal, modern mikroservisler), `ocp-core` (core banking legacy; konteynere taşınamayan kısım VM'de), `ocp-pci` (kart zone), `ocp-data` (konteyner veri servisleri; Oracle ve MSSQL VM / Exadata üzerinde) ve `ocp-mgmt` (gözlem, yönetim): toplam 12 cluster. Edge, şube gateway ve kart switch'leri appliance / VM'dir. Mesh ambient modda çalışır: sidecar yoktur, her node'daki ztunnel L4 mTLS'i, namespace başına waypoint ise L7 politikalarını (JWT claim'leri) uygular.
+Kubernetes üzerinde çalışan her zone, A (DC1) ve B (DC2) için ayrı cluster'a sahiptir. Önerilen yerleşim: `ocp-dmz`, `ocp-apps` (internal, modern mikroservisler), `ocp-core` (core banking legacy; konteynere taşınamayan kısım VM'de), `ocp-pci` (kart zone), `ocp-data` (konteyner veri servisleri; Oracle ve MSSQL VM / Exadata üzerinde), `ocp-iam` (kimlik servisleri) ve `ocp-mgmt` (platform yönetimi ve gözlem): toplam 14 cluster. Dış çıkış zone'u firewall/proxy/VPN appliance ve VM'lerden oluşur. SOC, yönetimden ayrı güvenlik sınırıdır; SIEM/SOAR ya bu sınıra ayrılmış appliance/VM'lerde ya da `ocp-mgmt` içinde ayrı namespace, kimlik ve ağ politikalarıyla çalışır; yönetim yöneticileri SIEM kayıtlarını değiştiremez. Şube gateway'leri ve kart switch'leri appliance / VM'dir. Her zone'un cluster, ağ segmenti ve DC yerleşimi aşağıdaki topoloji tablosunda belirtilir. Mesh ambient modda çalışır: sidecar yoktur, her node'daki ztunnel L4 mTLS'i, namespace başına waypoint ise L7 politikalarını (JWT claim'leri) uygular.
 
-![Ayrıntılı prod topolojisi](images/topology-prod-full.png)
+![Ayrıntılı prod topolojisi: WSS ve AI/ML dahil](images/topology-prod-full-wss-ai.png)
+
+Çizim zone'ları ve ana akışları gösterir; `ocp-iam-a/b` adları ve 14 cluster sayısı bu bölümdeki envanter tablosuna göre okunmalıdır. WSS (`stream.banka.com.tr`) bağlantısı TLS 443 üzerinden edge/WAF'tan DMZ'deki kanal kimlik doğrulama kapısına, oradan mTLS ve kısa ömürlü yetkiyle internal `realtime-gw`'ye geçer. Web'de oturum cookie'si ve Origin allowlist; mobilde kısa ömürlü, tek kullanımlık bağlantı bileti kullanılır; token URL query'sine konmaz. Internal tarafta kanal/abonelik yetkisi uygulanır. AI/ML, internal güvenlik alanındaki on-prem model serving ve kontrollü AI gateway olarak gösterilmiştir; RAG yalnızca onaylı kaynakları kullanır, kişisel veri maskelenir ve AI tek başına finansal işlemi onaylamaz. Çizimde `ocp-mgmt` altında gösterilen SIEM/SOAR, SOC'nin ayrı güvenlik sınırında işletilmesi ve yönetim yöneticilerinin logları değiştirememesi koşuluyla aynı gözlem platformunu paylaşabilir. Çizimdeki `RTO < 1 saat` ve yıllık tatbikat notları açıklayıcıdır; bağlayıcı hedefler iş birimi onayı sonrası INT-03 ve INT-13'teki değerlerdir.
 
 | Katman | Bileşen | İsim (A / B) | Namespace / yer |
 | --- | --- | --- | --- |
@@ -36,6 +38,7 @@ Her zone her DC'de ayrı bir OpenShift cluster'ıdır (A = DC1, B = DC2): `ocp-d
 | Cluster | Core banking (legacy) | `ocp-core-a` / `ocp-core-b` (+ VM) | DC1 / DC2 |
 | Cluster | Kart zone (PCI) | `ocp-pci-a` / `ocp-pci-b` | DC1 / DC2 |
 | Cluster | Veri | `ocp-data-a` / `ocp-data-b` (+ VM / Exadata) | DC1 / DC2 |
+| Cluster | Kimlik | `ocp-iam-a` / `ocp-iam-b` | DC1 / DC2; yönetim zone'undan ayrı |
 | Cluster | Yönetim ve gözlem | `ocp-mgmt-a` / `ocp-mgmt-b` | DC1 / DC2 |
 | Platform | Kubernetes control plane | 3 master + etcd (her cluster) | Ayrı master node'ları |
 | Platform | Istio control plane | `istiod` | `istio-system` |
@@ -57,8 +60,9 @@ Her zone her DC'de ayrı bir OpenShift cluster'ıdır (A = DC1, B = DC2): `ocp-d
 | Internal | Egress gateway | `int-egressgw` | `istio-egress` |
 | Şube | Şube gateway | `branch-gw-a` / `branch-gw-b` | Şube zone |
 | Kart | Switch'ler, HSM, adapter | `atm-sw`, `pos-sw`, `hsm-01/02`, `iso8583-adapter` | Kart zone (PCI) |
-| Kimlik | IdP, cihaz kaydı, rıza | `keycloak-a/b`, `device-registry`, `consent-svc` | Kimlik zone |
+| Kimlik | IdP, cihaz kaydı, rıza | `keycloak-a/b`, `device-registry`, `consent-svc` | `ocp-iam-a/b`; ayrı namespace ve servis kimlikleri |
 | Kimlik | Oturum deposu | `redis-session-a/b` | Kimlik zone |
+| Kimlik | Dış çıkış | `iam-egressgw` | `ocp-iam-a/b`; yalnızca izinli dış çıkış zone hedefleri |
 | Core | Giriş, uygulama, batch | `core-ingressgw`, `core-app`, `eod-batch` | Core banking zone (`ocp-core`) |
 | Veri | İlişkisel DB (servisler) | `pg-a` (primary) / `pg-b` (replica), Patroni / CloudNativePG | Veri zone |
 | Veri | Core DB | Oracle RAC, Data Guard | Veri zone (Exadata / VM) |
@@ -70,7 +74,7 @@ Her zone her DC'de ayrı bir OpenShift cluster'ıdır (A = DC1, B = DC2): `ocp-d
 | Dış çıkış | Firewall, proxy, kurum hatları | outbound NGFW, forward proxy / SWG, VPN, SMTP relay, SMS / push gateway | Dış çıkış zone |
 | Gözlem | Log toplama ve arama | `fluent-bit` (DaemonSet), `logstash`, `elasticsearch`, `kibana` | Her cluster + gözlem zone |
 | Gözlem | Metrik, iz, panolar | `prometheus` (cluster başına), `thanos`, `tempo`, `grafana` | Her cluster + gözlem zone |
-| Gözlem | Güvenlik izleme | `siem`, `soar`, WORM arşiv, NTP | SOC |
+| Gözlem | Güvenlik izleme | `siem`, `soar`, WORM arşiv, NTP | SOC güvenlik sınırı; ayrı appliance/VM veya `ocp-mgmt`'te ayrı namespace, kimlik ve ağ politikası |
 | Yönetim | GitOps, sırlar, erişim | `argocd`, `vault`, `bastion` | Yönetim zone |
 
 ## Kanal bazında istek yolu
@@ -148,6 +152,7 @@ Bu bölüm altı kanalın prod hedefindeki giriş (login) ve örnek servis akı�
 - **Kimlik:**
   - Dış token her zaman opaktır (phantom token).
   - DMZ'de `auth-proxy` IdP'de introspection yapar, internal JWT'yi RFC 8693 token exchange ile IdP'den alır (IAM-05).
+  - Keycloak ve `device-registry` internete açılmaz. Mobil/web istemcilerinin OIDC, cihaz kaydı ve challenge uçları yalnızca `auth.banka.com.tr` üzerinden, edge → DMZ ingress → `auth-proxy` yoluyla erişilir. `auth-proxy`, IdP'ye ve IdP de `device-registry`'ye yalnızca kimliği doğrulanmış sunucu çağrısı yapar.
   - Internal JWT: ömür ≤ 2 dk, `aud=internal`; claim'ler `sub`, `channel`, `acr`, `device_id`, `scope`, `sid` ve kanala özel olanlar.
 - **Internal tarafta doğrulama:**
   - `int-ingressgw` MUTUAL TLS'i ve internal JWT'yi (Keycloak JWKS) doğrular.
@@ -177,6 +182,7 @@ sequenceDiagram
         participant KC as keycloak<br/>realm customers
         participant DR as device-registry
         participant RS as redis-session
+        participant IEG as iam-egressgw
     end
     participant OUT as Dış çıkış zone<br/>SMS gateway
 
@@ -190,17 +196,22 @@ sequenceDiagram
     ING->>AP: host auth.banka.com.tr
     AP->>EG: IdP'ye tek çıkış (mTLS)
     EG->>KC: authorize
-    KC-->>C: Giriş ekranı (TCKN / müşteri no + parola)
-    C->>KC: Kimlik bilgileri
-    KC->>OUT: OTP SMS (kayıtlı telefon)
+    KC-->>C: Giriş ekranı (auth-proxy ve edge üzerinden)
+    C->>KC: Kimlik bilgileri (auth.banka.com.tr üzerinden)
+    KC->>IEG: OTP gönderim isteği (mTLS)
+    IEG->>OUT: İzinli SMS geçidi üzerinden OTP
     OUT-->>C: OTP
-    C->>KC: OTP
+    C->>KC: OTP (auth.banka.com.tr üzerinden)
     Note over KC: Brute force sayacı · riskli giriş kontrolü (yeni cihaz)
     APP->>APP: Biyometrik doğrulama · Secure Enclave'de anahtar çifti üretir (private key cihazdan çıkmaz)
-    APP->>KC: Public key + attestation token + cihaz bilgisi
+    APP->>EDGE: POST auth.banka.com.tr/device-registration (public key + attestation + cihaz bilgisi)
+    EDGE->>ING: F5 → dmz-ingressgw:443
+    ING->>AP: Cihaz kaydı isteği
+    AP->>EG: Doğrulanmış kayıt isteği · mTLS
+    EG->>KC: Kimlik doğrulanmış sunucu çağrısı
     KC->>DR: Cihazı kaydet (device_id ↔ sub ↔ public key)
     DR-->>KC: device_id
-    KC-->>APP: Authorization code (redirect)
+    KC-->>APP: Authorization code (auth-proxy ve edge üzerinden redirect)
     end
 
     rect rgb(235,245,255)
@@ -212,23 +223,27 @@ sequenceDiagram
     ING->>AP: auth host
     AP->>EG: mTLS
     EG->>KC: authorize
-    KC-->>APP: Challenge (nonce)
+    KC-->>APP: Challenge (auth-proxy ve edge üzerinden)
     APP->>APP: Challenge'ı cihaz private key'i ile imzalar
-    APP->>KC: İmzalı challenge
+    APP->>EDGE: İmzalı challenge (auth.banka.com.tr üzerinden)
+    EDGE->>ING: F5 → dmz-ingressgw:443
+    ING->>AP: Challenge doğrulama isteği
+    AP->>EG: mTLS
+    EG->>KC: İmzalı challenge
     KC->>DR: device_id'nin public key'i ile imza doğrulama, cihaz aktif mi?
     DR-->>KC: Geçerli
     Note over KC: acr=2 (cihaz + biyometri) · oturum (sid) açılır
     KC->>RS: Oturum kaydı (sid, device_id, acr)
-    KC-->>APP: Authorization code
+    KC-->>APP: Authorization code (auth-proxy ve edge üzerinden redirect)
     APP->>APP: DPoP anahtar çifti (cihazda) · DPoP proof (htm, htu, iat, jti)
-    APP->>EDGE: POST /token (code, code_verifier, DPoP proof)
+    APP->>EDGE: POST auth.banka.com.tr/token (code, code_verifier, DPoP proof)
     EDGE->>ING: :443
     ING->>AP: /token
     AP->>RD: DPoP jti daha önce kullanıldı mı?
     RD-->>AP: Hayır (jti kaydedilir, TTL)
     AP->>EG: mTLS
     EG->>KC: Token isteği
-    KC-->>APP: Opak access token (≤ 5 dk, DPoP'a bağlı, cnf.jkt) + refresh token (rotation)
+    KC-->>APP: Opak access token (≤ 5 dk, DPoP'a bağlı, cnf.jkt) + refresh token (auth-proxy üzerinden, rotation)
     end
 ```
 
@@ -297,7 +312,7 @@ sequenceDiagram
     EDGE->>KC: (ING → auth-proxy → EG üzerinden)
     KC->>TS: İşlem imzası doğrula (device_id public key, tutar + alıcı)
     TS-->>KC: Geçerli
-    KC-->>APP: Yeni opak token (acr=3, işlem bağlamına bağlı, kısa ömürlü)
+    KC-->>APP: Yeni opak token (auth-proxy ve edge üzerinden; acr=3, işlem bağlamına bağlı, kısa ömürlü)
     end
 
     APP->>EDGE: POST /v1/transfers (aynı Idempotency-Key, yeni token, DPoP)
@@ -340,6 +355,7 @@ sequenceDiagram
     box rgb(225,244,241) Kimlik zone
         participant KC as keycloak
         participant RS as redis-session
+        participant IEG as iam-egressgw
     end
     participant OUT as Dış çıkış zone<br/>push gateway (APNs/FCM)
 
@@ -350,29 +366,33 @@ sequenceDiagram
     C->>EDGE: GET /auth/login
     EDGE->>ING: :443
     ING->>WTH: /auth/**
-    Note over WTH: state + nonce + PKCE verifier üretir<br/>state'i kısa ömürlü __Host-login cookie'sine bağlar
+    Note over WTH: state + nonce + PKCE verifier üretir<br/>state'i kısa ömürlü __Host-login cookie'sine bağlar (Secure, HttpOnly, SameSite=Lax, Path=/, Domain yok)
     WTH-->>C: 302 auth.banka.com.tr/authorize (code, PKCE S256, state, nonce)
     C->>EDGE: authorize
     EDGE->>AP: ING üzerinden auth host
     AP->>EG: mTLS
     EG->>KC: authorize
-    KC-->>C: Giriş ekranı
-    C->>KC: Kullanıcı adı + parola
+    KC-->>C: Giriş ekranı (auth.banka.com.tr → edge → ingress → auth-proxy)
+    C->>KC: Kullanıcı adı + parola (aynı OIDC uç noktası üzerinden)
     Note over KC: Brute force · bot skoru (edge) · riskli giriş
-    KC->>OUT: Push bildirimi: "Web girişini onayla" (CIBA benzeri)
+    KC->>IEG: Push gönderim isteği (mTLS)
+    IEG->>OUT: İzinli push geçidi üzerinden "Web girişini onayla" (CIBA benzeri)
     OUT-->>APPM: Push
     APPM->>APPM: Biyometri + cihaz anahtarıyla onay imzası
-    APPM->>KC: İmzalı onay (mobil kanal üzerinden, DPoP)
+    APPM->>KC: İmzalı onay (mobil kanal ve auth-proxy üzerinden, DPoP)
     Note over KC: acr=2 · sid oluşur
-    KC-->>C: 302 ib.banka.com.tr/auth/callback?code&state
+    KC-->>C: 302 ib.banka.com.tr/auth/callback?code&state (auth-proxy ve edge üzerinden; top-level GET)
     C->>WTH: callback (EDGE → ING üzerinden)
-    Note over WTH: state = __Host-login cookie'si mi? (tek kullanımlık)
+    Note over WTH: state = __Host-login cookie'si mi? (tek kullanımlık)<br/>Eksik, süresi dolmuş veya tekrar kullanılmış state reddedilir
     WTH->>AP: Token isteği (code, code_verifier, private_key_jwt)
     AP->>KC: EG üzerinden token endpoint (arka kanal)
     KC-->>WTH: Opak access token + refresh token + id_token
     Note over WTH: nonce kontrolü
-    WTH->>RS: Oturum: sid → token'lar (anahtar = cookie değerinin hash'i, TTL = idle timeout)
-    WTH-->>C: 302 / · Set-Cookie __Host-sid (HttpOnly, Secure, SameSite=Strict)
+    WTH->>EG: Oturum yazma isteği (mTLS)
+    EG->>RS: Oturum: sid → token'lar (anahtar = cookie değerinin hash'i, TTL = idle timeout)
+    RS-->>EG: Kayıt sonucu
+    EG-->>WTH: Kayıt sonucu
+    WTH-->>C: 302 / · Set-Cookie __Host-sid (HttpOnly, Secure, SameSite=Strict, Path=/, Domain yok)
     Note over C: Tarayıcıda yalnızca oturum cookie'si var (CH-06)
 ```
 
@@ -407,13 +427,18 @@ sequenceDiagram
     C->>EDGE: GET /api/accounts/123/transactions · Cookie __Host-sid · X-CSRF-Token
     EDGE->>ING: WAF · :443
     ING->>WTH: /api/**
-    WTH->>RS: Oturumu bul (hash(cookie))
-    RS-->>WTH: Token'lar · oluşturma zamanı
+    WTH->>EG: Oturum okuma isteği (mTLS)
+    EG->>RS: Oturumu bul (hash(cookie))
+    RS-->>EG: Token'lar · oluşturma zamanı
+    EG-->>WTH: Token'lar · oluşturma zamanı
     Note over WTH: idle ve absolute timeout · CSRF (durum değiştiren isteklerde) · oturum bazında rate limit
     opt Access token süresi doluyor
         WTH->>KC: refresh_token grant (AP → EG üzerinden, rotation)
         KC-->>WTH: Yeni token çifti (eski refresh token geçersiz)
-        WTH->>RS: Oturumu güncelle
+        WTH->>EG: Oturum güncelleme isteği (mTLS)
+        EG->>RS: Oturumu güncelle
+        RS-->>EG: Güncelleme sonucu
+        EG-->>WTH: Güncelleme sonucu
     end
     WTH->>AP: Exchange isteği (channel=web)
     AP->>KC: Introspection + token exchange (EG üzerinden)
@@ -548,8 +573,10 @@ sequenceDiagram
     Note over PGW: Sertifika ↔ token bağı (RFC 8705) · istek imzası (GW-13)<br/>partner planı ve kotası · şema doğrulaması
     PGW->>AP: Doğrula ve çevir
     AP->>KC: Introspection (active, cnf, consent_id, scope) · EG üzerinden
-    AP->>CS: Rıza geçerli mi? Hesap 123 rızada mı, izin "bakiye" var mı, süresi dolmuş mu, geri alınmış mı?
-    CS-->>AP: Geçerli
+    AP->>EG: Rıza kontrolü (mTLS)
+    EG->>CS: Hesap 123 rızada mı, izin "bakiye" var mı, süresi dolmuş mu, geri alınmış mı?
+    CS-->>EG: Geçerli
+    EG-->>AP: Geçerli
     AP->>KC: Token exchange
     KC-->>AP: Internal JWT (channel=partner, partner_id, consent_id, sub=müşteri, scope)
     PGW->>EG: Internal JWT
@@ -749,11 +776,11 @@ DMZ cluster'da iş mantığı ve veri bulunmaz; yalnızca doğrulama, dönüşt�
 | GW-08 | Token handler | CSRF koruması, CSP, HSTS ve X-Frame-Options uygulanır | Must |
 | GW-09 | Token handler | Ekran için veri birleştirme yapmaz; bu iş internal'daki web-bff'tedir | Must |
 | GW-10 | Partner GW | FAPI 2.0: mTLS sertifika ↔ client eşleşmesi, PAR, sender-constrained token | Must |
-| GW-11 | Partner GW | Her istekte consent servisinden rıza (hesap, kapsam, süre) kontrol edilir | Must |
+| GW-11 | Partner GW / yetkilendirme servisi | Her istekte consent servisinden rıza (hesap, kapsam, süre) kontrol edilir; kaynak servis de hesap ve izin kapsamını yeniden doğrular | Must |
 | GW-12 | Partner GW | Partner bazında plan ve kota; geliştirici portalı ve sandbox ortamı | Must |
 | GW-13 | Partner GW | İstek/yanıt imzalama (JWS veya HTTP Message Signatures) ile inkar edilemezlik | Should |
-| GW-14 | Egress | Internal'a giden tek çıkış noktasıdır; Corp CA istemci sertifikasıyla mTLS başlatır | Must |
-| GW-15 | Egress | Yalnızca internal ingress (A/B) ve IdP'ye çıkış; diğer hedefler `REGISTRY_ONLY` ile kapalıdır | Must |
+| GW-14 | Egress | DMZ'den internal cluster'a giden tek çıkış noktasıdır; Corp CA istemci sertifikasıyla mTLS başlatır | Must |
+| GW-15 | Egress | Yalnızca internal ingress (A/B), IdP ve belgelenmiş kimlik uçlarına (`redis-session`, `consent-svc`) kaynak/hedef/port bazlı çıkış; diğer hedefler `REGISTRY_ONLY` ve ağ politikasıyla kapalıdır | Must |
 | GW-16 | Egress | A/B arasında locality-aware yük dağıtımı ve outlier detection ile otomatik failover | Must |
 | GW-17 | Tüm GW | Dış token, parola, OTP ve kart verisi loglara yazılmaz (maskeleme) | Must |
 
@@ -769,13 +796,15 @@ Tüm kanallar tek merkezi IdP'yi (OIDC / OAuth 2.1) kullanır. Oturumun asıl ka
 | IAM-04 | Mobil token'lar DPoP ile cihaza bağlıdır (sender-constrained) | Must |
 | IAM-05 | Internal JWT'yi IdP RFC 8693 token exchange ile üretir ve kendi anahtarıyla imzalar (gateway imzalamaz); ömrü ≤ 2 dk, `aud` = internal, claim'leri: `sub`, `channel`, `acr`, `device_id`, `scope`, `sid` (+ kanala özel: `partner_id`, `branch_id`, `staff_role`) | Must |
 | IAM-06 | Web oturumu: idle ve absolute timeout uygulanır (süreler BDDK ve iş birimiyle belirlenecek); timeout'ta IdP oturumu da sonlanır | Must |
-| IAM-07 | Müşteri "tüm cihazlardan çıkış" yapabilir; iptal ≤ 5 sn içinde tüm gateway'lerde etkili olur | Must |
+| IAM-07 | Müşteri "tüm cihazlardan çıkış" yapabilir; `sid` iptali IdP'de kaydedilir ve güvenli iptal olayıyla gateway/yetki noktalarına dağıtılır. İptal ≤ 5 sn içinde tüm kanallarda etkili olur; hassas işlemler iptal durumu doğrulanamıyorsa reddedilir | Must |
 | IAM-08 | Doğrulama seviyeleri tanımlanır: `acr=1` görüntüleme, `acr=2` 2FA, `acr=3` işlem imzası. Internal policy'ler bu seviyeye göre karar verir | Must |
 | IAM-09 | Personel kimliği AD / Entra ile federe edilir; müşteri ve personel ayrı realm'lerde tutulur | Must |
 | IAM-10 | Consent servisi rızaları (partner, hesap, kapsam, süre) saklar; müşteri rızayı mobil/web'den geri çekebilir | Must |
 | IAM-11 | Başarısız giriş denemelerinde artımı gecikme ve hesap kilitleme uygulanır; kilitlenme SIEM'e olay olarak gider | Must |
 | IAM-12 | Riskli giriş tespiti: yeni cihaz, yeni ülke, imkansız seyahat durumunda step-up istenir | Should |
 | IAM-13 | İmza ve şifreleme anahtarları HSM'de tutulur; JWKS rotasyonu kesintisiz yapılır | Must |
+| IAM-14 | Token exchange sonucu verilen scope'lar kaynak token/client ve onaylı yetkileri aşamaz; exchange isteği ve yanıtı bu sınır için doğrulanır | Must |
+| IAM-15 | IdP oturum, refresh-token rotation ve `sid` iptal durumu A/B arasında tanımlı tutarlılık ve failover kurallarıyla korunur; DC geçişi iptal edilmiş oturumu yeniden etkinleştiremez. Güncel durum doğrulanamıyorsa oturum yenileme ve hassas işlemler reddedilir | Must |
 
 ## Internal A/B cluster ve iş sürekliliği (INT)
 
@@ -785,20 +814,21 @@ A (DC1) ve B (DC2) aynı servisleri active-active çalıştırır. Bir DC tamame
 | --- | --- | --- |
 | INT-01 | A ve B aynı servis setini aynı sürümle çalıştırır; deploy GitOps (Argo CD) ile iki cluster'a eş zamanlı yapılır | Must |
 | INT-02 | Her cluster tek başına toplam tepe yükün %100'ünü taşıyacak kapasitede boyutlandırılır | Must |
-| INT-03 | DC kaybında hedef RTO ≤ 15 dk, RPO ≤ 1 dk (öneri; iş birimiyle kesinleşecek) | Must |
+| INT-03 | DC kaybında hedef RTO ≤ 15 dk, RPO ≤ 1 dk (öneri; iş birimiyle kesinleşecek); hedefler tatbikatta ölçülür ve raporlanır | Must |
 | INT-04 | Internal ingress yalnızca DMZ egress, şube gateway ve ISO 8583 adapter'ın Corp CA sertifikalarını kabul eder (MUTUAL TLS) | Must |
 | INT-05 | Ingress, internal JWT'yi Istio `RequestAuthentication` ile doğrular; JWT'siz istek reddedilir | Must |
 | INT-06 | `AuthorizationPolicy` deny-by-default çalışır; kararlar servis kimliği + `channel` + `acr` + `scope` ile verilir | Must |
 | INT-07 | Kanal başına ayrı BFF: `mobile-bff`, `web-bff`, `branch-bff`; BFF'ler domain servislerine yalnızca izinli uçlardan erişir | Must |
 | INT-08 | Servisler arası trafik STRICT mTLS'tir; kullanıcı JWT'si çağrı zinciri boyunca taşınır | Must |
-| INT-09 | Para hareketi yapan işlemler idempotency key ile korunur; DC failover sırasında çift işlem oluşmaz | Must |
-| INT-10 | PostgreSQL DC1 primary ↔ DC2 replica; failover otomatik ve tek komutluk geri dönüş prosedürü vardır | Must |
-| INT-11 | Kafka DC'ler arası MirrorMaker 2 ile çoğaltılır; consumer offset'leri senkronize edilir | Should |
+| INT-09 | Para hareketi yapan işlemler idempotency key ile korunur; anahtar ve sonuç yetkili veri deposunda atomik/kalıcı kaydedilir, DC failover ve tekrar teslimde aynı işlem ikinci kez uygulanmaz | Must |
+| INT-10 | PostgreSQL'de her anda tek yazma sahibi vardır. DC2 replikası, quorum/fencing kontrolleri eski primary'nin yazmasını engelledikten sonra terfi ettirilir; failover ve ayrı failback prosedürü test edilir. Replikasyon gecikmesi RPO hedefini aşarsa alarm üretilir | Must |
+| INT-11 | Kafka DC'ler arası MirrorMaker 2 ile çoğaltılır; consumer offset'leri senkronize edilir. En az bir kez teslim ve tekrar oynatma olasılığı uygulama idempotency'siyle yönetilir | Should |
 | INT-12 | Core banking'e erişim yalnızca adapter servisler üzerinden; core'un kendi API'si internal dışına açılmaz | Must |
 | INT-13 | Yılda en az 2 kez planlı DC geçiş tatbikatı yapılır ve raporlanır | Must |
 | INT-14 | Pod'lar restricted SCC (non-root, read-only FS, no privilege escalation) ile çalışır; image'lar imzalı ve taranmıştır | Must |
 | INT-15 | Modern servisler `ocp-apps`'te domain bazlı namespace'lerde çalışır; core banking (legacy) ayrı cluster'dadır (`ocp-core`) ve strangler deseniyle kademeli taşınır (CORE-04) | Must |
 | INT-16 | Internal'dan veri zone'una, core'a ve dış çıkış zone'una giden trafik yalnızca `int-egressgw` üzerinden çıkar (`REGISTRY_ONLY`) | Must |
+| INT-17 | Egress yönlendirmesi mesh yapılandırmasıyla sınırlı kalmaz; NetworkPolicy / firewall kuralları doğrudan pod ve node çıkışını da kapatır. İzinli hedefler kaynak servis kimliği, hedef, port ve protokol bazında tanımlanır | Must |
 
 ## Core banking gereksinimleri (CORE)
 
@@ -827,6 +857,7 @@ Veri zone internete ve DMZ'ye kapalıdır. Modern servisler `int-egressgw` üzer
 | DATA-06 | Yedekler değiştirilemez (immutable / WORM) ve şifreli saklanır; geri dönüş testi en az çeyrekte bir yapılır | Must |
 | DATA-07 | Veritabanı kimlik bilgileri dinamik ve kısa ömürlüdür (Vault database secrets engine) | Should |
 | DATA-08 | Test ortamlarına yalnızca maskelenmiş / anonimleştirilmiş veri aktarılır (KVKK) | Must |
+| DATA-09 | Veri zone'una ağ erişimi yalnızca izinli `int-egressgw` ve core kaynaklarından mümkündür; doğrudan pod/node erişimi firewall ve NetworkPolicy ile reddedilir. DB, Kafka, RabbitMQ ve Valkey yetkileri ayrıca servis kimliği ve kaynak bazında daraltılır | Must |
 
 ## Kart zone gereksinimleri (CARD)
 
@@ -852,11 +883,11 @@ Bankadan dışarıya giden trafik (kurumlar, SMS / push, e-posta, SaaS, yazılı
 | ID | Gereksinim | Öncelik |
 | --- | --- | --- |
 | OUT-01 | Dışarıya giden tüm trafik dış çıkış zone'undan çıkar; diğer zone'lardan internete doğrudan route yoktur | Must |
-| OUT-02 | Dış çıkış zone'una yalnızca egress gateway'ler (`int-egressgw`; OCSP / CRL için `dmz-egressgw`) ve yönetim zone'u (CI/CD, registry upstream) bağlanabilir | Must |
+| OUT-02 | Dış çıkış zone'una yalnızca egress gateway'ler (`int-egressgw`, `iam-egressgw`; OCSP / CRL için `dmz-egressgw`) ve yönetim zone'u (CI/CD, registry upstream) bağlanabilir | Must |
 | OUT-03 | Hedefler izin listesiyle (FQDN + port) tanımlanır; liste dışı hedef reddedilir ve SIEM'e olay gider | Must |
 | OUT-04 | HTTP(S) çıkışı forward proxy / SWG üzerinden yapılır; TLS inceleme uygulanır (kurum hatları ve sertifika sabitlemeli hedefler hariç) | Should |
 | OUT-05 | Kurum bağlantıları (EFT/FAST, SWIFT, KKB, GİB, MERNİS / KPS) kiralık hat veya IPsec VPN ile kurulur; kurum başına ayrı sertifika ve kaynak IP | Must |
-| OUT-06 | SMTP relay ve SMS / push gateway yalnızca bildirim servisinden gelen istekleri kabul eder | Must |
+| OUT-06 | SMTP relay ve SMS / push gateway yalnızca izinli egress üzerinden gelen bildirim servisi ve IdP OTP/push isteklerini kabul eder | Must |
 | OUT-07 | DNS çözümlemesi yalnızca iç resolver'dan yapılır; dışarıya doğrudan DNS (53) kapalıdır (DNS tünelleme önlemi) | Must |
 | OUT-08 | Kart şeması bağlantıları (Visa, Mastercard, TROY, BKM) dış çıkış zone'undan değil, kart zone'undan özel hatla kurulur (PCI kapsamı) | Must |
 | OUT-09 | Çıkış logları (proxy, NGFW, VPN) SIEM'e gönderilir; hacim anomalisi veri sızıntısı alarmı üretir | Must |
@@ -871,7 +902,7 @@ Varsayılan kural her zone arasında "her şeyi reddet"tir. Aşağıdaki tablo a
 | NET-02 | Edge LB / WAF | DMZ ingress gateway | 443 / HTTPS | Yalnızca edge kaynak IP'leri |
 | NET-03 | DMZ egress | Internal ingress A ve B | 443 / mTLS | Tek kapı |
 | NET-04 | DMZ egress | IdP (kimlik zone) | 443 / mTLS | Introspection, token exchange |
-| NET-05 | DMZ egress | OCSP / CRL sunucuları | 80, 443 | Sertifika iptal kontrolü; dış çıkış zone proxy'si üzerinden |
+| NET-05 | DMZ `dmz-egressgw` | Dış çıkış zone proxy'si | 443 / mTLS | OCSP / CRL sorguları yalnızca proxy üzerinden; proxy'den dış hedefe çıkış NET-29 |
 | NET-06 | Şube MPLS | Şube gateway | 443 / mTLS | Cihaz sertifikası zorunlu |
 | NET-07 | Şube gateway | Internal ingress A ve B | 443 / mTLS |  |
 | NET-08 | ATM ağı | ATM switch | NDC/DDC (TCP) | Özel hat / VPN |
@@ -888,8 +919,16 @@ Varsayılan kural her zone arasında "her şeyi reddet"tir. Aşağıdaki tablo a
 | NET-19 | Dış çıkış zone (proxy) | İnternet servisleri (SMS, APNs/FCM, SaaS) | 443 | FQDN izin listesi |
 | NET-20 | Kart zone | Kart şemaları (Visa, Mastercard, TROY, BKM) | Özel hat | Dış çıkış zone'undan geçmez |
 | NET-21 | Yönetim zone (CI/CD, registry) | Dış çıkış zone (proxy) | 443 | Bağımlılık ve image upstream'i |
+| NET-22 | DMZ `dmz-egressgw` | Kimlik zone `redis-session` | 6379 / TLS+mTLS | Yalnızca `web-token-handler`; oturum anahtarı ve gerekli Redis komutlarıyla sınırlı |
+| NET-23 | DMZ `dmz-egressgw` | Kimlik zone `consent-svc` | 443 / mTLS | Yalnızca partner rıza kontrolü/iptali için; partner, hesap, kapsam ve süre doğrulanır |
+| NET-24 | Kimlik zone Keycloak | Kimlik zone `device-registry` | 443 / mTLS | Aynı zone içinde; yalnızca cihaz kaydı, durum ve public-key doğrulama API'leri |
+| NET-25 | Şube `branch-gw` | Kimlik zone IdP | 443 / mTLS | OIDC ve token exchange; yalnızca personel realm'i ve izinli uçlar |
+| NET-26 | Kimlik `iam-egressgw` | Dış çıkış zone (proxy / mesajlaşma geçidi) | 443 / mTLS | Yalnızca IdP'nin OTP ve risk doğrulama bildirimleri; FQDN izin listesi |
+| NET-27 | Dış çıkış zone (proxy / mesajlaşma geçidi) | SMS ve push sağlayıcıları | 443 | İzinli sağlayıcı FQDN'leri; gönderim kaydı SOC'a iletilir |
+| NET-28 | Cluster ve appliance yönetim arayüzleri | İç DNS ve NTP servisleri | DNS 53 (iç resolver), NTP 123 | Yalnızca yönetilen resolver ve zaman kaynakları; dış DNS/NTP kapalı |
+| NET-29 | Dış çıkış zone proxy'si | OCSP / CRL sunucuları | 80, 443 | Yalnızca izinli sertifika durumu hedefleri |
 
-**Açıkça yasak olanlar:** İnternet → DMZ cluster · DMZ → internet (NET-05 hariç) · Internal → DMZ (bağlantıyı yalnızca DMZ başlatır) · DMZ → veri zone · DMZ → core zone · Kart zone → internet · Internal, core, veri zone → internet (yalnızca dış çıkış zone üzerinden) · `core-adapter` dışında herhangi bir kaynak → core zone · Herhangi bir zone → HSM (kart zone ve IdP hariç).
+**Açıkça yasak olanlar:** İnternet → DMZ cluster node IP'leri veya Kubernetes API · DMZ → internet (yalnızca NET-05 ile dış çıkış proxy'sine) · Internal → DMZ (bağlantıyı yalnızca DMZ başlatır) · DMZ → veri zone · DMZ → Kimlik zone (yalnızca NET-04, NET-22 ve NET-23 istisnaları) · DMZ → core zone · Kart zone → internet · Internal, core, veri ve kimlik zone'larından internete doğrudan erişim (yalnızca dış çıkış zone üzerinden) · `core-adapter` dışında herhangi bir kaynak → core zone · Herhangi bir zone → HSM (kart zone ve IdP hariç). NET tablosu zone geçişlerini tanımlar; zone içindeki servis erişimleri ayrıca mesh `AuthorizationPolicy` ve NetworkPolicy ile kaynak servis kimliğine göre kısıtlanır.
 
 ## Güvenlik izleme gereksinimleri (SOC)
 
@@ -923,7 +962,26 @@ Mimari, aşağıdaki testlerin hepsi pen-test ve DR tatbikatında geçtiğinde k
 | AC-08 | ISO 8583 adapter sertifikasıyla `/accounts/**` çağrısı | 403 | CARD-06, INT-06 |
 | AC-09 | DC1'in tamamen kapatılması (tatbikat) | RTO/RPO hedefleri içinde DC2 tüm kanalları taşır, çift işlem yok | EDGE-05, INT-02/03/09 |
 | AC-10 | Bir isteğin SIEM'de izlenmesi | Edge'den DB'ye kadar aynı `correlationId` ile tüm zone logları bulunur | SOC-01/03 |
-| AC-11 | SOC playbook ile kullanıcı oturumu iptali | ≤ 5 sn içinde tüm kanallarda etkili | IAM-07, SOC-05 |
+| AC-11 | SOC playbook ile kullanıcı oturumu iptali | ≤ 5 sn içinde mobil, web, partner ve şube dahil tüm kanallarda etkili; iptal durumu doğrulanamayan hassas işlem reddedilir | IAM-07, SOC-05 |
+| AC-12 | Mobil cihaz kaydı ve challenge doğrulaması | İstemci yalnızca edge/DMZ public uçlarına erişir; Keycloak ve `device-registry` dışarıdan erişilemez | CH-02/03, IAM-04/05, NET-02/04/24 |
+| AC-13 | Token exchange'e kaynak token'da olmayan scope ekleme denemesi | Exchange reddedilir veya scope kaynak yetkilerle sınırlandırılır; yetki yükselmesi olmaz | IAM-14, GW-03 |
+| AC-14 | OIDC callback'te eksik, süresi dolmuş veya tekrar kullanılan `state` | İstek reddedilir; oturum açılmaz | CH-06, GW-08 |
+| AC-15 | Pod/node üzerinden doğrudan internet veya veri zone'una çıkış denemesi | NetworkPolicy/firewall reddeder; olay kaydedilir | INT-16/17, DATA-01/09, OUT-01 |
+| AC-16 | DC1 PostgreSQL primary kaybı ve geri dönüş | Fencing sonrası yalnızca bir yazma sahibi vardır; ölçülen RTO/RPO hedef içindedir; tekrar teslim edilen para hareketi çift işlenmez | INT-03/09/10/11 |
+| AC-17 | Rıza geri çekildikten sonra partner çağrısı | Rızanın geri çekilmesini izleyen ilk partner isteği 403 ile reddedilir; hesap/scope kapsamı kaynak serviste de doğrulanır | GW-11, IAM-10 |
+| AC-18 | Yedekten geri dönüş tatbikatı | Şifreli immutable yedek geri yüklenir; RTO/RPO sonucu ve kanıtı raporlanır | DATA-05/06 |
+| AC-19 | IAM DC1 kaybı sırasında daha önce iptal edilmiş `sid` ile yenileme | İptal edilmiş oturum DC2'de etkinleşmez; iptal durumu doğrulanamıyorsa yenileme reddedilir | IAM-01/07/15 |
+
+### Gereksinim izlenebilirliği
+
+Her `Must` gereksinimi, kabul kriterlerinden en az biriyle veya açıkça tanımlanmış denetim/tatbikat kanıtıyla eşleştirilir. Gereksinim sahibi, doğrulama sorumlusu ve kanıt bağlantısı canlıya çıkış izlenebilirlik kaydında tutulur; eşleşmemiş `Must` maddesi kabul edilmiş sayılmaz.
+
+| Gereksinim grubu | Doğrulama yöntemi | Kanıt | Sorumlu rol |
+| --- | --- | --- | --- |
+| CH, EDGE, GW, IAM | Kanal bazlı entegrasyon, negatif yetki ve pen-test senaryoları | Test raporu, WAF/IdP/gateway olay kayıtları | Kanal ve IAM ekipleri |
+| INT, CORE, DATA | Ağ erişim testleri, servis yetki testleri, DB/Kafka failover ve geri yükleme tatbikatı | Otomatik test çıktısı, DR ve restore raporu | Platform ve veri ekipleri |
+| CARD | PCI kapsamı, adapter erişim testleri, HSM ve switch denetimleri | PCI denetim kanıtı, HSM/switch kayıtları | Kart platformu ve PCI sorumlusu |
+| OUT, NET, SOC | Firewall/proxy kural testi, log bütünlüğü ve SIEM korelasyon tatbikatı | Kural envanteri, SIEM/SOAR test kaydı | Ağ ve SOC ekipleri |
 
 ## Açık sorular
 
@@ -935,6 +993,12 @@ Mimari, aşağıdaki testlerin hepsi pen-test ve DR tatbikatında geçtiğinde k
 - [ ] Core banking hangi protokolleri sunuyor (MQ, SOAP, REST)? Adapter tasarımını belirler.
 - [ ] A ve B gerçekten iki ayrı DC mi, yoksa aynı DC'de iki ayrı cluster mı?
 - [ ] Log saklama süresi ve SIEM ürünü ne olacak?
+- [ ] `ocp-iam-a/b` için ayrı cluster yatırımı onaylanıyor mu? Onaylanmazsa Kimlik zone'unun hangi ağ/cluster izolasyonuyla eşdeğer korunacağı belirlensin.
+- [ ] PostgreSQL failover'ında quorum/fencing ve failback hangi ürün/prosedürle uygulanacak; DC'ler arası replikasyon senkron mu asenkron mu olacak?
+- [ ] `sid` iptal olayı hangi dağıtım mekanizmasıyla taşınacak ve 5 saniyelik hedef hangi ölçüm noktalarından doğrulanacak?
+- [ ] IdP, refresh-token rotation ve `redis-session` durumu A/B arasında hangi replikasyon/tutarlılık yöntemiyle korunacak; DC kaybında iptal ve tekrar kullanım bilgisi nasıl kaybolmadan kalacak?
+- [ ] Partner rıza kontrolü ve web oturum deposu için NET-22/23'teki erişim şekli, portlar ve servis izin listeleri altyapı ekiplerince onaylandı mı?
+- [ ] OIDC callback top-level GET olarak sabitlenecek mi? Bu varsayımda `__Host-login` için `SameSite=Lax` kullanılır; farklı callback yöntemi seçilirse cookie ayarı yeniden doğrulanmalıdır.
 
 **Çizimlerde kullanılan varsayımlar** (sorular yanıtlanana kadar): A ve B iki ayrı DC'dir · IdP Keycloak / Red Hat build of Keycloak'tur · core banking MQ ve SOAP sunar, adapter ikisini de destekler · SIEM QRadar veya Splunk'tır · Oracle ve MSSQL VM / Exadata üzerinde, diğer veri servisleri `ocp-data`'dadır.
 
@@ -948,6 +1012,8 @@ Bu mimari, [service-mesh-lab](../README.md) deposunda kind üzerinde küçültü
 | Internal JWT'yi kim üretir | IdP (RFC 8693 token exchange, IAM-05) | ✅ Keycloak üretiyor (`09a`): auth-service introspection + token exchange yapıyor, DMZ'de imza anahtarı yok. Keycloak V2 exchange realm içinde çalıştığı için realm başına issuer (3 issuer) | – |
 | Internal JWT ömrü ve claim'ler | ≤ 2 dk; `acr`, `scope`, `device_id`, `sid` dahil | 2 dk; `sub`, `channel`, `sid`, `roles`, `scope` (client başına API scope'ları) (+ `partner_id`, `branch_id`); kişisel veri yok. **`acr` yerine `loa_map`** (IdP imzalı seviye → zaman): Keycloak token exchange `acr`'yi taşımıyor, bu yüzden seviye kontrolü waypoint'te değil serviste (`09b`). `device_id` yok (istek anındaki cihazı IdP bilemiyor) | `device_id` ve seviye 3 (işlem imzası) DPoP / cihaz bağlama adımında; IdP değişirse ya da Keycloak exchange `acr`'yi taşırsa kontrol waypoint'e alınır |
 | Partner kimlik doğrulaması | mTLS + `private_key_jwt` (FAPI 2.0, CH-10) | Client ID + client secret (kullanıcı kararı); token partner sertifikasına bağlı. Partner yetkisi client başına scope ile (sözleşmedeki işlemler) | Prod'da `private_key_jwt` |
+| Mobil cihaz bağlama (IAM-04) | Token DPoP ile cihaza bağlı (`cnf.jkt`), iç JWT'de `device_id` | DPoP kanıtı her istekte zorunlu, ama bağlamayı DMZ yapıyor: kanıtı imzalayan anahtar device-registry'de kullanıcıya kayıtlı olmalı. Keycloak DPoP'a bağlı token'ı başka client'a exchange ettirmiyor; `device_id` iç JWT'de yok. Attestation lab sağlayıcısıyla simüle (`09c`) | IdP DPoP + exchange'i birlikte desteklerse token'a bağ; gerçek Play Integrity / App Attest |
+| İşlem imzası (CH-08, IAM-08) | `tx-signing-svc`: tutar + alıcı cihaz anahtarıyla imzalı, seviye 3 | **Açık nokta:** yok; transfer seviye 2 (OTP) ile | `09d` atlandı; eşik ve onay kuralları iş kararı |
 | BFF yeri | Internal `channel-bff` (INT-07, GW-09) | ✅ `web-bff` internal'da (`channel-bff`); DMZ'de `web-token-handler` (cookie oturumu, CSRF), tarayıcıda token yok (`09a`). Oturum deposu mgmt Valkey'de (hedefte kimlik zone'unda `redis-session`) | `mobile-bff`, `branch-bff` sonraki adımlarda |
 | Cluster sayısı ve node | Zone başına cluster, her DC'de, çok node | Tek node'lu kind cluster'ları: `dmz`, `cluster-a`, `mgmt`; `cluster-b` kapalı | `cluster-b` A/B adımında geri gelir; core, PCI ve veri ayrı cluster olarak temsil edilmez (veri `mgmt`'te) |
 | Edge | DDoS / CDN, GSLB, F5 + WAF | Docker konteynerinde HAProxy + ModSecurity (OWASP CRS) | Ürün davranışı temsil edilir, ürün değil |
@@ -956,7 +1022,10 @@ Bu mimari, [service-mesh-lab](../README.md) deposunda kind üzerinde küçültü
 
 | Tarih | Değişiklik |
 | --- | --- |
+| Nov 1, 2026 (6) | Kimlik zone'u için ayrı A/B cluster hedefi ve yerleşim sayısı (14) netleştirildi; mobil cihaz kaydı/IdP erişimi edge ve DMZ üzerinden tanımlandı; web OIDC state cookie ve oturum erişimi netleştirildi; iptal yayılımı, token scope sınırı, DB failover/fencing, ağ akışı izinleri ve ek kabul/izlenebilirlik kriterleri eklendi |
 | Oct 31, 2026 | İlk sürüm |
+| Nov 1, 2026 (7) | Lab sapmaları: işlem imzası açık nokta (`09d` atlandı) |
+| Nov 1, 2026 (6) | Lab sapmaları: mobil cihaz bağlama (DPoP DMZ'de, Keycloak exchange kısıtı; `09c · mobile-binding`) |
 | Nov 1, 2026 (5) | Dosya adı standarda getirildi (`target-architecture.md`); gereksinim bazında pilot durumu ayrı dokümanda: [Pilot mimari](pilot-architecture.md) |
 | Nov 1, 2026 (4) | Lab sapmaları: iç JWT'de `acr` yerine `loa_map` (Keycloak exchange kısıtı, seviye kontrolü serviste); partner kimlik doğrulaması lab'de client secret, yetki client başına scope ile (`09b · l7-policies`) |
 | Nov 1, 2026 (3) | Yeni bölüm "Login ve servis akışları": mobil (cihaz bağlama, biyometrik giriş, step-up ve işlem imzalı transfer), web (sunucu tarafında OIDC + mobil push onayı, hesap hareketleri), şube (Kerberos/AD girişi, dört göz onayı), partner (FAPI 2.0 PAR + rıza, hesap sorgusu), ATM (nakit çekim, reversal, stand-in) ve POS (issuer yetkilendirme, on-us) için Mermaid sequence diyagramları |

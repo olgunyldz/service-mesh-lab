@@ -138,6 +138,15 @@ for realm in customers partners staff; do
   printf '{"keys":[{"kty":"RSA","use":"sig","alg":"RS256","n":"%s","e":"AQAB"}]}' "$n" > "idp/$realm.jwks.json"
 done
 
+# Uygulama bütünlük kanıtı (attestation) sağlayıcısının anahtarı (09c · mobile-binding). Gerçekte Google Play Integrity /
+# Apple App Attest imzalar ve banka yalnızca açık anahtarı bilir; lab'de mobile-sim bu sağlayıcıyı da taklit eder.
+mkdir -p attest
+if [[ ! -f attest/attest.pub ]]; then
+  log "Attestation sağlayıcı anahtarı (ES256)"
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out attest/attest.key 2>/dev/null
+  openssl pkey -in attest/attest.key -pubout -out attest/attest.pub
+fi
+
 # Image imzalama anahtarı (cosign). Gerçekte özel anahtar KMS/HSM'de (ör. Vault Transit) durur ve yalnızca CI kullanır.
 mkdir -p cosign
 if [[ ! -f cosign/cosign.pub ]]; then
