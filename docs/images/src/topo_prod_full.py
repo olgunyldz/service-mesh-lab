@@ -46,7 +46,7 @@ d.zone(L0, 250, L1 - L0, 240, "Internet Edge · ortak (DC1/DC2)", right="kanal b
 edge = [("DDoS koruma", ["ISS + bulut scrubbing", "BGP anycast", "L3/L4 hacim saldırısı"]),
         ("GSLB / DNS", ["DC1 ⇄ DC2 aktif-aktif", "sağlık kontrolü · DNSSEC", "coğrafi yönlendirme"]),
         ("Perimeter NGFW", ["yalnızca 443/TCP", "IPS · geo-IP · itibar", "DC başına HA çift"]),
-        ("F5 LTM + Advanced WAF", ["VIP: ib · m-api · api", "TLS 1.3 · anahtar HSM'de", "partner: mTLS · bot koruma", "header temizliği · 5xx maske"])]
+        ("F5 LTM + Advanced WAF", ["VIP: ib · m-api · api · auth", "TLS 1.3 · anahtar HSM'de", "partner: mTLS · bot koruma", "header temizliği · 5xx maske"])]
 for i, (t, ls) in enumerate(edge):
     x, w = grid(4, i)
     d.box(x, 305, w, 160, t, ls, color="edge", fill="#ffffff")
@@ -59,13 +59,14 @@ d.zone(1500, 250, 210, 240, "Şube zone", ["SD-WAN hub", "branch-fw (NGFW)", "br
 d.zone(1725, 250, 435, 240, "ATM · POS ağı", ["atm-fw · pos-fw · APN gateway", "terminal / cihaz sertifikası", "ISO 8583 · NDC/DDC (TLS)", "TID / MID izin listesi", "internet edge'inden geçmez"], color="wan")
 
 # =============================== DMZ
-d.zone(L0, 540, L1 - L0, 430, "DMZ zone · ocp-dmz (DC1/DC2) · kanal başına namespace", right="açık bankacılık büyürse: ayrı partner DMZ cluster'ı", title_above=True, color="dmz")
-dmz_a = [("ns web", ["web-gw · CORS · CSP", "web-bff · token handler", "oturum cookie'si (HttpOnly)", "x-channel=web · local kota"]),
-         ("ns mobile", ["mobile-gw · /mobile/v1/*", "uygulama doğrulama (attestation)", "cihaz bağlama (device-registry)", "x-channel=mobile · local kota"]),
-         ("ns partner", ["partner-gw · açık bankacılık API", "mTLS ↔ token bağı (RFC 8705)", "consent kontrolü (consent-svc)", "partner izin listesi · kota"])]
-dmz_b = [("ns istio-egress · internal'a tek kapı", ["dmz-egressgw: kanal arka uçları", "port + kimlik AuthZ · mTLS", "Authorization silinir", "x-user-jwt taşınır"]),
-         ("ns auth · token exchange", ["ext_authz: her kanal, her istek", "dış token: imza, iss, aud, exp", "iç JWT: RS256 · 5 dk · jti", "imza anahtarı HSM / Vault Transit"]),
-         ("ns ratelimit", ["global kota (partner, kullanıcı)", "dmz-redis: sayaç · jti önbelleği", "fail-open; local kota korur", "kota aşımı: 429"])]
+d.firewall(L0, 494, L1 - L0, 22, "İÇ FIREWALL (farklı üretici) · yalnızca F5 → DMZ :443", tx=300)
+d.zone(L0, 540, L1 - L0, 430, "DMZ zone · ocp-dmz (DC1/DC2) · kanal başına namespace · iş mantığı yok", right="açık bankacılık büyürse: ayrı partner DMZ cluster'ı", title_above=True, color="dmz")
+dmz_a = [("ns edge-web", ["web-static (SPA) · CSP · CORS", "web-token-handler: cookie ↔ token", "HttpOnly · SameSite · CSRF", "CIBA / QR onay akışı"]),
+         ("ns edge-mobile", ["mobile-gw · DPoP doğrulama", "attestation · minimum sürüm", "cihaz bağlama (device_id)", "x-channel=mobile · local kota"]),
+         ("ns edge-partner", ["FAPI 2.0 · PAR · private_key_jwt", "mTLS ↔ token bağı (RFC 8705)", "consent kontrolü · izin listesi", "geliştirici portalı · sandbox"])]
+dmz_b = [("ns istio-egress · internal'a tek kapı", ["dmz-egressgw → yalnızca channel-bff", "port + kimlik AuthZ · mTLS", "dış token silinir; iç JWT taşınır", "OCSP / CRL (→ dış çıkış)"]),
+         ("ns auth · auth-proxy", ["ext_authz: her kanal, her istek", "opak dış token → IdP introspection", "RFC 8693 → iç JWT (IdP imzalar)", "≤ 2 dk · acr · scope · device_id · sid"]),
+         ("ns ratelimit · edge-cache", ["global kota (partner, kullanıcı)", "dmz-redis: sayaç · DPoP jti", "fail-open; local kota korur", "kota aşımı: 429"])]
 for i, (t, ls) in enumerate(dmz_a):
     x, w = grid(3, i)
     d.ns(x, 600, w, 150, t, ls, color="dmz")
@@ -83,8 +84,8 @@ d.arrow([(px + pw / 2 + 40, 750), (px + pw / 2 + 40, 790)], dashed=True, label="
 d.zone(R0, 540, R1 - R0, 430, "Kart zone · PCI DSS · ocp-pci (ayrı cluster)", color="pci")
 pci = [("ns atm", ["atm-switch (NDC/DDC)", "ATM izleme · nakit yönetimi", "PIN doğrulama → HSM"]),
        ("ns pos", ["pos-switch (ISO 8583)", "acquiring · sanal POS", "3DS ACS · terminal yönetimi"]),
-       ("ns card", ["kart yönetimi · basım", "tokenization (PAN → token)", "Oracle (kart DB, TDE)"]),
-       ("HSM · şema bağlantıları", ["payShield HSM (PIN, CVV, anahtar)", "şema bağlantısı (özel hat)", "takas · mutabakat"])]
+       ("ns card · iso8583-adapter", ["kart yönetimi · tokenization", "iso8583-adapter: REST ↔ ISO 8583", "yalnızca /cards/**, /authorizations/**", "stand-in (core kapalıyken onay)"]),
+       ("HSM · şema bağlantıları", ["payShield HSM (PIN, CVV) · RKL", "şema bağlantısı (özel hat)", "takas · mutabakat", "kart DB: Oracle (TDE)"])]
 for i, (t, ls) in enumerate(pci):
     x, w = grid(2, i % 2, RX0, RW)
     d.ns(x, 600 if i < 2 else 790, w, 150, t, ls, color="pci")
@@ -92,19 +93,19 @@ for i, (t, ls) in enumerate(pci):
 # =============================== Internal (modern mikroservisler)
 d.zone(L0, 1040, L1 - L0, 660, "Internal zone · ocp-apps (DC1/DC2) · modern mikroservisler · domain bazlı namespace", title_above=True, color="internal")
 d.ns(IX0, 1100, IW, 95, "ns istio-ingress · int-ingressgw (MUTUAL TLS)",
-     ["AuthZ: yalnızca dmz-egressgw, branch-gw ve kart zone kimlikleri · RequestAuthentication: iç JWT (inline JWKS)",
-      "her domain namespace'inde waypoint (claim bazlı L7 yetki) · ztunnel: mTLS, L4 varsayılan reddet · imzalı image"], color="internal")
-dom = [("ns hesap", ["account · statement", "waypoint: rol + sub (BOLA)", "PostgreSQL (servis başına DB)"]),
+     ["AuthZ: yalnızca dmz-egressgw, branch-gw ve kart zone kimlikleri → channel-bff · RequestAuthentication: iç JWT (Keycloak JWKS, ≤ 2 dk)",
+      "her domain namespace'inde waypoint (acr · scope · rol · sub ile L7 yetki) · ztunnel: mTLS, L4 varsayılan reddet · imzalı image"], color="internal")
+dom = [("ns channel-bff", ["mobile-bff · web-bff · branch-bff", "kanal başına toplama (aggregation)", "iç JWT'yi domain'e iletir"]),
+       ("ns hesap", ["account · statement", "waypoint: rol + sub (BOLA)", "PostgreSQL (servis başına DB)"]),
        ("ns odeme", ["transfer · eft-fast · orkestrasyon", "saga · idempotency · step-up", "Kafka: payment-events"]),
        ("ns kart", ["card-api (yalnızca token PAN)", "limit · kampanya", "→ kart zone (tokenization)"]),
        ("ns kredi", ["kredi başvuru · skorlama", "KKB sorgusu (egress)", "RabbitMQ: legacy onay akışı"]),
        ("ns musteri", ["customer · kyc · onboarding", "e-imza · NFC kimlik", "MSSQL CRM (legacy) okuma"]),
-       ("ns fraud", ["gerçek zamanlı fraud", "Kafka Streams · kural + ML", "işlem öncesi karar"]),
+       ("ns security", ["tx-signing-svc (işlem imzası)", "fraud: Kafka Streams · kural + ML", "işlem öncesi karar · step-up"]),
        ("ns bildirim", ["SMS · push · e-posta", "RabbitMQ / Kafka tüketici", "→ dış çıkış (SMS/push gw)"]),
+       ("ns integration", ["core-adapter (anti-corruption)", "kurum: EFT/FAST · SWIFT · KKB", "strangler: kademeli taşıma"]),
        ("ns raporlama", ["ekstre · dekont üretimi", "batch (CronJob)", "→ veri ambarı (CDC)"]),
-       ("ns core-adapter", ["anti-corruption layer", "REST ↔ core API / MQ", "strangler: kademeli taşıma"]),
        ("ns olay", ["outbox → Kafka (Debezium)", "Schema Registry · Avro", "olay tabanlı entegrasyon"]),
-       ("ns kurum-adaptor", ["EFT/FAST · SWIFT · KKB", "kurum başına sertifika", "mesaj dönüşümü (ISO 20022)"]),
        ("ns istio-egress", ["int-egressgw (port + kimlik)", "→ core · data · dış çıkış", "mTLS · REGISTRY_ONLY"])]
 for i, (t, ls) in enumerate(dom):
     x, w = grid(4, i % 4)
@@ -115,7 +116,8 @@ for i in range(4):
 
 # =============================== Sağ: kimlik, dış çıkış
 d.zone(R0, 1040, R1 - R0, 290, "Kimlik zone", ["keycloak / RHBK (A/B)", "realm: müşteri · partner · personel", "AD / LDAP federasyonu (personel)",
-       "MFA · step-up (acr) · brute force", "device-registry · consent-svc", "redis-session · PostgreSQL HA · HSM"], color="identity")
+       "MFA · step-up (acr) · brute force", "device-registry · consent-svc", "token exchange (RFC 8693) → iç JWT ≤ 2 dk",
+       "introspection · JWKS (internal doğrular)", "redis-session · PostgreSQL HA · HSM"], color="identity")
 d.zone(R0, 1360, R1 - R0, 340, "Dış çıkış zone (outbound DMZ)", ["outbound NGFW · hedef izin listesi", "forward proxy / SWG (TLS inceleme)",
        "kurum hatları: VPN / kiralık hat", "SMTP relay · SMS / push gateway", "giriş: yalnızca egress gateway'ler", "DNS: yalnızca iç resolver"], color="egress")
 
@@ -153,13 +155,13 @@ mg = [("Loglar · ELK", ["fluent-bit (her node)", "→ Kafka (log topic)", "→ 
       ("Metrik", ["Prometheus (agent)", "→ Thanos (uzun saklama)", "Grafana · Alertmanager", "SLO panoları"]),
       ("İz (tracing)", ["OpenTelemetry Collector", "→ Grafana Tempo", "trace ↔ log ↔ metrik", "x-request-id · traceparent"]),
       ("Mesh", ["Kiali (çoklu cluster)", "istiod (cluster başına)", "mTLS · politika görünümü", "trafik grafiği"]),
-      ("SIEM / SOAR", ["QRadar / Splunk", "k8s audit · DB audit", "korelasyon · alarm", "otomatik müdahale"]),
+      ("SIEM / SOAR", ["QRadar / Splunk", "k8s audit · DB audit", "WORM arşiv · NTP (zaman)", "korelasyon · SOAR"]),
       ("Olay yönetimi", ["Opsgenie / PagerDuty", "ITSM (ServiceNow)", "nöbet · runbook", "olay sonrası analiz"]),
       ("CI/CD", ["GitLab CI / Jenkins", "SAST · SCA · Trivy", "SBOM (Syft)", "gitleaks · SonarQube"]),
       ("Registry", ["Harbor (iç registry)", "cosign imza · SBOM", "zafiyet taraması", "upstream proxy (çıkış)"]),
       ("GitOps", ["Argo CD", "ACM (çoklu cluster)", "ortam promosyonu", "drift tespiti"]),
       ("Secret · PKI", ["Vault + HSM", "dinamik DB kimlikleri", "cert-manager · istio-csr", "Transit (imza, şifre)"]),
-      ("Erişim", ["bastion · VDI", "PAM (CyberArk)", "MFA · oturum kaydı", "just-in-time yetki"]),
+      ("Erişim", ["bastion · VDI → API :6443", "PAM (CyberArk)", "MFA · oturum kaydı", "just-in-time yetki"]),
       ("Politika · uyum", ["Kyverno / Gatekeeper", "Compliance Operator", "CIS · PCI denetimi", "imzasız image reddi"])]
 for i, (t, ls) in enumerate(mg):
     x, w = grid(6, i % 6, IX0, R1 - 25 - IX0)
@@ -175,23 +177,24 @@ for i in range(3):
     x, w = grid(3, i, L0, L1 - L0)
     d.arrow([(x + w / 2, 188), (x + w / 2, 250)])
 f5x, f5w = grid(4, 3)
-d.arrow([(f5x + f5w / 2, 465), (f5x + f5w / 2, 515), (wx + ww / 2, 515), (wx + ww / 2, 600)])
-d.arrow([(mx + mw / 2, 515), (mx + mw / 2, 600)])
-d.arrow([(f5x + f5w / 2, 515), (px + pw / 2, 515), (px + pw / 2, 600)], label="mTLS (Edge-DMZ CA)", lx=px + pw / 2 + 10, ly=545)
+d.arrow([(f5x + f5w / 2, 465), (f5x + f5w / 2, 528), (wx + ww / 2, 528), (wx + ww / 2, 600)])
+d.arrow([(mx + mw / 2, 528), (mx + mw / 2, 600)])
+d.arrow([(f5x + f5w / 2, 528), (px + pw / 2, 528), (px + pw / 2, 600)], label="mTLS (Edge-DMZ CA)", lx=f5x + f5w / 2 + 10, ly=483)
 d.arrow([(1605, 188), (1605, 250)])
 d.arrow([(1830, 188), (1830, 250)])
 d.arrow([(2055, 188), (2055, 250)])
 d.arrow([(1942, 490), (1942, 540)])
 # DMZ -> internal
-d.arrow([(wx + ww / 2, 940), (wx + ww / 2, 1100)], blue=True, label="mTLS + iç JWT", lx=wx + ww / 2 + 12, ly=980)
+d.firewall(L0, 978, 1456, 24, "INTERNAL FIREWALL · yalnızca gateway'ler → int-ingressgw :443", tx=860)
+d.arrow([(wx + ww / 2, 940), (wx + ww / 2, 1100)], blue=True, label="mTLS + iç JWT (IdP)", lx=wx + ww / 2 + 12, ly=962)
 # şube -> internal (şerit 1488), kart -> internal (şerit 1474)
 d.arrow([(1500, 380), (1488, 380), (1488, 1135), (IX0 + IW, 1135)], blue=True)
 d.vt(1481, 760, "şube: mTLS + iç JWT", 14, "#1f1f1f", 600)
 d.arrow([(1500, 870), (1474, 870), (1474, 1170), (IX0 + IW, 1170)], blue=True)
 d.vt(1467, 1060, "kart: token PAN", 14, "#1f1f1f", 600)
 # auth -> kimlik
-d.arrow([(mx + mw / 2 + 80, 940), (mx + mw / 2 + 80, 1000), (1580, 1000), (1580, 1040)], dashed=True)
-d.t(1120, 992, "auth-service → Keycloak: OIDC · JWKS", 14, 400, "#5f5f5a", layer=d.l)
+d.arrow([(mx + mw / 2 + 80, 940), (mx + mw / 2 + 80, 1031), (1580, 1031), (1580, 1040)], dashed=True)
+d.t(mx + mw / 2 + 92, 962, "auth-proxy → IdP: introspection · token exchange", 14, 400, "#5f5f5a", layer=d.l)
 # kart -> şemalar (özel hat, perimetre dışına)
 d.arrow([(R1, 690), (X0, 690)], dashed=True, label="özel hat", lx=2170, ly=680)
 # internal -> core, data, dış çıkış
@@ -247,6 +250,6 @@ for i, (k, label) in enumerate(legend_lines):
     d.t(x + 52, y + 15, label, 15)
 
 d.save(OUT, "Banka prod topolojisi (hedef): kanal → zone → cluster → domain → veri → dış çıkış",
-       "2 DC aktif-aktif · OpenShift · Istio ambient · internet kanalları ortak edge + ortak DMZ (kanal başına namespace) · şube kendi zone'u · ATM/POS → PCI · core legacy ayrı cluster · dışarıya yalnızca dış çıkış zone'undan",
+       "2 DC aktif-aktif · OpenShift · Istio ambient · ortak edge + ortak DMZ (kanal başına namespace, iş mantığı yok) · BFF internal'da · iç JWT'yi IdP üretir · şube kendi zone'u · ATM/POS → PCI · core legacy ayrı cluster · dışarıya yalnızca dış çıkış zone'undan",
        oy=OY)
 print("ok", OUT)

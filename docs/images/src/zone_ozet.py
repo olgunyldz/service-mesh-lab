@@ -36,15 +36,15 @@ d.zone(LX0, 250, LX1 - LX0, 100, "Sağlayıcı katmanı (banka dışı)", ["DDoS
 d.zone(LX0, 400, LX1 - LX0, 100, "Dış DMZ · edge", ["GSLB · F5 LB + WAF · kanal başına VIP ve sertifika"], center=True, color="edge")
 d.zone(MX0, 400, MX1 - MX0, 160, "Şube zone", ["SD-WAN hub", "branch-fw", "branch-gw (A/B)", "AD SSO · cihaz sert."], color="wan")
 d.zone(RX0, 400, RX1 - RX0, 130, "ATM · POS ağı", ["atm-fw · pos-fw · APN", "terminal sertifikası", "ISO 8583 · NDC/DDC"], color="wan")
-d.zone(LX0, 550, LX1 - LX0, 140, "İç DMZ · ocp-dmz (DC1/DC2)", ["kanal başına namespace: web · mobile · partner",
-       "auth-service (token exchange) · ratelimit · egress gw"], center=True, color="dmz")
-d.zone(RX0, 580, RX1 - RX0, 140, "Kart zone · ocp-pci", ["ATM / POS switch · HSM", "tokenization · kart DB", "ayrı cluster ve segment"], color="pci")
+d.zone(LX0, 550, LX1 - LX0, 140, "İç DMZ · ocp-dmz (DC1/DC2)", ["kanal namespace'leri · web static + token handler · iş mantığı yok",
+       "auth-proxy (IdP introspection + token exchange) · ratelimit · egress gw"], center=True, color="dmz")
+d.zone(RX0, 580, RX1 - RX0, 140, "Kart zone · ocp-pci", ["ATM / POS switch · HSM", "iso8583-adapter · tokenization", "ayrı cluster ve segment"], color="pci")
 
 d.zone(LX0, 780, MX1 - LX0, 220, "Internal zone · ocp-apps (modern mikroservisler)", title_above=True, color="internal")
-d.ns(65, 835, MX1 - 25 - 65, 60, "int-ingressgw · MUTUAL TLS · iç JWT doğrulama · deny-by-default", [], color="internal")
-d.ns(65, 912, 450, 70, "ocp-apps · DC1", ["domain namespace'leri · core-adapter"], color="internal")
-d.ns(535, 912, 450, 70, "ocp-apps · DC2", ["domain namespace'leri · core-adapter"], color="internal")
-d.zone(RX0, 780, RX1 - RX0, 150, "Kimlik zone", ["Keycloak / RHBK (A/B)", "AD · MFA · consent", "redis-session"], color="identity")
+d.ns(65, 835, MX1 - 25 - 65, 60, "int-ingressgw · MUTUAL TLS · iç JWT (IdP, ≤ 2 dk) doğrulama · deny-by-default", [], color="internal")
+d.ns(65, 912, 450, 70, "ocp-apps · DC1", ["channel-bff · domain ns · security · integration"], color="internal")
+d.ns(535, 912, 450, 70, "ocp-apps · DC2", ["channel-bff · domain ns · security · integration"], color="internal")
+d.zone(RX0, 780, RX1 - RX0, 150, "Kimlik zone", ["Keycloak / RHBK (A/B) · AD · MFA", "consent · redis-session", "iç JWT: RFC 8693 · ≤ 2 dk"], color="identity")
 
 d.zone(LX0, 1030, MX1 - LX0, 100, "Core banking zone (legacy) · ocp-core / VM", ["core-app · ledger · eod-batch · yalnızca core-adapter'dan"],
        center=True, color="core")
@@ -60,8 +60,10 @@ d.box(EX0, 1040, EX1 - EX0, 140, "Kurumlar · servisler", ["EFT/FAST · SWIFT", 
 # ---------------- Oklar
 d.arrow([(400, 188), (400, 250)], label="internet · 443", lx=412, ly=226)
 d.arrow([(400, 350), (400, 400)], label="dış firewall", lx=412, ly=370)
-d.arrow([(400, 500), (400, 550)], label="iç firewall · yalnızca 443", lx=412, ly=530)
-d.arrow([(300, 690), (300, 835)], blue=True, label="mTLS + iç JWT", lx=312, ly=730)
+d.firewall(LX0, 514, LX1 - LX0, 22, "İÇ FIREWALL (farklı üretici) · yalnızca 443", tx=420)
+d.arrow([(400, 500), (400, 550)])
+d.firewall(LX0, 700, MX1 - LX0, 22, "INTERNAL FIREWALL · yalnızca gateway'ler → :443", tx=320)
+d.arrow([(300, 690), (300, 835)], blue=True)
 d.arrow([(900, 188), (900, 400)], label="MPLS", lx=912, ly=300)
 d.arrow([(900, 560), (900, 835)], blue=True, label="mTLS + iç JWT", lx=912, ly=640)
 d.arrow([(1180, 188), (1180, 400)], label="özel hat", lx=1192, ly=300)
@@ -69,8 +71,8 @@ d.arrow([(1180, 530), (1180, 580)])
 d.arrow([(RX0, 650), (1022, 650), (1022, 880), (MX1 - 25, 880)], blue=True)
 d.vt(1015, 765, "mTLS · token PAN", 13.5, "#1f1f1f", 600)
 d.arrow([(LX1, 650), (776, 650), (776, 744), (1250, 744), (1250, 780)], dashed=True)
-d.t(1062, 758, "OIDC · JWKS (auth-service)", 13, 400, "#5f5f5a", layer=d.l)
-d.arrow([(300, 982), (300, 1030)], blue=True, label="core-adapter · mTLS", lx=312, ly=1012)
+d.t(1044, 758, "IdP: introspection · RFC 8693", 13, 400, "#5f5f5a", layer=d.l)
+d.arrow([(300, 982), (300, 1030)], blue=True, label="integration (core-adapter) · mTLS", lx=312, ly=1012)
 d.arrow([(300, 1130), (300, 1160)], label="TLS", lx=312, ly=1150)
 d.arrow([(MX1, 950), (1026, 950), (1026, 1120), (RX0, 1120)], blue=True)
 d.vt(1019, 1040, "int-egressgw", 13.5, "#1f1f1f", 600)
@@ -96,5 +98,5 @@ d.n.append(f'<line x1="800" y1="{y + 6}" x2="840" y2="{y + 6}" stroke="#6d9fe4" 
 d.t(852, y + 11, "güven sınırı · ayrıntı: topology-prod-full", 14.5)
 
 d.save(OUT, "Zone özeti: internete yalnızca edge bakar; her kanal internal'a mTLS ile girer",
-       "Aşağı indikçe güven artar · 2 DC aktif-aktif · ATM/POS internetten değil özel ağdan PCI'ya · dışarıya yalnızca dış çıkış zone'undan", oy=OY)
+       "Aşağı indikçe güven artar · DMZ'de iş mantığı yok, BFF internal'da · iç JWT'yi IdP üretir · 2 DC aktif-aktif · ATM/POS internetten değil özel ağdan PCI'ya · dışarıya yalnızca dış çıkış zone'undan", oy=OY)
 print("ok", OUT)

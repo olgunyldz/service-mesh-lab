@@ -47,6 +47,11 @@ class Diagram:
         self.l.append(f'<rect x="{lx}" y="{ly - 4}" width="{w}" height="26" rx="13" fill="{stroke}"/>')
         self.l.append(f'<text x="{lx + 11}" y="{ly + 14}" font-family="{FONT}" font-size="13.5" font-weight="700" fill="#ffffff" letter-spacing="0.6">{escape(label)}</text>')
 
+    def firewall(self, x, y, w, h, text, tx=None):
+        """Firewall katmanı: zone'lar arasında ince, çizgili bant (oklar içinden geçer)"""
+        self.z.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="5" fill="#fbe9e4" stroke="#c4634a" stroke-width="1.4"/>')
+        self.t(tx if tx is not None else x + 14, y + h / 2 + 5, text, 13.5, 600, "#8a2f1c", "start", self.z)
+
     def vt(self, x, y, s, size=14, color=SUB, weight=400):
         """Dikey (aşağıdan yukarı) etiket: şeritler boyunca"""
         self.l.append(f'<text x="{x}" y="{y}" font-family="{FONT}" font-size="{size}" font-weight="{weight}" fill="{color}" '

@@ -2,7 +2,7 @@
 <defs><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto"><path d="M0,1 L9,5 L0,9" fill="none" stroke="#b3b3ad" stroke-width="1.4"/></marker><marker id="ab" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2f7bd8"/></marker></defs>
 <rect width="1560" height="1610" fill="#ffffff"/>
 <text x="40" y="46" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="25" font-weight="600" fill="#1f1f1f">Zone özeti: internete yalnızca edge bakar; her kanal internal'a mTLS ile girer</text>
-<text x="40" y="78" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" fill="#5f5f5a">Aşağı indikçe güven artar · 2 DC aktif-aktif · ATM/POS internetten değil özel ağdan PCI'ya · dışarıya yalnızca dış çıkış zone'undan</text>
+<text x="40" y="78" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" fill="#5f5f5a">Aşağı indikçe güven artar · DMZ'de iş mantığı yok, BFF internal'da · iç JWT'yi IdP üretir · 2 DC aktif-aktif · ATM/POS internetten değil özel ağdan PCI'ya · dışarıya yalnızca dış çıkış zone'undan</text>
 <g transform="translate(0,50)">
 <path d="M 20,88 L 770,88 L 770,204 L 20,204 Z" fill="#fdecec" fill-opacity="0.55" stroke="#e3a1a1" stroke-width="3" stroke-dasharray="14 8"/>
 <path d="M 780,88 L 1330,88 L 1330,204 L 780,204 Z" fill="#eef2f7" fill-opacity="0.7" stroke="#94a3b8" stroke-width="3" stroke-dasharray="14 8"/>
@@ -29,19 +29,19 @@
 <text x="1064" y="518" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">ISO 8583 · NDC/DDC</text>
 <rect x="40" y="550" width="720" height="140" rx="12" fill="#ffe8d4" stroke="#ec9656" stroke-width="1.8" stroke-dasharray="7 6"/>
 <text x="400.0" y="586" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="#8a3d0b" text-anchor="middle">İç DMZ · ocp-dmz (DC1/DC2)</text>
-<text x="400.0" y="614" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="middle">kanal başına namespace: web · mobile · partner</text>
-<text x="400.0" y="640" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="middle">auth-service (token exchange) · ratelimit · egress gw</text>
+<text x="400.0" y="614" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="middle">kanal namespace'leri · web static + token handler · iş mantığı yok</text>
+<text x="400.0" y="640" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="middle">auth-proxy (IdP introspection + token exchange) · ratelimit · egress gw</text>
 <rect x="1040" y="580" width="280" height="140" rx="12" fill="#fde3e3" stroke="#dc6262" stroke-width="1.8" stroke-dasharray="7 6"/>
 <text x="1064" y="616" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="#8b1a1a" text-anchor="start">Kart zone · ocp-pci</text>
 <text x="1064" y="646" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">ATM / POS switch · HSM</text>
-<text x="1064" y="672" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">tokenization · kart DB</text>
+<text x="1064" y="672" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">iso8583-adapter · tokenization</text>
 <text x="1064" y="698" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">ayrı cluster ve segment</text>
 <rect x="40" y="780" width="970" height="220" rx="12" fill="#e4eefc" stroke="#6d9fe4" stroke-width="1.8" stroke-dasharray="7 6"/>
 <rect x="1040" y="780" width="280" height="150" rx="12" fill="#e1f4f1" stroke="#5db5a5" stroke-width="1.8" stroke-dasharray="7 6"/>
 <text x="1064" y="816" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="#145a4f" text-anchor="start">Kimlik zone</text>
-<text x="1064" y="846" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">Keycloak / RHBK (A/B)</text>
-<text x="1064" y="872" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">AD · MFA · consent</text>
-<text x="1064" y="898" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">redis-session</text>
+<text x="1064" y="846" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">Keycloak / RHBK (A/B) · AD · MFA</text>
+<text x="1064" y="872" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">consent · redis-session</text>
+<text x="1064" y="898" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">iç JWT: RFC 8693 · ≤ 2 dk</text>
 <rect x="40" y="1030" width="970" height="100" rx="12" fill="#e7e9fb" stroke="#8790e6" stroke-width="1.8" stroke-dasharray="7 6"/>
 <text x="525.0" y="1066" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="#2d3a8c" text-anchor="middle">Core banking zone (legacy) · ocp-core / VM</text>
 <text x="525.0" y="1094" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="middle">core-app · ledger · eod-batch · yalnızca core-adapter'dan</text>
@@ -56,6 +56,10 @@
 <rect x="40" y="1290" width="1280" height="90" rx="12" fill="#e5f4e5" stroke="#6abd6a" stroke-width="1.8" stroke-dasharray="7 6"/>
 <text x="680.0" y="1326" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="#1f5f1f" text-anchor="middle">Yönetim ve gözlem · SOC</text>
 <text x="680.0" y="1354" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="middle">ELK · Prometheus/Thanos · Grafana · Tempo · SIEM/SOAR · CI/CD · Vault · PAM · tüm zone'lardan tek yönlü log</text>
+<rect x="40" y="514" width="720" height="22" rx="5" fill="#fbe9e4" stroke="#c4634a" stroke-width="1.4"/>
+<text x="420" y="530.0" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#8a2f1c" text-anchor="start">İÇ FIREWALL (farklı üretici) · yalnızca 443</text>
+<rect x="40" y="700" width="970" height="22" rx="5" fill="#fbe9e4" stroke="#c4634a" stroke-width="1.4"/>
+<text x="320" y="716.0" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#8a2f1c" text-anchor="start">INTERNAL FIREWALL · yalnızca gateway'ler → :443</text>
 <path d="M 400,188 L 400,250" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
 <path d="M 400,350 L 400,400" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
 <path d="M 400,500 L 400,550" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
@@ -81,13 +85,13 @@
 <text x="1180.0" y="142" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="#1f1f1f" text-anchor="middle">ATM · POS</text>
 <text x="1180.0" y="167" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14.5" font-weight="400" fill="#5f5f5a" text-anchor="middle">özel ATM ağı · acquirer</text>
 <rect x="65" y="835" width="920" height="60" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
-<text x="81" y="863" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">int-ingressgw · MUTUAL TLS · iç JWT doğrulama · deny-by-default</text>
+<text x="81" y="863" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">int-ingressgw · MUTUAL TLS · iç JWT (IdP, ≤ 2 dk) doğrulama · deny-by-default</text>
 <rect x="65" y="912" width="450" height="70" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
 <text x="81" y="940" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ocp-apps · DC1</text>
-<text x="81" y="964" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">domain namespace'leri · core-adapter</text>
+<text x="81" y="964" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">channel-bff · domain ns · security · integration</text>
 <rect x="535" y="912" width="450" height="70" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
 <text x="551" y="940" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ocp-apps · DC2</text>
-<text x="551" y="964" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">domain namespace'leri · core-adapter</text>
+<text x="551" y="964" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">channel-bff · domain ns · security · integration</text>
 <rect x="1366" y="600" width="168" height="110" rx="12" fill="#ffffff" stroke="#a3a3a3" stroke-width="1.6"/>
 <text x="1386" y="634" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="600" fill="#1f1f1f" text-anchor="start">Kart şemaları</text>
 <text x="1386" y="664" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#2b2b2b" text-anchor="start">Visa · MC · TROY</text>
@@ -143,14 +147,12 @@
 <text x="64" y="816" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="#1e4b8f" text-anchor="start">Internal zone · ocp-apps (modern mikroservisler)</text>
 <text x="412" y="226" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">internet · 443</text>
 <text x="412" y="370" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">dış firewall</text>
-<text x="412" y="530" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">iç firewall · yalnızca 443</text>
-<text x="312" y="730" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="600" fill="#1f1f1f" text-anchor="start">mTLS + iç JWT</text>
 <text x="912" y="300" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">MPLS</text>
 <text x="912" y="640" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="600" fill="#1f1f1f" text-anchor="start">mTLS + iç JWT</text>
 <text x="1192" y="300" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">özel hat</text>
 <text x="1015" y="765" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#1f1f1f" text-anchor="middle" transform="rotate(-90 1015 765)">mTLS · token PAN</text>
-<text x="1062" y="758" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#5f5f5a" text-anchor="start">OIDC · JWKS (auth-service)</text>
-<text x="312" y="1012" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="600" fill="#1f1f1f" text-anchor="start">core-adapter · mTLS</text>
+<text x="1044" y="758" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#5f5f5a" text-anchor="start">IdP: introspection · RFC 8693</text>
+<text x="312" y="1012" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="600" fill="#1f1f1f" text-anchor="start">integration (core-adapter) · mTLS</text>
 <text x="312" y="1150" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">TLS</text>
 <text x="1019" y="1040" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#1f1f1f" text-anchor="middle" transform="rotate(-90 1019 1040)">int-egressgw</text>
 </g>
