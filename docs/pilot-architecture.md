@@ -98,10 +98,16 @@ flowchart TB
     subgraph A["kind-cluster-a"]
         ig["istio-ingressgateway<br/>.201.10"]
         bff["channel-bff/web-bff"]
+        mbff["channel-bff/mobile-bff"]
+        txs["security/tx-signing<br/>AÇIK NOKTA: yok"]:::open
         api["api-a (podinfo)"]
         acc["account-api"]
         aeg["istio-egressgateway"]
         ig --> bff
+        ig --> mbff
+        mbff --> api
+        mbff --> acc
+        mbff -.->|"imza doğrulama yok"| txs
         ig --> api
         ig --> acc
         bff --> api
@@ -110,9 +116,11 @@ flowchart TB
     subgraph M["kind-mgmt"]
         mig["istio-ingressgateway<br/>.203.10"]
         kc["iam/keycloak"]
+        dr["iam/device-registry"]
         db["data/postgres · data/valkey"]
         obs["istio-system: Prometheus,<br/>Grafana, Kiali"]
         mig --> kc
+        mig --> dr
         mig --> db
     end
     user -->|"HTTPS :8443"| lb
@@ -123,9 +131,10 @@ flowchart TB
     acc ==> aeg
     aeg ==>|"mTLS"| mig
     aeg -->|"HTTP"| net(["httpbin.org"])
+    classDef open stroke:#c00,stroke-width:2px,stroke-dasharray:5 5,color:#c00
 ```
 
-Kalın oklar mTLS'tir. Cluster'lar birbirine yalnızca gateway'lerin LoadBalancer IP'leri (MetalLB) üzerinden ulaşır.
+Kalın oklar mTLS'tir. Kırmızı kesikli kutu **açık noktadır**: hedefte olan ama pilotta bilinçli olarak atlanan bileşen. Cluster'lar birbirine yalnızca gateway'lerin LoadBalancer IP'leri (MetalLB) üzerinden ulaşır.
 
 | Katman | Pilottaki bileşen | Pilottaki ad | Hedefteki karşılığı |
 |--------|-------------------|--------------|---------------------|
@@ -146,6 +155,7 @@ Kalın oklar mTLS'tir. Cluster'lar birbirine yalnızca gateway'lerin LoadBalance
 | Internal | Ingress gateway | `istio-ingress/istio-ingressgateway` | `int-ingressgw` |
 | Internal | Kanal BFF'leri | `channel-bff/web-bff`, `channel-bff/mobile-bff` (Go) | `channel-bff` (`mobile-bff`, `web-bff`, `branch-bff`) |
 | Kimlik | Cihaz kayıtları | `iam/device-registry` (Go, PostgreSQL `devices`) | `device-registry` |
+| Internal | İşlem imzası doğrulama | **Yok — açık nokta** (`09d` atlandı) | `security/tx-signing-svc` |
 | Internal | Domain servisleri | `account-api/account-api` (Go, hesaplar), `api-a/api-a` (podinfo, genel bilgi uçları) | domain namespace'leri (`hesap`, `odeme` …) |
 | Internal | Egress gateway | `istio-egress/istio-egressgateway` | `int-egressgw` |
 | Kimlik | IdP | `iam/keycloak` (realm'ler: `customers`, `partners`, `staff`) | `keycloak-a/b` (RHBK) |
@@ -395,7 +405,7 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 | CH-05 | ➖ | – | Uygulama tarafı |
 | CH-06 | ✅ | Tarayıcıda yalnızca `__Host-sid`; giriş boyunca yanıtlarda token yok (test) | – |
 | CH-07 | 🟡 | İkinci faktör (TOTP) seviye 2'de; seviye 1 girişte yalnızca parola | Pilotta ikinci faktör transfer için step-up'ta isteniyor, girişte değil; mobil push onayı yok |
-| CH-08 | 🟡 | Transfer seviye 2 (son 5 dk) ister; RFC 9470 step-up (test) | İşlem imzası / dinamik bağlama (seviye 3) yok (K-Kapsam) |
+| CH-08 | 🟡 | Transfer seviye 2 (son 5 dk) ister; RFC 9470 step-up (test) | **Açık nokta (atlandı):** işlem imzası / dinamik bağlama yok (seviye 3). Çalınmış oturumla ya da araya girip tutar / alıcı değiştirerek transfer engellenmiyor |
 | CH-09 | ✅ | Ayrı host, ayrı gateway, ayrı VIP; domain fronting reddi (test) | – |
 | CH-10 | 🟡 | mTLS (Partner CA) + client **secret**; token sertifikaya bağlı | `private_key_jwt` yerine client secret (K-Karar) |
 | CH-11 | 🟡 | Şube ağı → branch-fw → branch-gateway | MPLS ve AD / Kerberos SSO yok; personel direct grant ile (K-Ürün) |
@@ -453,7 +463,7 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 | IAM-05 | 🟡 | IdP üretiyor (exchange), 2 dk, `aud=internal-apis`, `sub`, `channel`, `sid`, `scope`, `partner_id`, `branch_id` | `acr` yerine `loa_map` (K-IdP); `device_id` yok; 3 issuer (Keycloak exchange realm içi, K-IdP) |
 | IAM-06 | ✅ | Idle 15 dk, absolute 8 saat; logout IdP oturumunu kapatıyor (test) | Süreler örnek |
 | IAM-07 | 🟡 | IdP'de kapatılan oturum en geç 30 sn'de reddediliyor (test) | Hedef ≤ 5 sn: oturum olaylarıyla önbellek temizliği yok |
-| IAM-08 | 🟡 | Seviye 1 (parola), seviye 2 (OTP); transfer seviye 2 | Seviye 3 yok; karar waypoint'te değil serviste (K-IdP) |
+| IAM-08 | 🟡 | Seviye 1 (parola), seviye 2 (OTP); transfer seviye 2 | Seviye 3 (işlem imzası) yok, açık nokta (`09d` atlandı); karar waypoint'te değil serviste (K-IdP) |
 | IAM-09 | 🟡 | Müşteri, partner ve personel ayrı realm'lerde | AD / Entra federasyonu yok |
 | IAM-10 | ❌ | – | `09f · consent` |
 | IAM-11 | ✅ | Brute force koruması (müşteri 5, personel 3 deneme) | SIEM'e olay yok |
@@ -566,7 +576,7 @@ Pilotta ortaya çıkan ve hedef dokümanı etkileyebilecek bulgular:
 | GitOps (INT-01) | `16 · gitops` |
 | A/B cluster (INT, GW-16) | `17 · cluster-b` |
 | ~~Mobil cihaz bağlama, DPoP, attestation, `mobile-bff`~~ | ✅ `09c · mobile-binding` |
-| Seviye 3 işlem imzası, dinamik bağlama (CH-08, IAM-08) | `09d · tx-signing` |
+| Seviye 3 işlem imzası, dinamik bağlama (CH-08, IAM-08) | **Açık nokta:** `09d · tx-signing` atlandı. Mimaride yeri belli (`tx-signing-svc`, cihaz anahtarı device-registry'de), eşik ve onay kuralları iş kararı |
 | `branch-bff`, dört göz onayı, mesai saati (CH-13) | `09e · branch-controls` |
 | Henüz yol haritasında olmayanlar | OCSP/CRL, dış çıkış zone'u, kullanıcı bazlı kota, refresh token tekrar kullanım testi, partner `private_key_jwt` + PAR (lab kararı: client secret) |
 
@@ -574,5 +584,6 @@ Pilotta ortaya çıkan ve hedef dokümanı etkileyebilecek bulgular:
 
 | Tarih | Değişiklik |
 | --- | --- |
+| Nov 1, 2026 (3) | `09d · tx-signing` atlandı: işlem imzası açık nokta olarak topolojide, isimlendirmede, CH-08 / IAM-08'de; topoloji diyagramına `mobile-bff`, `device-registry` eklendi |
 | Nov 1, 2026 (2) | `09c · mobile-binding`: CH-01..04, GW-04, GW-06, IAM-04, INT-07, AC-04 güncellendi; mobil istek yolu; bulgu 10-11 |
 | Nov 1, 2026 | İlk sürüm: pilot (`service-mesh-lab`, `09b · l7-policies` sonu) hedef dokümanla aynı yapıda; zone eşlemesi, isimlendirme, kanal istek yolları, sequence diyagramları, gereksinim bazında durum ve fark nedenleri, kabul kriterleri, pilot bulguları |
