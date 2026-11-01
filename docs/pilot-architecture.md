@@ -99,6 +99,7 @@ flowchart TB
         ig["istio-ingressgateway<br/>.201.10"]
         bff["channel-bff/web-bff"]
         mbff["channel-bff/mobile-bff"]
+        bbff["channel-bff/branch-bff<br/>mesai saati"]
         txs["security/tx-signing<br/>AÇIK NOKTA: yok"]:::open
         api["api-a (podinfo)"]
         acc["account-api"]
@@ -108,6 +109,9 @@ flowchart TB
         mbff --> api
         mbff --> acc
         mbff -.->|"imza doğrulama yok"| txs
+        ig --> bbff
+        bbff --> api
+        bbff --> acc
         ig --> api
         ig --> acc
         bff --> api
@@ -153,7 +157,7 @@ Kalın oklar mTLS'tir. Kırmızı kesikli kutu **açık noktadır**: hedefte ola
 | DMZ | Global kota | `ratelimit/ratelimit` (Envoy ratelimit) | gateway ürününün kotası |
 | DMZ | Egress gateway | `istio-egress/dmz-egressgateway` | `dmz-egressgw` |
 | Internal | Ingress gateway | `istio-ingress/istio-ingressgateway` | `int-ingressgw` |
-| Internal | Kanal BFF'leri | `channel-bff/web-bff`, `channel-bff/mobile-bff` (Go) | `channel-bff` (`mobile-bff`, `web-bff`, `branch-bff`) |
+| Internal | Kanal BFF'leri | `channel-bff/web-bff`, `channel-bff/mobile-bff`, `channel-bff/branch-bff` (Go) | `channel-bff` (`mobile-bff`, `web-bff`, `branch-bff`) |
 | Kimlik | Cihaz kayıtları | `iam/device-registry` (Go, PostgreSQL `devices`) | `device-registry` |
 | Internal | İşlem imzası doğrulama | **Yok — açık nokta** (`09d` atlandı) | `security/tx-signing-svc` |
 | Internal | Domain servisleri | `account-api/account-api` (Go, hesaplar), `api-a/api-a` (podinfo, genel bilgi uçları) | domain namespace'leri (`hesap`, `odeme` …) |
@@ -212,8 +216,9 @@ Hedefteki tablolarla aynı biçimde. Ortak işler (log, metrik) tekrar yazılmad
 | 1 | Şube ağı | `branch-terminal` (Docker, `branch-net`) | Cihaz sertifikası (Branch CA) | NAC, EDR, TPM yok (K-Ürün) |
 | 2 | Şube ağı | `branch-fw` | Yalnızca TCP 443 → `branch-gateway` VIP; şube ağından DMZ'nin diğer kapılarına yol yok | – |
 | 3 | DMZ (hedefte şube zone) | `branch-gateway` | Cihaz sertifikasıyla mTLS (XFCC, `SANITIZE_SET`); `/branch/v1/*`; personel token'ı için `/sso/realms/staff/*` | Şube zone'unda değil DMZ'de (K-Kaynak) |
-| 4 | DMZ | `auth-service` | staff realm'i, `branch-teller`; iç JWT'deki `branch_id` (IdP'deki şube) = cihaz sertifikası | Kerberos / AD SSO yok, personel direct grant ile (lab); mesai saati kontrolü yok |
-| 5 | Internal | `account-api` | Personel tüm hesapları görür (her erişim loglanır); gişe rolüyle transfer | Dört göz onayı yok (K-Kapsam) |
+| 4 | DMZ | `auth-service` | staff realm'i, `branch-teller`; rol `teller` / `operations` / `supervisor`; iç JWT'deki `branch_id` (IdP'deki şube) = cihaz sertifikası | Kerberos / AD SSO yok, personel direct grant ile (lab) |
+| 5 | Internal | `branch-bff` | Tüm şube trafiği; mesai saati (`BRANCH_HOURS`, dışında 403); domain servisleri şube kanalını yalnızca bu kimlikten kabul eder | Mesai saati hedefte şube gateway'inde, pilotta internal BFF'te (K-Kaynak: şube gateway'i DMZ'de, iş kuralı DMZ'ye konmadı); lab'de tüm gün açık |
+| 6 | Internal | `account-api` | Personel yalnızca kendi şubesinin hesapları (her erişim loglanır); limit üstü transfer onaya düşer; onay: `supervisor`, aynı şube, talep eden ≠ onaylayan (veritabanında da CHECK) | Onay için yetkilinin ek doğrulaması (OTP / imza) yok |
 
 ## Login ve servis akışları (pilot, sequence diyagramları)
 
@@ -370,7 +375,9 @@ sequenceDiagram
         participant EG as dmz-egressgateway
     end
     participant KC as keycloak (staff)
+    participant BFF as branch-bff (cluster-a)
     participant ACC as account-api (cluster-a)
+    actor Y as yetkili01 (aynı şube)
 
     T->>FW: TLS · cihaz sertifikası (sube-0001)
     FW->>BG: TCP geçirir (şube ağından yalnızca bu kapı)
@@ -385,9 +392,15 @@ sequenceDiagram
     KC-->>AS: iç JWT (channel=branch, roles=teller, branch_id=sube-0001)
     Note over AS: branch_id = cihaz sertifikası CN'i mi?
     BG->>EG: iç JWT
-    EG->>ACC: waypoint: transfers:write + channel=branch + rol teller
-    ACC-->>T: 202 (personel erişimi loglanır)
-    Note over T,ACC: Hedefte limit üstü işlemde dört göz onayı var, pilotta yok
+    EG->>BFF: internal ingress → branch-bff (mesai saati)
+    BFF->>ACC: waypoint: branch-bff kimliği + transfers:write + channel=branch + rol
+    ACC->>ACC: hesap bu şubenin mi? tutar > limit (10.000)?
+    ACC-->>T: 202 pending_approval (limit üstü) / accepted (limit altı)
+    Y->>BG: POST /branch/v1/approvals/{id}/approve (cihaz sertifikası + token)
+    BG->>BFF: iç JWT (roles=supervisor, branch_id=sube-0001)
+    BFF->>ACC: waypoint: yalnızca supervisor
+    ACC->>ACC: aynı şube · talep eden ≠ onaylayan · pending · süresi geçmemiş
+    ACC-->>Y: 200 approved (talep eden ve onaylayan loglanır)
 ```
 
 ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pci-zone`).
@@ -410,7 +423,7 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 | CH-10 | 🟡 | mTLS (Partner CA) + client **secret**; token sertifikaya bağlı | `private_key_jwt` yerine client secret (K-Karar) |
 | CH-11 | 🟡 | Şube ağı → branch-fw → branch-gateway | MPLS ve AD / Kerberos SSO yok; personel direct grant ile (K-Ürün) |
 | CH-12 | ✅ | Cihaz sertifikası zorunlu; sertifikasız veya başka CA reddediliyor (test) | – |
-| CH-13 | 🟡 | Personel rolü (`teller`) ve `branch_id` iç JWT'de | Dört göz onayı yok (K-Kapsam) |
+| CH-13 | ✅ | Roller (`teller`, `operations`, `supervisor`) ve `branch_id` iç JWT'de; personel kendi şubesiyle sınırlı; limit üstü işlemde dört göz onayı (aynı şube, talep eden ≠ onaylayan; test); mesai saati (test) | Limit ve mesai lab varsayılanı (iş kararı); onaylayanın ek doğrulaması yok |
 | CH-14 / CH-15 | ➖ | – | ATM ve POS pilot kapsamı dışında |
 | CH-16 | ✅ | `channel` IdP'nin imzaladığı claim; sahte `x-channel` eziliyor (test); waypoint'te kanal kuralları | – |
 
@@ -479,7 +492,7 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 | INT-04 | ✅ | Internal ingress yalnızca `dmz-egressgateway` kimliği (test: DMZ ingress'ten doğrudan gidiş 403) | Şube trafiği de DMZ egress'ten geliyor (şube gateway'i DMZ'de) |
 | INT-05 | ✅ | RequestAuthentication (3 realm issuer'ı), JWT'siz istek reddi (`requestPrincipals`) | – |
 | INT-06 | 🟡 | Deny-by-default; servis kimliği + `channel` + `scope` (+ rol) | `acr` waypoint'te değil (K-IdP) |
-| INT-07 | 🟡 | `web-bff`, `mobile-bff` | `branch-bff` yok (`09e`) |
+| INT-07 | ✅ | `web-bff`, `mobile-bff`, `branch-bff`; domain servisleri her kanalı yalnızca kendi BFF'inden kabul eder (partner hariç: BFF yok) | – |
 | INT-08 | ✅ | STRICT mTLS; iç JWT her waypoint'te yeniden doğrulanıyor | – |
 | INT-09 | ❌ | – | Örnek transfer ucu gerçek işlem yapmıyor |
 | INT-10 / 11 | ❌ | Tek PostgreSQL | Replika, Kafka yok (K-Kaynak) |
@@ -577,13 +590,14 @@ Pilotta ortaya çıkan ve hedef dokümanı etkileyebilecek bulgular:
 | A/B cluster (INT, GW-16) | `17 · cluster-b` |
 | ~~Mobil cihaz bağlama, DPoP, attestation, `mobile-bff`~~ | ✅ `09c · mobile-binding` |
 | Seviye 3 işlem imzası, dinamik bağlama (CH-08, IAM-08) | **Açık nokta:** `09d · tx-signing` atlandı. Mimaride yeri belli (`tx-signing-svc`, cihaz anahtarı device-registry'de), eşik ve onay kuralları iş kararı |
-| `branch-bff`, dört göz onayı, mesai saati (CH-13) | `09e · branch-controls` |
+| ~~`branch-bff`, dört göz onayı, mesai saati (CH-13)~~ | ✅ `09e · branch-controls` |
 | Henüz yol haritasında olmayanlar | OCSP/CRL, dış çıkış zone'u, kullanıcı bazlı kota, refresh token tekrar kullanım testi, partner `private_key_jwt` + PAR (lab kararı: client secret) |
 
 ## Değişiklik geçmişi
 
 | Tarih | Değişiklik |
 | --- | --- |
+| Nov 1, 2026 (4) | `09e · branch-controls`: CH-13, INT-07 güncellendi; şube istek yolu ve sequence diyagramı (branch-bff, dört göz); topolojiye `branch-bff` |
 | Nov 1, 2026 (3) | `09d · tx-signing` atlandı: işlem imzası açık nokta olarak topolojide, isimlendirmede, CH-08 / IAM-08'de; topoloji diyagramına `mobile-bff`, `device-registry` eklendi |
 | Nov 1, 2026 (2) | `09c · mobile-binding`: CH-01..04, GW-04, GW-06, IAM-04, INT-07, AC-04 güncellendi; mobil istek yolu; bulgu 10-11 |
 | Nov 1, 2026 | İlk sürüm: pilot (`service-mesh-lab`, `09b · l7-policies` sonu) hedef dokümanla aynı yapıda; zone eşlemesi, isimlendirme, kanal istek yolları, sequence diyagramları, gereksinim bazında durum ve fark nedenleri, kabul kriterleri, pilot bulguları |

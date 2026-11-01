@@ -59,7 +59,7 @@ var rules = map[string]channelRule{
 	"web":     {realm: "customers", exchange: "auth-web", clients: []string{"web-app"}, roles: []string{"customer"}},
 	"mobile":  {realm: "customers", exchange: "auth-mobile", clients: []string{"mobile-app"}, roles: []string{"customer"}},
 	"partner": {realm: "partners", exchange: "auth-partner", roles: []string{"partner"}},
-	"branch":  {realm: "staff", exchange: "auth-branch", clients: []string{"branch-teller"}, roles: []string{"teller", "operations"}},
+	"branch":  {realm: "staff", exchange: "auth-branch", clients: []string{"branch-teller"}, roles: []string{"teller", "operations", "supervisor"}},
 }
 
 const (
