@@ -1,5 +1,6 @@
-# Web kanalı: dmz-ingressgateway, edge-waf'tan gelen www.apps.example.local trafiğini web-bff'e verir.
-# Internal'a kendisi çıkamaz (dmz-egressgateway yalnızca kanal gateway'lerini ve BFF'in waypoint'ini kabul eder).
+# Web kanalı: dmz-ingressgateway, edge-waf'tan gelen www.apps.example.local trafiğini web-token-handler'a verir (09a).
+# Internal'a kendisi çıkamaz (dmz-egressgateway yalnızca kanal gateway'lerini ve token handler'ın waypoint'ini kabul eder).
+# Web'de ext_authz gateway'de değil token handler'da: tarayıcı token taşımaz, cookie'yi oturuma o çevirir.
 apiVersion: networking.istio.io/v1
 kind: Gateway
 metadata:
@@ -40,20 +41,21 @@ spec:
             x-channel: web
           remove:
             - x-partner-id
-            - authorization   # dış access token DMZ'de kalır; içeri yalnızca x-user-jwt (08)
+            - x-user-jwt
+            - authorization   # web'de bearer token kabul edilmez; kimlik yalnızca oturum cookie'si (09a)
       # Tarayıcı kanalı: yalnızca kendi origin'imizden gelen çapraz istekler (lab'de 8443 portuyla da)
       corsPolicy:
         allowOrigins:
           - exact: https://www.apps.example.local
           - exact: https://www.apps.example.local:8443
         allowMethods: [GET, POST]
-        allowHeaders: [content-type, authorization, x-request-id]
+        allowHeaders: [content-type, x-csrf-token, x-request-id]
         exposeHeaders: [x-request-id]
         allowCredentials: true
         maxAge: 1h
       route:
         - destination:
-            host: web-bff.web-bff.svc.cluster.local
+            host: web-token-handler.edge-web.svc.cluster.local
             port:
               number: 8080
       timeout: 10s

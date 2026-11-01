@@ -1,6 +1,7 @@
-# auth-service (services/auth-service): kanal gateway'lerinin ext_authz servisi.
-#   kanal gateway'i --ext_authz (HTTP)--> auth-service --> [keycloak Service, waypoint] --> dmz-egressgateway --> mgmt Keycloak (JWKS)
-# Dış access token'ı doğrular, kanal kurallarını uygular, iç JWT'yi (RS256, 5 dk) imzalar.
+# auth-service (services/auth-service): kanal gateway'lerinin ext_authz servisi (dokümandaki auth-proxy).
+#   kanal gateway'i / web-token-handler --ext_authz (HTTP)--> auth-service --> [keycloak Service, waypoint]
+#   --> dmz-egressgateway --> mgmt Keycloak (introspection + RFC 8693 token exchange)
+# Dış token'ı IdP'de introspect eder, kanal kurallarını uygular, iç JWT'yi Keycloak'tan alır (09a). İmza anahtarı yok.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -29,25 +30,21 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
-        fsGroup: 65532   # secret dosyası grup okunabilir olsun (anahtar 0440, root:65532)
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: auth
-          image: lab-registry:5000/lab/auth-service:0.1.0   # build + imza: 03b-publish-images.sh
+          image: lab-registry:5000/lab/auth-service:0.2.0   # build + imza: 03b-publish-images.sh
           env:
-            - name: ISSUER_BASE   # dış token'ların issuer öneki (Keycloak KC_HOSTNAME)
+            - name: ISSUER_BASE   # token'ların issuer öneki (Keycloak KC_HOSTNAME)
               value: https://sso.apps.example.local:8443/realms/
-            - name: JWKS_BASE     # Keycloak JWKS'inin mesh içi adresi (aşağıdaki seçicisiz Service)
+            - name: IDP_BASE      # Keycloak'ın mesh içi adresi (aşağıdaki seçicisiz Service)
               value: http://keycloak.auth.svc.cluster.local/realms/
-            - name: INTERNAL_ISSUER
-              value: auth.dmz.corp.mesh
             - name: INTERNAL_AUDIENCE
               value: internal-apis
-            - name: SIGNING_KID
-              value: internal-1
-            - name: SIGNING_KEY
-              value: /keys/signing.key
+          envFrom:
+            - secretRef:
+                name: auth-exchange-clients   # AUTH_{WEB,MOBILE,PARTNER,BRANCH}_SECRET (05b-create-data-secrets.sh)
           ports:
             - name: http
               containerPort: 8080
@@ -66,15 +63,6 @@ spec:
               memory: 16Mi
             limits:
               memory: 64Mi
-          volumeMounts:
-            - name: signing-key
-              mountPath: /keys
-              readOnly: true
-      volumes:
-        - name: signing-key
-          secret:
-            secretName: auth-signing-key   # 05b-create-data-secrets.sh (certs/auth/signing.key)
-            defaultMode: 0440
 ---
 apiVersion: v1
 kind: Service
@@ -90,7 +78,7 @@ spec:
     - name: http
       port: 8080
 ---
-# --- Çıkış: Keycloak JWKS (mgmt) ---
+# --- Çıkış: Keycloak introspection ve token exchange (mgmt) ---
 apiVersion: v1
 kind: Service
 metadata:
@@ -160,7 +148,8 @@ metadata:
   namespace: auth
 spec: {}
 ---
-# auth-service'e yalnızca dört kanal gateway'i (ztunnel, L4)
+# auth-service'e yalnızca kanal gateway'leri ve web'de web-token-handler (ztunnel, L4). x-auth-channel'a bu yüzden
+# güvenilir: header'ı yalnızca bu kimlikler gönderebilir.
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -175,7 +164,7 @@ spec:
     - from:
         - source:
             principals:
-              - corp.mesh/ns/istio-ingress/sa/dmz-ingressgateway
+              - corp.mesh/ns/edge-web/sa/web-token-handler
               - corp.mesh/ns/istio-mobile/sa/mobile-gateway
               - corp.mesh/ns/istio-partner/sa/partner-gateway
               - corp.mesh/ns/istio-branch/sa/branch-gateway
@@ -183,7 +172,7 @@ spec:
         - operation:
             ports: ["8080"]
 ---
-# Keycloak çıkışını yalnızca auth-service, yalnızca JWKS okuması için kullanabilir (waypoint, L7)
+# Keycloak çıkışını yalnızca auth-service, yalnızca introspection ve token uçları için kullanabilir (waypoint, L7)
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -202,5 +191,7 @@ spec:
               - corp.mesh/ns/auth/sa/auth-service
       to:
         - operation:
-            methods: ["GET"]
-            paths: ["/realms/{*}/protocol/openid-connect/certs"]
+            methods: ["POST"]
+            paths: ["/realms/customers/protocol/openid-connect/token", "/realms/customers/protocol/openid-connect/token/introspect",
+                    "/realms/partners/protocol/openid-connect/token", "/realms/partners/protocol/openid-connect/token/introspect",
+                    "/realms/staff/protocol/openid-connect/token", "/realms/staff/protocol/openid-connect/token/introspect"]

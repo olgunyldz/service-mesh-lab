@@ -14,6 +14,10 @@ metadata:
   namespace: iam
 spec:
   replicas: 1   # gerçekte en az 2 (dağıtık önbellek, KC_CACHE=ispn)
+  # Tek replikada rolling update kilitleniyordu: yeni pod eskisini cluster üyesi olarak (JDBC ping) görüp ona ulaşmayı
+  # bekliyor, pod'lar arası Infinispan trafiği (7800) mesh politikasında kapalı, readiness hiç UP olmuyor. (09a)
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: keycloak

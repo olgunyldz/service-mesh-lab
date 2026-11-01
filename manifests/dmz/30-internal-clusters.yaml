@@ -1,5 +1,6 @@
 # DMZ egress gateway: internal'a giden tek kapı. __NET_PREFIX__ scriptte doldurulur.
-#   web-bff waypoint / mobile-gateway / partner-gateway --mTLS--> dmz-egressgateway --mTLS--> cluster-a ingress gw (LB IP)
+#   web-token-handler waypoint / mobile-gateway / partner-gateway / branch-gateway --mTLS--> dmz-egressgateway
+#   --mTLS--> cluster-a ingress gw (LB IP)
 apiVersion: networking.istio.io/v1
 kind: Gateway
 metadata:
@@ -21,7 +22,7 @@ spec:
         - "*"
 ---
 # Egress gateway'e (internal'a tek kapı) yalnızca kanalların arka uçları girebilir:
-#   web     -> web-bff'in waypoint'i (web gateway'in kendisi değil: web trafiği BFF'ten geçmek zorunda)
+#   web     -> web-token-handler'ın waypoint'i (web gateway'in kendisi değil: web trafiği token handler'dan geçmek zorunda)
 #   mobile  -> mobile-gateway
 #   partner -> partner-gateway
 #   branch  -> branch-gateway
@@ -39,7 +40,7 @@ spec:
     - from:
         - source:
             principals:
-              - corp.mesh/ns/web-bff/sa/waypoint
+              - corp.mesh/ns/edge-web/sa/waypoint
               - corp.mesh/ns/istio-mobile/sa/mobile-gateway
               - corp.mesh/ns/istio-partner/sa/partner-gateway
               - corp.mesh/ns/istio-branch/sa/branch-gateway
@@ -97,6 +98,7 @@ metadata:
 spec:
   hosts:
     - api-a.apps.example.local
+    - web-bff.apps.example.local   # web kanalının BFF'i (internal, 09a); token handler'dan gelir
   gateways:
     - zone-exit
   http:
@@ -107,8 +109,9 @@ spec:
               number: 443
 # cluster-b'ye çıkış: cluster-b/31-cluster-b-gateway.yaml (yalnızca cluster-b aktifken uygulanır)
 ---
-# --- Kimlik çıkışı (08 · token-exchange): SSO istekleri ve auth-service'in JWKS çağrısı -> mgmt Keycloak ---
-#   web gateway (müşteri/partner login) · branch-gateway (personel login) · auth-service waypoint (JWKS)
+# --- Kimlik çıkışı (08, 09a): SSO istekleri, auth-service ve web-token-handler -> mgmt Keycloak ---
+#   web gateway (müşteri/partner login) · branch-gateway (personel login) · auth waypoint (introspection, exchange)
+#   · edge-web waypoint (code değişimi, refresh, logout)
 #   --mTLS--> dmz-egressgateway --mTLS (SNI keycloak.mgmt.internal)--> mgmt ingress gw --> iam/keycloak
 apiVersion: networking.istio.io/v1
 kind: ServiceEntry
@@ -193,11 +196,23 @@ spec:
             principals:
               - corp.mesh/ns/auth/sa/waypoint
       to:
-        - operation:
+        - operation:   # introspection + token exchange (09a)
             hosts: ["sso.apps.example.local"]
             ports: ["443"]
-            methods: ["GET"]
-            paths: ["/realms/{*}/protocol/openid-connect/certs"]
+            methods: ["POST"]
+            paths: ["/realms/customers/protocol/openid-connect/token", "/realms/customers/protocol/openid-connect/token/introspect",
+                    "/realms/partners/protocol/openid-connect/token", "/realms/partners/protocol/openid-connect/token/introspect",
+                    "/realms/staff/protocol/openid-connect/token", "/realms/staff/protocol/openid-connect/token/introspect"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/edge-web/sa/waypoint
+      to:
+        - operation:   # web-token-handler: code değişimi, refresh, logout (09a)
+            hosts: ["sso.apps.example.local"]
+            ports: ["443"]
+            methods: ["POST"]
+            paths: ["/realms/customers/protocol/openid-connect/token", "/realms/customers/protocol/openid-connect/logout"]
 ---
 # --- Veri çıkışı (07 · data): global rate limit sayaçları -> mgmt Valkey ---
 #   ratelimit waypoint --mTLS--> dmz-egressgateway :16379 --mTLS (SNI valkey.mgmt.internal)--> mgmt :6379
@@ -265,7 +280,8 @@ spec:
             port:
               number: 6379
 ---
-# Veri çıkışına yalnızca ratelimit'in waypoint'i, yalnızca Valkey portundan. DMZ'den PostgreSQL'e çıkış yok.
+# Veri çıkışına yalnızca ratelimit'in ve web-token-handler'ın (oturum deposu, 09a) waypoint'i, yalnızca Valkey portundan.
+# DMZ'den PostgreSQL'e çıkış yok. Valkey ACL'i ayrıca anahtar önekini sınırlar (rl:*, sess:*).
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -281,6 +297,7 @@ spec:
         - source:
             principals:
               - corp.mesh/ns/ratelimit/sa/waypoint
+              - corp.mesh/ns/edge-web/sa/waypoint
       to:
         - operation:
             ports: ["16379"]

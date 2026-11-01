@@ -16,6 +16,7 @@ spec:
         mode: ISTIO_MUTUAL
       hosts:
         - api-a.apps.example.local
+        - web-bff.apps.example.local   # web kanalının BFF'i (09a): DMZ token handler -> egress -> buraya
 ---
 apiVersion: networking.istio.io/v1
 kind: VirtualService
@@ -43,8 +44,26 @@ spec:
             port:
               number: 80
 ---
-# Zone geçişinde tek kapı: yalnızca DMZ egress gateway kimliği girebilir, ve (08'den itibaren) yalnızca
-# DMZ'nin imzaladığı geçerli bir iç JWT ile (requestPrincipals: 45-request-authentication.yaml).
+# Web kanalı (09a): BFF internal'da. Aynı SNI (api-a.apps.example.local) ile gelir, Host'a göre ayrılır.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: web-bff
+  namespace: istio-ingress
+spec:
+  hosts:
+    - web-bff.apps.example.local
+  gateways:
+    - internal-gateway
+  http:
+    - route:
+        - destination:
+            host: web-bff.channel-bff.svc.cluster.local
+            port:
+              number: 8080
+---
+# Zone geçişinde tek kapı: yalnızca DMZ egress gateway kimliği girebilir, ve yalnızca Keycloak'ın (realm başına issuer)
+# imzaladığı geçerli bir iç JWT ile (requestPrincipals: 45-request-authentication.yaml; 09a).
 # dmz-ingressgateway artık doğrudan kabul edilmez. cluster-b aktifken onun egress'i de
 # cluster-b/35-allow-cluster-b-egress.yaml ile eklenir (ALLOW politikaları toplanır).
 apiVersion: security.istio.io/v1
@@ -62,4 +81,6 @@ spec:
         - source:
             principals:
               - corp.mesh/ns/istio-egress/sa/dmz-egressgateway
-            requestPrincipals: ["auth.dmz.corp.mesh/*"]
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
+                                "https://sso.apps.example.local:8443/realms/partners/*",
+                                "https://sso.apps.example.local:8443/realms/staff/*"]

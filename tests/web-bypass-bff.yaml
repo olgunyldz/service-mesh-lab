@@ -1,6 +1,6 @@
-# 08-verify.sh'in "web trafiği BFF'ten geçmek zorunda" negatif testi için geçici rota (test sonunda silinir).
-# Web gateway'i (dmz-ingressgateway), BFF'i atlayıp dmz-egressgateway'e DOĞRUDAN gönderir.
-# Egress gateway yalnızca web-bff waypoint'ini, mobile-gateway'i ve partner-gateway'i kabul ettiği için 403 (RBAC) beklenir.
+# 08-verify.sh'in "web trafiği token handler'dan geçmek zorunda" negatif testi için geçici rota (test sonunda silinir).
+# Web gateway'i (dmz-ingressgateway), token handler'ı atlayıp dmz-egressgateway'e DOĞRUDAN gönderir.
+# Egress gateway yalnızca token handler'ın waypoint'ini ve kanal gateway'lerini kabul ettiği için 403 (RBAC) beklenir.
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:

@@ -105,9 +105,11 @@ EOF
 
 # Manifest içindeki yer tutucuları doldurup uygular:
 #   __NET_PREFIX__   -> kind ağının ilk iki okteti
-#   __INTERNAL_JWKS__ -> iç JWT'yi doğrulayan açık anahtar (certs/auth/jwks.json; 08 · token-exchange)
+#   __IDP_JWKS_<realm>__ -> iç JWT'yi doğrulayan realm açık anahtarı (certs/idp/<realm>.jwks.json; 09a)
 apply_rendered() {
-  local context=$1 path=$2 jwks=""
-  [[ -f "$ROOT_DIR/certs/auth/jwks.json" ]] && jwks=$(cat "$ROOT_DIR/certs/auth/jwks.json")
-  sed -e "s/__NET_PREFIX__/$(detect_net_prefix)/g" -e "s|__INTERNAL_JWKS__|$jwks|g" "$path"     | kubectl --context "$context" apply -f -
+  local context=$1 path=$2 args=() f
+  for f in "$ROOT_DIR"/certs/idp/*.jwks.json; do
+    [[ -f $f ]] && args+=(-e "s|__IDP_JWKS_$(basename "$f" .jwks.json)__|$(cat "$f")|g")
+  done
+  sed -e "s/__NET_PREFIX__/$(detect_net_prefix)/g" "${args[@]}" "$path" | kubectl --context "$context" apply -f -
 }

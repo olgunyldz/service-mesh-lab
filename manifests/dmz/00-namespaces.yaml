@@ -43,11 +43,12 @@ metadata:
     channel: branch
     pod-security.kubernetes.io/enforce: restricted
 ---
-# Web kanalının arka ucu (BFF). Ambient mesh'te; yalnızca imzalı image'lar (Kyverno)
+# Web kanalının DMZ bileşeni (09a): web-token-handler (cookie oturumu <-> token). İş mantığı yok; BFF internal'da.
+# Ambient mesh'te; yalnızca imzalı image'lar (Kyverno). Waypoint yalnızca çıkış servisleri için (Keycloak, Valkey, BFF).
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: web-bff
+  name: edge-web
   labels:
     zone: dmz
     channel: web

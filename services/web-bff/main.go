@@ -1,10 +1,12 @@
-// web-bff: web kanalının arka ucu (Backend for Frontend). DMZ'de çalışır.
+// web-bff: web kanalının arka ucu (Backend for Frontend). Internal'da (cluster-a, ns channel-bff) çalışır (09a).
 //
 //	/healthz          -> kendi sağlık kontrolü
 //	/bff/v1/dashboard -> api-a'nın birkaç ucunu paralel çağırıp web'e uygun tek yanıt üretir
+//	/accounts*        -> account-api'ye iletilir
 //	diğer her yol     -> api-a'ya iletilir (ters proxy)
 //
-// api-a'ya giden istekler mesh üzerinden gider: web-bff -> waypoint -> dmz-egressgateway -> cluster-a.
+// Önündeki zincir: tarayıcı -> edge -> DMZ web-token-handler (cookie -> iç JWT) -> DMZ egress -> int-ingressgw -> web-bff.
+// İç JWT (x-user-jwt) her çağrıda domain servislerine taşınır; onlar da kendi waypoint'lerinde doğrular.
 // Yalnızca standart kütüphane kullanır (bağımlılık yok, distroless static image).
 package main
 
@@ -24,25 +26,24 @@ import (
 var version = "dev" // build sırasında -ldflags ile verilir
 
 func main() {
-	upstream, err := url.Parse(env("API_URL", "http://api-a"))
+	upstream, err := url.Parse(env("API_URL", "http://api-a.api-a.svc.cluster.local"))
 	if err != nil {
 		log.Fatalf("API_URL geçersiz: %v", err)
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
-
-	proxy := httputil.NewSingleHostReverseProxy(upstream)
-	// Hata ayrıntısı (iç adres, bağlantı hatası) istemciye dönmesin
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("upstream hatası: %s %s: %v", r.Method, r.URL.Path, err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream_unavailable"})
+	accounts, err := url.Parse(env("ACCOUNTS_URL", "http://account-api.account-api.svc.cluster.local:8080"))
+	if err != nil {
+		log.Fatalf("ACCOUNTS_URL geçersiz: %v", err)
 	}
+	client := &http.Client{Timeout: 5 * time.Second}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /bff/v1/dashboard", dashboard(client, upstream))
-	mux.Handle("/", proxy)
+	mux.Handle("/accounts", reverseProxy(accounts))
+	mux.Handle("/accounts/", reverseProxy(accounts))
+	mux.Handle("/", reverseProxy(upstream))
 
 	srv := &http.Server{
 		Addr:              ":" + env("PORT", "8080"),
@@ -52,8 +53,18 @@ func main() {
 		WriteTimeout:      15 * time.Second,
 		MaxHeaderBytes:    32 << 10,
 	}
-	log.Printf("web-bff %s dinliyor: %s (upstream %s)", version, srv.Addr, upstream)
+	log.Printf("web-bff %s dinliyor: %s (api %s, hesaplar %s)", version, srv.Addr, upstream, accounts)
 	log.Fatal(srv.ListenAndServe())
+}
+
+func reverseProxy(target *url.URL) *httputil.ReverseProxy {
+	p := httputil.NewSingleHostReverseProxy(target)
+	// Hata ayrıntısı (iç adres, bağlantı hatası) istemciye dönmesin
+	p.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.Printf("upstream hatası: %s %s: %v", r.Method, r.URL.Path, err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream_unavailable"})
+	}
+	return p
 }
 
 // dashboard: api-a'nın "/" ve "/version" uçlarını paralel çağırır, web'in ihtiyaç duyduğu alanları seçer.

@@ -1,9 +1,10 @@
-# İç JWT doğrulaması (08 · token-exchange). JWT'yi DMZ'deki auth-service imzalar (x-user-jwt header'ı).
-# Açık anahtar inline JWKS (__INTERNAL_JWKS__: certs/auth/jwks.json, apply_rendered doldurur): internal'dan DMZ'ye
-# ağ çağrısı yok. Anahtar değişiminde eski ve yeni anahtar bir süre birlikte yayınlanır.
-# Doğrulama hem ingress gateway'de hem de servislerin waypoint'inde yapılır (JWT aynen iletilir).
+# İç JWT doğrulaması (08 · token-exchange, 09a · idp-token-exchange). İç JWT'yi Keycloak imzalar: DMZ'deki auth-service
+# dış token'ı RFC 8693 token exchange ile çevirir. Realm başına issuer (customers, partners, staff), aud=internal-apis.
+# Açık anahtarlar inline JWKS (__IDP_JWKS_<realm>__: certs/idp/<realm>.jwks.json, apply_rendered doldurur): internal'dan
+# IdP'ye ağ çağrısı yok. Anahtar değişiminde eski ve yeni anahtar bir süre birlikte yayınlanır.
+# Doğrulama ingress gateway'de ve servislerin waypoint'lerinde yapılır (JWT x-user-jwt ile aynen iletilir).
 # Not: RequestAuthentication tek başına JWT'siz isteği reddetmez; zorunluluk AuthorizationPolicy'lerdeki
-# requestPrincipals ile (30-internal-gateway.yaml, 40-security.yaml, 15-account-api.yaml).
+# requestPrincipals ile (30-internal-gateway.yaml, 40-security.yaml, 15-account-api.yaml, 16-channel-bff.yaml).
 apiVersion: security.istio.io/v1
 kind: RequestAuthentication
 metadata:
@@ -14,9 +15,21 @@ spec:
     matchLabels:
       istio: ingressgateway
   jwtRules:
-    - issuer: auth.dmz.corp.mesh
+    - issuer: https://sso.apps.example.local:8443/realms/customers
       audiences: ["internal-apis"]
-      jwks: '__INTERNAL_JWKS__'
+      jwks: '__IDP_JWKS_customers__'
+      fromHeaders:
+        - name: x-user-jwt
+      forwardOriginalToken: true
+    - issuer: https://sso.apps.example.local:8443/realms/partners
+      audiences: ["internal-apis"]
+      jwks: '__IDP_JWKS_partners__'
+      fromHeaders:
+        - name: x-user-jwt
+      forwardOriginalToken: true
+    - issuer: https://sso.apps.example.local:8443/realms/staff
+      audiences: ["internal-apis"]
+      jwks: '__IDP_JWKS_staff__'
       fromHeaders:
         - name: x-user-jwt
       forwardOriginalToken: true
@@ -32,9 +45,21 @@ spec:
       group: ""
       name: api-a
   jwtRules:
-    - issuer: auth.dmz.corp.mesh
+    - issuer: https://sso.apps.example.local:8443/realms/customers
       audiences: ["internal-apis"]
-      jwks: '__INTERNAL_JWKS__'
+      jwks: '__IDP_JWKS_customers__'
+      fromHeaders:
+        - name: x-user-jwt
+      forwardOriginalToken: true
+    - issuer: https://sso.apps.example.local:8443/realms/partners
+      audiences: ["internal-apis"]
+      jwks: '__IDP_JWKS_partners__'
+      fromHeaders:
+        - name: x-user-jwt
+      forwardOriginalToken: true
+    - issuer: https://sso.apps.example.local:8443/realms/staff
+      audiences: ["internal-apis"]
+      jwks: '__IDP_JWKS_staff__'
       fromHeaders:
         - name: x-user-jwt
       forwardOriginalToken: true
@@ -50,9 +75,51 @@ spec:
       group: ""
       name: account-api
   jwtRules:
-    - issuer: auth.dmz.corp.mesh
+    - issuer: https://sso.apps.example.local:8443/realms/customers
       audiences: ["internal-apis"]
-      jwks: '__INTERNAL_JWKS__'
+      jwks: '__IDP_JWKS_customers__'
+      fromHeaders:
+        - name: x-user-jwt
+      forwardOriginalToken: true
+    - issuer: https://sso.apps.example.local:8443/realms/partners
+      audiences: ["internal-apis"]
+      jwks: '__IDP_JWKS_partners__'
+      fromHeaders:
+        - name: x-user-jwt
+      forwardOriginalToken: true
+    - issuer: https://sso.apps.example.local:8443/realms/staff
+      audiences: ["internal-apis"]
+      jwks: '__IDP_JWKS_staff__'
+      fromHeaders:
+        - name: x-user-jwt
+      forwardOriginalToken: true
+---
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: internal-jwt
+  namespace: channel-bff
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: web-bff
+  jwtRules:
+    - issuer: https://sso.apps.example.local:8443/realms/customers
+      audiences: ["internal-apis"]
+      jwks: '__IDP_JWKS_customers__'
+      fromHeaders:
+        - name: x-user-jwt
+      forwardOriginalToken: true
+    - issuer: https://sso.apps.example.local:8443/realms/partners
+      audiences: ["internal-apis"]
+      jwks: '__IDP_JWKS_partners__'
+      fromHeaders:
+        - name: x-user-jwt
+      forwardOriginalToken: true
+    - issuer: https://sso.apps.example.local:8443/realms/staff
+      audiences: ["internal-apis"]
+      jwks: '__IDP_JWKS_staff__'
       fromHeaders:
         - name: x-user-jwt
       forwardOriginalToken: true

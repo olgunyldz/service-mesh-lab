@@ -1,29 +1,27 @@
-// auth-service: DMZ kanal gateway'lerinin harici yetkilendirme (Envoy ext_authz, HTTP) servisi.
+// auth-service: DMZ kanal gateway'lerinin harici yetkilendirme (Envoy ext_authz, HTTP) servisi; dokümandaki auth-proxy.
 //
-// Her istekte gateway buraya sorar. auth-service:
-//  1. Authorization: Bearer <access token>'ı doğrular (Keycloak JWKS: imza RS256, iss, exp, azp, rol),
-//  2. kanal kurallarını uygular (kanal, gateway'in eklediği x-auth-channel header'ından gelir; istemci değiştiremez),
-//  3. içeri girecek kısa ömürlü iç JWT'yi kendi anahtarıyla imzalar ve x-user-jwt olarak döner.
+// Her istekte gateway (web'de web-token-handler) buraya sorar. auth-service:
+//  1. dış access token'ı Keycloak'ta introspect eder (aktif mi, oturum iptal edilmiş mi, hangi client'ın, hangi rollerle),
+//  2. kanal kurallarını uygular (kanal, gateway'in eklediği x-auth-channel header'ından gelir; istemci değiştiremez):
+//     client ↔ kanal, partner sertifikası ↔ client, şube cihaz sertifikası,
+//  3. iç JWT'yi Keycloak'tan RFC 8693 token exchange ile alır ve x-user-jwt olarak döner.
 //
+// İç JWT'yi Keycloak imzalar (kanal başına exchange client'ı: ömür 2 dk, channel claim'i); DMZ'de imza anahtarı yoktur.
 // Dış token DMZ'de kalır (gateway Authorization'ı siler); internal servisler yalnızca iç JWT'yi görür.
 // Yalnızca standart kütüphane kullanır.
 package main
 
 import (
-	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"log"
-	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -33,45 +31,49 @@ import (
 
 var version = "dev" // build sırasında -ldflags ile verilir
 
-// Kanal kuralları: hangi realm'in, hangi client'ın (azp) token'ı, hangi rollerle kabul edilir
+// Kanal kuralları: hangi realm, hangi exchange client'ı, hangi dış client'ın (azp) token'ı, hangi rollerle
 type channelRule struct {
-	realm   string
-	clients []string // boşsa: partner kanalı, azp == sertifika CN'i (x-partner-id)
-	roles   []string // en az biri gerekli; iç JWT'ye yalnızca bunlar taşınır
+	realm    string
+	exchange string   // Keycloak'ta bu kanalın exchange client'ı (channel claim'ini o ekler)
+	clients  []string // boşsa: partner kanalı, azp == sertifika CN'i (x-partner-id)
+	roles    []string // en az biri gerekli
 }
 
 var rules = map[string]channelRule{
-	"web":     {realm: "customers", clients: []string{"web-bff"}, roles: []string{"customer"}},
-	"mobile":  {realm: "customers", clients: []string{"mobile-app"}, roles: []string{"customer"}},
-	"partner": {realm: "partners", roles: []string{"partner"}},
-	"branch":  {realm: "staff", clients: []string{"branch-teller"}, roles: []string{"teller", "operations"}},
+	"web":     {realm: "customers", exchange: "auth-web", clients: []string{"web-app"}, roles: []string{"customer"}},
+	"mobile":  {realm: "customers", exchange: "auth-mobile", clients: []string{"mobile-app"}, roles: []string{"customer"}},
+	"partner": {realm: "partners", exchange: "auth-partner", roles: []string{"partner"}},
+	"branch":  {realm: "staff", exchange: "auth-branch", clients: []string{"branch-teller"}, roles: []string{"teller", "operations"}},
 }
 
+const (
+	grantTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange"
+	tokenTypeAccess    = "urn:ietf:params:oauth:token-type:access_token"
+	cacheTTL           = 30 * time.Second // oturum iptali en geç bu sürede etkili olur
+)
+
 type config struct {
-	issuerBase  string // dış token'ların issuer öneki: https://sso.../realms/
-	jwksBase    string // JWKS'in mesh içi adresi: http://keycloak.auth.svc.cluster.local/realms/
-	internalIss string
-	internalAud string
-	ttl         time.Duration
-	kid         string
-	key         *rsa.PrivateKey
+	issuerBase  string            // token'ların issuer öneki: https://sso.../realms/
+	idpBase     string            // Keycloak'ın mesh içi adresi: http://keycloak.auth.svc.cluster.local/realms/
+	internalAud string            // iç JWT'nin audience'ı
+	secrets     map[string]string // exchange client -> secret
 }
 
 func main() {
-	key, err := loadKey(env("SIGNING_KEY", "/keys/signing.key"))
-	if err != nil {
-		log.Fatalf("imza anahtarı: %v", err)
-	}
 	cfg := &config{
 		issuerBase:  env("ISSUER_BASE", "https://sso.apps.example.local:8443/realms/"),
-		jwksBase:    env("JWKS_BASE", "http://keycloak.auth.svc.cluster.local/realms/"),
-		internalIss: env("INTERNAL_ISSUER", "auth.dmz.corp.mesh"),
+		idpBase:     env("IDP_BASE", "http://keycloak.auth.svc.cluster.local/realms/"),
 		internalAud: env("INTERNAL_AUDIENCE", "internal-apis"),
-		ttl:         5 * time.Minute,
-		kid:         env("SIGNING_KID", "internal-1"),
-		key:         key,
+		secrets:     map[string]string{},
 	}
-	a := &authz{cfg: cfg, jwks: newJWKSCache(cfg.jwksBase), cache: map[string]cached{}}
+	for _, r := range rules {
+		s := os.Getenv(strings.ToUpper(strings.ReplaceAll(r.exchange, "-", "_")) + "_SECRET") // auth-web -> AUTH_WEB_SECRET
+		if s == "" {
+			log.Fatalf("%s için secret yok", r.exchange)
+		}
+		cfg.secrets[r.exchange] = s
+	}
+	a := &authz{cfg: cfg, client: &http.Client{Timeout: 2 * time.Second}, cache: map[string]cached{}, inflight: map[string]*call{}} // iki çağrı, ext_authz süresi 4 sn
 	go a.evictLoop()
 
 	srv := &http.Server{
@@ -79,10 +81,10 @@ func main() {
 		Handler:           a,
 		ReadHeaderTimeout: 2 * time.Second,
 		ReadTimeout:       5 * time.Second,
-		WriteTimeout:      5 * time.Second,
+		WriteTimeout:      10 * time.Second,
 		MaxHeaderBytes:    64 << 10,
 	}
-	log.Printf("auth-service %s dinliyor: %s (iç issuer %s, kid %s)", version, srv.Addr, cfg.internalIss, cfg.kid)
+	log.Printf("auth-service %s dinliyor: %s (IdP %s, audience %s)", version, srv.Addr, cfg.idpBase, cfg.internalAud)
 	log.Fatal(srv.ListenAndServe())
 }
 
@@ -92,10 +94,18 @@ type cached struct {
 }
 
 type authz struct {
-	cfg   *config
-	jwks  *jwksCache
-	mu    sync.Mutex
-	cache map[string]cached // dış token (+ kanal bağlamı) -> iç JWT
+	cfg      *config
+	client   *http.Client
+	mu       sync.Mutex
+	cache    map[string]cached // dış token (+ kanal bağlamı) -> iç JWT
+	inflight map[string]*call  // aynı anahtar için süren IdP çağrısı (singleflight)
+}
+
+// call: aynı token'la eşzamanlı gelen istekler tek introspection + exchange'i bekler (IdP'ye yük patlaması olmaz)
+type call struct {
+	wg       sync.WaitGroup
+	jwt, sub string
+	err      error
 }
 
 type denial struct {
@@ -153,16 +163,55 @@ func (a *authz) authorize(r *http.Request, channel string) (string, string, erro
 
 	ck := cacheKey(token, channel, partnerID, device)
 	a.mu.Lock()
-	c, hit := a.cache[ck]
-	a.mu.Unlock()
-	if hit && time.Until(c.exp) > 30*time.Second {
+	if c, hit := a.cache[ck]; hit && time.Now().Before(c.exp) {
+		a.mu.Unlock()
 		return c.jwt, "(önbellek)", nil
 	}
+	if f, ok := a.inflight[ck]; ok {
+		a.mu.Unlock()
+		f.wg.Wait()
+		return f.jwt, f.sub, f.err
+	}
+	f := &call{}
+	f.wg.Add(1)
+	a.inflight[ck] = f
+	a.mu.Unlock()
 
-	claims, err := a.verifyExternal(token, rule.realm)
+	f.jwt, f.sub, f.err = a.resolve(rule, channel, token, partnerID, device, ck)
+	a.mu.Lock()
+	delete(a.inflight, ck)
+	a.mu.Unlock()
+	f.wg.Done()
+	return f.jwt, f.sub, f.err
+}
+
+// resolve: önbellekte olmayan token için introspection, kanal kuralları ve token exchange
+func (a *authz) resolve(rule channelRule, channel, token, partnerID, device, ck string) (string, string, error) {
+	// Ön kontrol (imzasız okuma, yalnızca reddetmek için): başka realm'in token'ı IdP'ye hiç gönderilmez
+	var unverified map[string]any
+	if decodeSegment(segment(token, 1), &unverified) != nil {
+		return "", "", deny(http.StatusUnauthorized, "invalid_token", "JWT biçimi değil")
+	}
+	if iss, _ := unverified["iss"].(string); iss != a.cfg.issuerBase+rule.realm {
+		return "", "", deny(http.StatusForbidden, "wrong_realm_for_channel", "iss="+iss)
+	}
+
+	// 1. Introspection: imza, süre ve oturumun hâlâ açık olduğu IdP'de kontrol edilir (dış token opak sayılır)
+	claims, err := a.introspect(rule, token)
 	if err != nil {
 		return "", "", err
 	}
+	if active, _ := claims["active"].(bool); !active {
+		return "", "", deny(http.StatusUnauthorized, "invalid_token", "aktif değil (süresi dolmuş, iptal edilmiş ya da geçersiz)")
+	}
+	if iss, _ := claims["iss"].(string); iss != a.cfg.issuerBase+rule.realm {
+		return "", "", deny(http.StatusForbidden, "wrong_realm_for_channel", "iss="+iss)
+	}
+	if typ, _ := claims["typ"].(string); typ != "Bearer" {
+		return "", "", deny(http.StatusUnauthorized, "invalid_token", "access token değil: "+typ)
+	}
+
+	// 2. Kanal kuralları
 	azp, _ := claims["azp"].(string)
 	switch {
 	case channel == "partner":
@@ -176,41 +225,33 @@ func (a *authz) authorize(r *http.Request, channel string) (string, string, erro
 	if channel == "branch" && device == "" {
 		return "", "", deny(http.StatusForbidden, "device_certificate_required", "XFCC yok")
 	}
-	roles := intersect(realmRoles(claims), rule.roles)
-	if len(roles) == 0 {
+	if len(intersect(realmRoles(claims), rule.roles)) == 0 {
 		return "", "", deny(http.StatusForbidden, "insufficient_role", fmt.Sprint(realmRoles(claims)))
 	}
 
-	sub, _ := claims["sub"].(string)
-	now := time.Now()
-	exp := now.Add(a.cfg.ttl)
-	if te := numericTime(claims["exp"]); te.Before(exp) {
-		exp = te // iç JWT, dış token'dan uzun yaşamaz
-	}
-	internal := map[string]any{
-		"iss":     a.cfg.internalIss,
-		"aud":     a.cfg.internalAud,
-		"sub":     sub,
-		"roles":   roles,
-		"channel": channel,
-		"idp":     rule.realm,
-		"azp":     azp,
-		"iat":     now.Unix(),
-		"exp":     exp.Unix(),
-		"jti":     randomHex(16),
-	}
-	if u, ok := claims["preferred_username"].(string); ok && channel != "partner" {
-		internal["preferred_username"] = u
-	}
-	if channel == "partner" {
-		internal["partner_id"] = partnerID
-	}
-	if channel == "branch" {
-		internal["branch_device"] = device
-	}
-	jwt, err := sign(a.cfg.key, a.cfg.kid, internal)
+	// 3. Token exchange: iç JWT'yi Keycloak üretir ve imzalar
+	jwt, err := a.exchange(rule, token)
 	if err != nil {
 		return "", "", err
+	}
+	var internal map[string]any
+	if err := decodeSegment(segment(jwt, 1), &internal); err != nil {
+		return "", "", fmt.Errorf("iç JWT çözülemedi: %w", err)
+	}
+	if ch, _ := internal["channel"].(string); ch != channel {
+		return "", "", fmt.Errorf("iç JWT kanalı %q, beklenen %q", ch, channel)
+	}
+	// Şube: cihaz sertifikası personelin şubesine ait olmalı (branch_id, IdP'deki grup attribute'u)
+	if channel == "branch" {
+		if b, _ := internal["branch_id"].(string); b != device {
+			return "", "", deny(http.StatusForbidden, "device_not_in_staff_branch", fmt.Sprintf("cihaz=%q şube=%q", device, b))
+		}
+	}
+
+	sub, _ := internal["sub"].(string)
+	exp := time.Now().Add(cacheTTL)
+	if te := numericTime(internal["exp"]).Add(-10 * time.Second); te.Before(exp) {
+		exp = te
 	}
 	a.mu.Lock()
 	if len(a.cache) < 10000 {
@@ -220,47 +261,61 @@ func (a *authz) authorize(r *http.Request, channel string) (string, string, erro
 	return jwt, sub, nil
 }
 
-// verifyExternal: Keycloak access token'ı (RS256) doğrular
-func (a *authz) verifyExternal(token, realm string) (map[string]any, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil, deny(http.StatusUnauthorized, "invalid_token", "JWT biçimi değil")
-	}
-	var hdr struct{ Alg, Kid string }
-	if err := decodeSegment(parts[0], &hdr); err != nil || hdr.Alg != "RS256" {
-		return nil, deny(http.StatusUnauthorized, "invalid_token", "başlık/alg: "+hdr.Alg)
-	}
-	var claims map[string]any
-	if err := decodeSegment(parts[1], &claims); err != nil {
-		return nil, deny(http.StatusUnauthorized, "invalid_token", "payload")
-	}
-	// iss imzadan önce kontrol edilir: başka realm'in token'ı için JWKS hiç çekilmez
-	if iss, _ := claims["iss"].(string); iss != a.cfg.issuerBase+realm {
-		return nil, deny(http.StatusForbidden, "wrong_realm_for_channel", "iss="+iss)
-	}
-	pub, err := a.jwks.key(realm, hdr.Kid)
+// introspect: RFC 7662; kanalın exchange client'ının kimliğiyle
+func (a *authz) introspect(rule channelRule, token string) (map[string]any, error) {
+	var out map[string]any
+	status, err := a.post(rule, "/protocol/openid-connect/token/introspect", url.Values{"token": {token}}, &out)
 	if err != nil {
 		return nil, err
 	}
-	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("introspection: HTTP %d", status)
+	}
+	return out, nil
+}
+
+// exchange: RFC 8693; dış access token -> iç JWT (aud=internal-apis)
+func (a *authz) exchange(rule channelRule, token string) (string, error) {
+	var out struct {
+		AccessToken string `json:"access_token"`
+		Error       string `json:"error"`
+		Description string `json:"error_description"`
+	}
+	status, err := a.post(rule, "/protocol/openid-connect/token", url.Values{
+		"grant_type":           {grantTokenExchange},
+		"subject_token":        {token},
+		"subject_token_type":   {tokenTypeAccess},
+		"requested_token_type": {tokenTypeAccess},
+		"audience":             {a.cfg.internalAud},
+	}, &out)
+	switch {
+	case err != nil:
+		return "", err
+	case status == http.StatusOK && out.AccessToken != "":
+		return out.AccessToken, nil
+	case status == http.StatusBadRequest || status == http.StatusForbidden || status == http.StatusUnauthorized:
+		return "", deny(http.StatusForbidden, "exchange_denied", out.Error+": "+out.Description)
+	default:
+		return "", fmt.Errorf("token exchange: HTTP %d %s", status, out.Error)
+	}
+}
+
+func (a *authz) post(rule channelRule, path string, form url.Values, out any) (int, error) {
+	req, err := http.NewRequest(http.MethodPost, a.cfg.idpBase+rule.realm+path, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, deny(http.StatusUnauthorized, "invalid_token", "imza kodlaması")
+		return 0, err
 	}
-	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
-	if rsa.VerifyPKCS1v15(pub, crypto.SHA256, digest[:], sig) != nil {
-		return nil, deny(http.StatusUnauthorized, "invalid_token", "imza geçersiz")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(url.QueryEscape(rule.exchange), url.QueryEscape(a.cfg.secrets[rule.exchange]))
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return 0, err
 	}
-	now := time.Now()
-	if numericTime(claims["exp"]).Before(now.Add(-30 * time.Second)) {
-		return nil, deny(http.StatusUnauthorized, "invalid_token", "süresi dolmuş")
+	defer resp.Body.Close()
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out); err != nil && resp.StatusCode == http.StatusOK {
+		return resp.StatusCode, err
 	}
-	if nbf, ok := claims["nbf"]; ok && numericTime(nbf).After(now.Add(30*time.Second)) {
-		return nil, deny(http.StatusUnauthorized, "invalid_token", "henüz geçerli değil")
-	}
-	if typ, _ := claims["typ"].(string); typ != "Bearer" {
-		return nil, deny(http.StatusUnauthorized, "invalid_token", "access token değil: "+typ)
-	}
-	return claims, nil
+	return resp.StatusCode, nil
 }
 
 func (a *authz) evictLoop() {
@@ -275,89 +330,14 @@ func (a *authz) evictLoop() {
 	}
 }
 
-// --- Keycloak JWKS önbelleği (realm başına) ---
-
-type jwksCache struct {
-	base   string
-	client *http.Client
-	mu     sync.Mutex
-	keys   map[string]map[string]*rsa.PublicKey // realm -> kid -> anahtar
-	last   map[string]time.Time
-}
-
-func newJWKSCache(base string) *jwksCache {
-	return &jwksCache{base: base, client: &http.Client{Timeout: 3 * time.Second},
-		keys: map[string]map[string]*rsa.PublicKey{}, last: map[string]time.Time{}}
-}
-
-// key: bilinmeyen kid'de (anahtar rotasyonu) en fazla 10 sn'de bir yeniden çeker
-func (c *jwksCache) key(realm, kid string) (*rsa.PublicKey, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if k, ok := c.keys[realm][kid]; ok && time.Since(c.last[realm]) < 10*time.Minute {
-		return k, nil
-	}
-	if time.Since(c.last[realm]) > 10*time.Second || c.keys[realm] == nil {
-		keys, err := c.fetch(realm)
-		if err != nil {
-			if k, ok := c.keys[realm][kid]; ok { // IdP geçici erişilemezse eldeki anahtar kullanılır
-				return k, nil
-			}
-			return nil, fmt.Errorf("JWKS alınamadı (%s): %w", realm, err)
-		}
-		c.keys[realm], c.last[realm] = keys, time.Now()
-	}
-	if k, ok := c.keys[realm][kid]; ok {
-		return k, nil
-	}
-	return nil, deny(http.StatusUnauthorized, "invalid_token", "bilinmeyen kid: "+kid)
-}
-
-func (c *jwksCache) fetch(realm string) (map[string]*rsa.PublicKey, error) {
-	resp, err := c.client.Get(c.base + realm + "/protocol/openid-connect/certs")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New(resp.Status)
-	}
-	var set struct {
-		Keys []struct{ Kid, Kty, Use, Alg, N, E string }
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&set); err != nil {
-		return nil, err
-	}
-	out := map[string]*rsa.PublicKey{}
-	for _, k := range set.Keys {
-		if k.Kty != "RSA" || (k.Use != "" && k.Use != "sig") {
-			continue
-		}
-		n, err1 := base64.RawURLEncoding.DecodeString(k.N)
-		e, err2 := base64.RawURLEncoding.DecodeString(k.E)
-		if err1 != nil || err2 != nil {
-			continue
-		}
-		out[k.Kid] = &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(new(big.Int).SetBytes(e).Int64())}
-	}
-	return out, nil
-}
-
 // --- yardımcılar ---
 
-func sign(key *rsa.PrivateKey, kid string, claims map[string]any) (string, error) {
-	h, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT", "kid": kid})
-	p, err := json.Marshal(claims)
-	if err != nil {
-		return "", err
+func segment(jwt string, i int) string {
+	parts := strings.Split(jwt, ".")
+	if len(parts) != 3 {
+		return ""
 	}
-	unsigned := base64.RawURLEncoding.EncodeToString(h) + "." + base64.RawURLEncoding.EncodeToString(p)
-	digest := sha256.Sum256([]byte(unsigned))
-	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
-	if err != nil {
-		return "", err
-	}
-	return unsigned + "." + base64.RawURLEncoding.EncodeToString(sig), nil
+	return parts[i]
 }
 
 func decodeSegment(s string, v any) error {
@@ -412,35 +392,6 @@ func subjectCN(xfcc string) string {
 func cacheKey(parts ...string) string {
 	h := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(h[:])
-}
-
-func randomHex(n int) string {
-	b := make([]byte, n)
-	rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-func loadKey(path string) (*rsa.PrivateKey, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	blk, _ := pem.Decode(b)
-	if blk == nil {
-		return nil, errors.New("PEM değil")
-	}
-	if k, err := x509.ParsePKCS1PrivateKey(blk.Bytes); err == nil {
-		return k, nil
-	}
-	k, err := x509.ParsePKCS8PrivateKey(blk.Bytes)
-	if err != nil {
-		return nil, err
-	}
-	rk, ok := k.(*rsa.PrivateKey)
-	if !ok {
-		return nil, errors.New("RSA anahtarı değil")
-	}
-	return rk, nil
 }
 
 func env(k, def string) string {

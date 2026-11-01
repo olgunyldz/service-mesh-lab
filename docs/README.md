@@ -64,6 +64,7 @@ Ana [README](../README.md) ortamın güncel ve toplu halini anlatır. Bu klasör
 | 06 | [DMZ kanalları (web BFF, mobil, partner, şube)](06-dmz-channels.md) | `dmz-channels` | ✅ Tamamlandı (86/86 test) |
 | 07 | [Veri katmanı (PostgreSQL, Valkey, global rate limit)](07-data.md) | `data` | ✅ Tamamlandı (107/107 test) |
 | 08 | [Kimlik ve token exchange (Keycloak, auth-service, iç JWT)](08-token-exchange.md) | `token-exchange` | ✅ Tamamlandı (131/131 test) |
+| 09a | [IdP tabanlı token exchange, web oturumu ve internal BFF](09a-idp-token-exchange.md) | `idp-token-exchange` | ✅ Tamamlandı (150/150 test) |
 
 ## Diğer dokümanlar
 

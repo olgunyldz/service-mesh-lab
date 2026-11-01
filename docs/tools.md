@@ -61,7 +61,7 @@ Lab'de kullanılan her bileşenin ne işe yaradığı, bizde nasıl kullanıldı
 |---------|-------|-------|--------------------------|------------|
 | **HAProxy** | 3.0 | Yük dengeleyici, TLS sonlandırma | `edge-lb`: TLS 1.2+, HSTS, IP başına hız/bağlantı sınırı, header temizliği, partner istemci sertifikası (SNI'ya göre `crt-list`), 5xx gövde maskeleme ([edge/haproxy.cfg](../edge/haproxy.cfg)). `branch-fw`: TCP modunda iç firewall | F5 BIG-IP, NGINX, Citrix ADC, Envoy, bulut LB'leri |
 | **ModSecurity + OWASP CRS** (nginx) | CRS 4.25.2 LTS | Web uygulama güvenlik duvarı (WAF) | `edge-waf`: engelleme modu, paranoia 1; Host'a göre kanal gateway'i seçimi; DMZ'ye mTLS | Coraza (Go, Envoy/Caddy'de), F5 ASM/Advanced WAF, Imperva, Cloudflare WAF, AWS WAF |
-| **loadgen** | curl 8.11.1 | İnternet istemcisi simülasyonu | Kanallara sürekli trafik (Kiali grafikleri için); Keycloak'tan token alıp yeniliyor | hey, k6, vegeta, Locust |
+| **loadgen** | curl 8.11.1 | İnternet istemcisi simülasyonu | Kanallara sürekli trafik (Kiali grafikleri için); mobil ve partner için Keycloak'tan token alıp yeniliyor, web'de tarayıcı gibi giriş yapıp oturum cookie'siyle geziyor | hey, k6, vegeta, Locust |
 
 ## 5. Güvenlik ve politika
 
@@ -92,17 +92,18 @@ Lab'de kullanılan her bileşenin ne işe yaradığı, bizde nasıl kullanıldı
 
 | Bileşen | Sürüm | Amacı | Bizde nasıl kullanılıyor | Muadilleri |
 |---------|-------|-------|--------------------------|------------|
-| **Keycloak** | 26.8.0 (optimize build) | Kimlik sağlayıcı (OIDC/OAuth2) | mgmt `iam`: `customers`, `partners`, `staff` realm'leri; dışarıya yalnızca DMZ üzerinden OIDC uçları. Image CI'da `kc.sh build` ile optimize ([images/keycloak/Dockerfile](../images/keycloak/Dockerfile)) | Red Hat build of Keycloak (RHBK), Microsoft Entra ID, Ping Identity, ForgeRock, Okta, Auth0 |
-| **auth-service** (kendi Go servisimiz) | 0.1.0 | Envoy ext_authz servisi: dış token → iç JWT | DMZ `auth`: Keycloak JWKS ile token doğrulama, kanal kuralları, RS256 iç JWT (5 dk) | oauth2-proxy, Envoy `jwt_authn` + Lua, Curity Phantom Token, API gateway eklentileri |
+| **Keycloak** | 26.8.0 (optimize build) | Kimlik sağlayıcı (OIDC/OAuth2) ve iç JWT üreticisi | mgmt `iam`: `customers`, `partners`, `staff` realm'leri; dışarıya yalnızca DMZ üzerinden OIDC uçları. Standard token exchange (RFC 8693), introspection, lightweight access token; kanal başına exchange client'ı. Image CI'da `kc.sh build` ile optimize ([images/keycloak/Dockerfile](../images/keycloak/Dockerfile)) | Red Hat build of Keycloak (RHBK), Microsoft Entra ID, Ping Identity, ForgeRock, Okta, Auth0 |
+| **auth-service** (kendi Go servisimiz) | 0.2.0 | Envoy ext_authz servisi (dokümandaki auth-proxy): dış token → iç JWT | DMZ `auth`: Keycloak introspection, kanal kuralları, Keycloak token exchange; iç JWT'yi Keycloak imzalar (2 dk). İmza anahtarı yok | oauth2-proxy, Curity Phantom Token, Authorino (Kuadrant), API gateway eklentileri |
+| **web-token-handler** (kendi Go servisimiz) | 0.1.0 | Web kanalında cookie ↔ token (OAuth token handler deseni) | DMZ `edge-web`: Authorization Code + PKCE sunucu tarafında, oturum mgmt Valkey'de, tarayıcıda yalnızca `__Host-sid` cookie'si; CSRF, refresh rotation, logout | Curity Token Handler, Spring Security OAuth2 Client, Duende BFF, Envoy `oauth2` filtresi |
 | **Istio ext_authz / RequestAuthentication** | Istio | Gateway'de harici yetkilendirme; JWT doğrulama | Kanal gateway'lerinde `CUSTOM` politika; cluster-a'da inline JWKS ile iç JWT doğrulama | OPA-Envoy, Authorino (Kuadrant) |
 
-Standartlar: OAuth 2.0 (authorization code + PKCE, client credentials), OIDC, JWT (RS256), JWKS, XFCC (istemci sertifikası bilgisinin iletimi), RFC 8693 (token exchange) ve RFC 8705 (sertifikaya bağlı token) fikirleri.
+Standartlar: OAuth 2.0 (authorization code + PKCE, client credentials), OIDC, JWT (RS256), JWKS, XFCC (istemci sertifikası bilgisinin iletimi), RFC 7662 (token introspection), RFC 8693 (token exchange, Keycloak'ta uygulanıyor) ve RFC 8705 (sertifikaya bağlı token) fikri; OAuth 2.0 for Browser-Based Apps (token handler / BFF deseni).
 
 ## 9. Uygulamalar ve kütüphaneler
 
 | Bileşen | Sürüm | Amacı | Bizde nasıl kullanılıyor | Muadilleri |
 |---------|-------|-------|--------------------------|------------|
-| **Go** | 1.27.1 | Servislerin dili | `web-bff`, `account-api`, `auth-service` ([services/](../services/)); mümkün olduğunca yalnızca standart kütüphane | Java/Spring Boot (bankalarda yaygın), Node.js, .NET, Rust |
+| **Go** | 1.27.1 | Servislerin dili | `web-token-handler`, `auth-service`, `web-bff`, `account-api` ([services/](../services/)); mümkün olduğunca yalnızca standart kütüphane | Java/Spring Boot (bankalarda yaygın), Node.js, .NET, Rust |
 | **distroless static** | debian12, nonroot | Minimal çalışma image'ı (kabuk ve paket yöneticisi yok) | Go servislerinin taban image'ı; UID 65532 | Chainguard/Wolfi, UBI micro (Red Hat), `scratch`, Alpine |
 | **pgx** | v5.7.6 | Go için PostgreSQL sürücüsü | account-api; libpq ortam değişkenleriyle bağlantı, parametreli sorgular | `database/sql` + lib/pq, sqlx, GORM |
 | **podinfo** | 6.7.1 | Örnek mikroservis (Go) | `api-a`: echo, headers, Valkey önbelleği, test uçları | httpbin, nginx, kendi servisimiz |
@@ -142,5 +143,5 @@ Kurulumda zorunlu değiller; incelemeyi ve hata ayıklamayı kolaylaştırırlar
 | **pgcli / psql** | PostgreSQL'e bağlanma | `kubectl --context kind-mgmt -n data exec -it postgres-0 -- psql -U postgres -d corebank` |
 | **valkey-cli** | Valkey'e bağlanma (ACL kullanıcısıyla) | `kubectl --context kind-mgmt -n data exec -it deploy/valkey -- valkey-cli --user admin --pass <parola>` |
 | **Keycloak yönetim konsolu** | Realm, client ve kullanıcıları görme (dışarıya kapalı; port-forward ile) | `kubectl --context kind-mgmt -n iam port-forward svc/keycloak 8080` → http://localhost:8080/admin |
-| **Trivy** | Image ve manifest güvenlik taraması | `trivy image localhost:5001/lab/auth-service:0.1.0`, `trivy config manifests/` |
+| **Trivy** | Image ve manifest güvenlik taraması | `trivy image localhost:5001/lab/auth-service:0.2.0`, `trivy config manifests/` |
 | **kube-score / Polaris** | Manifest'lerde en iyi uygulama denetimi | `kube-score score manifests/dmz/*.yaml` |
