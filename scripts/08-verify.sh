@@ -7,12 +7,13 @@ CA="$ROOT_DIR/certs/edge/ca.pem"
 PASS=0; FAIL=0
 
 # edge üzerinden istek: edge <host-öneki> <yol> [ek curl argümanları]
-# 08'den itibaren kanallar token ister: www ve mobile-api'ye müşteri token'ı otomatik eklenir (NOAUTH=1 ile eklenmez).
+# Kanallar kimlik ister (NOAUTH=1 ile eklenmez): mobile-api'ye müşteri token'ı; www'ye token değil oturum cookie'si
+# ve CSRF header'ı (09a: web'de tarayıcı token görmez). Web'de /api/* token handler'dan internal'daki web-bff'e gider.
 edge() {
   local host="$1.$H" path=$2 auth=(); shift 2
   if [[ -z ${NOAUTH:-} ]]; then
     case $host in
-      www.*) auth=(-H "Authorization: Bearer ${TW:-}") ;;
+      www.*) auth=(-H "Cookie: __Host-sid=${WSID:-}" -H "X-CSRF-Token: ${WCSRF:-}") ;;
       mobile-api.*) auth=(-H "Authorization: Bearer ${TM:-}") ;;
     esac
   fi
@@ -29,6 +30,16 @@ kc_token() {  # kc_token <realm> <form argümanları...>: sso host'u üzerinden 
     "https://$SSO_HOST:8443/realms/$realm/protocol/openid-connect/token" "$@" \
     | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
 }
+kc_full() {  # kc_full <realm> <form argümanları...>: token yanıtının tamamı (refresh token dahil)
+  local realm=$1; shift
+  env -u MSYS_NO_PATHCONV curl -s --max-time 15 --ssl-no-revoke --cacert "$CA" --resolve "$SSO_HOST:8443:127.0.0.1" \
+    "https://$SSO_HOST:8443/realms/$realm/protocol/openid-connect/token" "$@"
+}
+kc_logout() {  # kc_logout <realm> <form argümanları...>: IdP oturumunu kapatır (refresh token ile)
+  local realm=$1; shift
+  env -u MSYS_NO_PATHCONV curl -s -o /dev/null --max-time 15 --ssl-no-revoke --cacert "$CA" --resolve "$SSO_HOST:8443:127.0.0.1" \
+    "https://$SSO_HOST:8443/realms/$realm/protocol/openid-connect/logout" "$@"
+}
 staff_token() {  # personel: şube ağından, cihaz sertifikasıyla, şube gateway'inin /sso/ yolu üzerinden
   MSYS_NO_PATHCONV=1 docker run --rm --network "$BRANCH_NETWORK" -v "$ROOT_DIR/certs/branch:/b:ro" "$LOADGEN_IMAGE" sh -c \
     "curl -s --max-time 15 --cacert /b/ca.pem --cert /b/$BRANCH_DEVICE.crt --key /b/$BRANCH_DEVICE.key \
@@ -37,9 +48,15 @@ staff_token() {  # personel: şube ağından, cihaz sertifikasıyla, şube gatew
        -d client_id=branch-teller -d username=teller01 --data-urlencode password=$(pwf kc-staff-teller01)" 2>/dev/null \
     | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
 }
-# Token ömrü 5 dk: her bölümün başında yenilenir
+web_login() {  # web: tarayıcı gibi giriş (Authorization Code + PKCE, tests/web-login.sh); WSID, WCSRF, WLOGIN
+  WLOGIN=$(MSYS_NO_PATHCONV=1 docker run --rm --network "$EDGE_NETWORK" -e WEB="$WEB_HOST" -e SSO="$SSO_HOST" \
+    -e PW="$(pwf kc-customer-ayse)" -v "$ROOT_DIR/certs/edge/ca.pem:/ca.pem:ro" -v "$ROOT_DIR/tests/web-login.sh:/w.sh:ro" \
+    --entrypoint sh "$LOADGEN_IMAGE" /w.sh 2>/dev/null || true)
+  WSID=$(sed -n 's/^SID=//p' <<<"$WLOGIN"); WCSRF=$(sed -n 's/^CSRF=//p' <<<"$WLOGIN")
+}
+# Mobil/partner/personel token ömrü 5 dk: her bölümün başında yenilenir. Web oturumu da yeniden açılır.
 refresh_tokens() {
-  TW=$(kc_token customers -d grant_type=password -d client_id=web-bff -d username=ayse --data-urlencode "password=$(pwf kc-customer-ayse)")
+  web_login
   TM=$(kc_token customers -d grant_type=password -d client_id=mobile-app -d username=ayse --data-urlencode "password=$(pwf kc-customer-ayse)")
   TPA=$(kc_token partners -d grant_type=client_credentials -d client_id=acme --data-urlencode "client_secret=$(pwf kc-partner-acme)")
   TPI=$(kc_token partners -d grant_type=client_credentials -d client_id=initech --data-urlencode "client_secret=$(pwf kc-partner-initech)")
@@ -70,14 +87,15 @@ check() {  # check <açıklama> <beklenen> <gerçek>
 log "Kimlik sağlayıcı (Keycloak) hazır mı?"
 for i in $(seq 1 60); do
   refresh_tokens
-  [[ -n $TW && -n $TPA ]] && break
+  [[ -n $WSID && -n $TM && -n $TPA ]] && break
   sleep 5
 done
-check "Keycloak'tan müşteri, partner ve personel token'ı alınabiliyor" "3" \
-  "$( (( ${#TW} > 100 )) && (( ${#TPA} > 100 )) && (( ${#TS} > 100 )) && echo 3 || echo "web=${#TW} partner=${#TPA} personel=${#TS}")"
+check "Kimlik: web oturumu, mobil, partner ve personel token'ı alınabiliyor" "4" \
+  "$( (( ${#WSID} > 30 )) && (( ${#TM} > 100 )) && (( ${#TPA} > 100 )) && (( ${#TS} > 100 )) && echo 4 \
+     || echo "web=${#WSID} mobil=${#TM} partner=${#TPA} personel=${#TS}")"
 
-log "1) İnternet -> edge -> web gateway -> web-bff -> DMZ egress -> cluster-a -> waypoint -> api-a"
-check "HTTPS ile api-a'ya ulaşılıyor" '"message": "api-a @ cluster-a"' "$(edge www /)"
+log "1) İnternet -> edge -> web gateway -> token handler -> DMZ egress -> cluster-a -> web-bff -> waypoint -> api-a"
+check "HTTPS ile api-a'ya ulaşılıyor (web oturumuyla)" '"message": "api-a @ cluster-a"' "$(edge www /api/)"
 
 log "Edge: TLS ve HTTP"
 check "HTTP -> HTTPS yönlendirmesi (301)" "301 https://www.$H:8443/" \
@@ -95,7 +113,7 @@ check "SQL injection denemesi engelleniyor (403)" "403" \
   "$(edge www "/?id=1%27%20OR%20%271%27=%271" -o /dev/null -w '%{http_code}')"
 
 log "Edge: header temizliği"
-headers=$(edge www /headers -H "X-Forwarded-For: 6.6.6.6" -H "x-user-jwt: sahte")
+headers=$(edge www /api/headers -H "X-Forwarded-For: 6.6.6.6" -H "x-user-jwt: sahte")
 check "Sahte X-Forwarded-For içeri geçmiyor" "yok" "$([[ "$headers" == *6.6.6.6* ]] && echo var || echo yok)"
 check "Sahte x-user-jwt içeri geçmiyor" "yok" "$([[ "$headers" == *sahte* ]] && echo var || echo yok)"
 
@@ -106,7 +124,7 @@ limited=$(docker exec loadgen sh -c "ip=\$(getent hosts edge-lb | cut -d' ' -f1)
 check "Ani 150 istekte 429 dönüyor" "yes" "$([[ ${limited:-0} -gt 0 ]] && echo yes || echo "no (429 sayısı: ${limited:-0})")"
 
 log "Edge: bilgi sızması"
-resp=$(edge www /status/500 -D -)
+resp=$(edge www /api/status/500 -D -)
 check "5xx gövdesi tek tip (iç ayrıntı yok)" '{"error":"internal_error"}' "$resp"
 check "Yanıtta Server / x-envoy header'ı yok" "yok" \
   "$(echo "$resp" | grep -qiE '^(server|x-envoy-upstream-service-time):' && echo var || echo yok)"
@@ -120,8 +138,8 @@ DMZ_IP="$(detect_net_prefix).$(lb_octet dmz).10"
 check "Sertifikasız HTTPS reddediliyor" "000" \
   "$(dmz_probe --cacert /c/ca.pem --resolve www.$H:443:$DMZ_IP https://www.$H/)"
 check "Düz HTTP (80) kapalı" "000" "$(dmz_probe -H "'Host: www.$H'" http://$DMZ_IP/)"
-check "WAF istemci sertifikasıyla kabul ediliyor (token ile 200)" "200" \
-  "$(dmz_probe --cacert /c/ca.pem --cert /c/waf-client.crt --key /c/waf-client.key -H "'Authorization: Bearer $TW'" --resolve www.$H:443:$DMZ_IP https://www.$H/)"
+check "WAF istemci sertifikasıyla kabul ediliyor (200)" "200" \
+  "$(dmz_probe --cacert /c/ca.pem --cert /c/waf-client.crt --key /c/waf-client.key --resolve www.$H:443:$DMZ_IP https://www.$H/)"
 
 log "Zone geçişi: tek kapı"
 apply_rendered "$(ctx dmz)" "$ROOT_DIR/tests/zone-direct-path.yaml" >/dev/null
@@ -130,16 +148,17 @@ check "DMZ ingress'ten cluster-a'ya DOĞRUDAN gidiş reddediliyor (403 RBAC)" "4
   "$(edge zone-test / -o /dev/null -w '%{http_code}')"
 kubectl --context "$(ctx dmz)" delete -f "$ROOT_DIR/tests/zone-direct-path.yaml" >/dev/null
 check "DMZ egress üzerinden gidiş kabul ediliyor (200)" "200" \
-  "$(edge www / -o /dev/null -w '%{http_code}')"
+  "$(edge www /api/ -o /dev/null -w '%{http_code}')"
 
+# Web yolları token handler'da /api önekini kaybeder: /api/api/echo -> web-bff /api/echo -> api-a (podinfo) /api/echo
 if has_cluster cluster-b; then
   log "2) İnternet -> ... -> cluster-b -> api-b"
   check "HTTPS ile api-b'ye ulaşılıyor" '"message": "api-b @ cluster-b"' "$(edge api-b /)"
   log "3) api-a -> egress gw (cluster-a) -> cluster-b gw -> api-b"
-  check "api-a, api-b'yi çağırıyor" "merhaba" "$(edge www /api/echo -X POST -d merhaba)"
+  check "api-a, api-b'yi çağırıyor" "merhaba" "$(edge www /api/api/echo -X POST -d merhaba)"
 else
   log "2-3) cluster-b kapalı; Akış 2 ve 3 atlandı"
-  check "api-a echo (backend yok)" "merhaba" "$(edge www /api/echo -X POST -d merhaba)"
+  check "api-a echo (backend yok)" "merhaba" "$(edge www /api/api/echo -X POST -d merhaba)"
 fi
 
 log "DMZ kanalları (web / mobile / partner)"
@@ -157,21 +176,25 @@ partner() {  # partner <sertifika adı|-> <curl argümanları>; token: PTOKEN (v
 }
 mobile() { local path=$1; shift; edge mobile-api "$path" "$@"; }
 
-check "Web: BFF dashboard (api-a'nın iki ucunu birleştiriyor)" '"channel":"web"' "$(edge www /bff/v1/dashboard)"
-check "Web: BFF güvenlik header'ları (CSP, X-Frame-Options)" "x-frame-options: deny" \
+check "Web: BFF dashboard (internal web-bff, api-a'nın iki ucunu birleştiriyor)" '"channel":"web"' "$(edge www /api/bff/v1/dashboard)"
+check "Web: güvenlik header'ları (CSP, X-Frame-Options)" "x-frame-options: deny" \
   "$(edge www / -D - -o /dev/null | tr 'A-Z' 'a-z')"
 check "Web: sahte x-channel ezilip 'web' yazılıyor" '"web"' \
-  "$(edge www /headers -H 'x-channel: partner' | grep -A1 -i '"x-channel"')"
+  "$(edge www /api/headers -H 'x-channel: partner' | grep -A1 -i '"x-channel"')"
 check "Web: CORS izinli origin kabul" "access-control-allow-origin: https://www.$H" \
   "$(edge www /api/info -X OPTIONS -H "Origin: https://www.$H" -H 'Access-Control-Request-Method: GET' -D - -o /dev/null | tr 'A-Z' 'a-z')"
 check "Web: CORS yabancı origin'e izin yok" "yok" \
   "$(edge www /api/info -X OPTIONS -H 'Origin: https://evil.example.com' -H 'Access-Control-Request-Method: GET' -D - -o /dev/null \
      | grep -qi '^access-control-allow-origin' && echo var || echo yok)"
-check "Web: web-bff imzalı image'ın digest'iyle çalışıyor" "$LAB_REGISTRY/lab/web-bff:" \
-  "$(kubectl --context "$(ctx dmz)" -n web-bff get pod -l app=web-bff -o jsonpath='{.items[0].spec.containers[0].image}')"
+check "Web: token handler (DMZ) imzalı image'ın digest'iyle çalışıyor" "$LAB_REGISTRY/lab/web-token-handler:0.1.0@sha256:" \
+  "$(kubectl --context "$(ctx dmz)" -n edge-web get pod -l app=web-token-handler -o jsonpath='{.items[0].spec.containers[0].image}')"
+check "Web: web-bff internal'da (cluster-a/channel-bff), imzalı image" "$LAB_REGISTRY/lab/web-bff:0.3.0@sha256:" \
+  "$(kubectl --context "$(ctx cluster-a)" -n channel-bff get pod -l app=web-bff -o jsonpath='{.items[0].spec.containers[0].image}')"
+check "Web: DMZ'de BFF yok (web-bff namespace'i kaldırıldı)" "yok" \
+  "$(kubectl --context "$(ctx dmz)" get ns web-bff >/dev/null 2>&1 && echo var || echo yok)"
 apply_rendered "$(ctx dmz)" "$ROOT_DIR/tests/web-bypass-bff.yaml" >/dev/null
 sleep 5
-check "Web gateway'den BFF'i atlayıp egress'e çıkış reddediliyor (403 RBAC)" "403" \
+check "Web gateway'den token handler'ı atlayıp egress'e çıkış reddediliyor (403 RBAC)" "403" \
   "$(edge bypass-test / -o /dev/null -w '%{http_code}')"
 kubectl --context "$(ctx dmz)" delete -f "$ROOT_DIR/tests/web-bypass-bff.yaml" >/dev/null
 
@@ -194,7 +217,7 @@ check "Partner: SNI başka host, Host partner (domain fronting) 403" "403" \
   "$(edge www /partner/v1/ -H "Host: $PARTNER_HOST" -o /dev/null -w '%{http_code}')"
 limited=$(partner acme "-o /dev/null -D - https://$PARTNER_HOST:8443/partner/v1/ & \
   $(printf 'curl -s --cacert /ca.pem --cert /p/acme.crt --key /p/acme.key -H "Authorization: Bearer $TOKEN" --resolve %s:8443:$(getent hosts edge-lb | cut -d" " -f1) -o /dev/null -D - https://%s:8443/partner/v1/ & ' \
-     $(for i in $(seq 29); do echo "$PARTNER_HOST $PARTNER_HOST"; done)) wait" | grep -ci '^x-ratelimit-scope: partner')
+     $(for i in $(seq 29); do echo "$PARTNER_HOST $PARTNER_HOST"; done)) wait" | grep -ci '^x-ratelimit-scope: partner' || true)
 check "Partner: kanal kotası aşılınca 429 (gateway, x-ratelimit-scope: partner)" "yes" \
   "$([[ ${limited:-0} -gt 0 ]] && echo yes || echo "no (429 sayısı: ${limited:-0})")"
 
@@ -263,9 +286,9 @@ $K delete pod authz-probe --wait=false >/dev/null
 log "Pod Security: gateway ve DMZ kanal namespace'leri restricted"
 for c in $CLUSTERS; do
   nss="istio-ingress istio-egress"
-  [[ $c == dmz ]] && nss="$nss istio-mobile istio-partner istio-branch web-bff"
+  [[ $c == dmz ]] && nss="$nss istio-mobile istio-partner istio-branch edge-web"
   [[ $c == dmz ]] && nss="$nss ratelimit auth"
-  [[ $c == cluster-a ]] && nss="$nss account-api"
+  [[ $c == cluster-a ]] && nss="$nss account-api channel-bff"
   [[ $c == mgmt ]] && nss="$nss data iam"
   for ns in $nss; do
     warn=$(kubectl --context "$(ctx "$c")" label ns "$ns" pod-security.kubernetes.io/enforce=restricted \
@@ -321,7 +344,7 @@ vk() {  # vk <kullanıcı> <parola dosyası|-> <komut...>: mgmt'teki valkey pod'
 }
 
 check "Mobil: hesaplar PostgreSQL'den (account-api -> egress -> mgmt)" '"source":"postgresql"' "$(mobile /mobile/v1/accounts)"
-check "Web (BFF üzerinden): hesap sorgusu" '"owner":"Acme Ltd."' "$(edge www /accounts/3)"
+check "Web (token handler -> internal BFF): hesap sorgusu" '"owner":"Acme Ltd."' "$(edge www /api/accounts/3)"
 check "Partner (acme): hesap sorgusu" '"owner":"Acme Ltd."' \
   "$(partner acme "https://$PARTNER_HOST:8443/partner/v1/accounts/3")"
 check "IBAN maskeli dönüyor (tam IBAN yanıtta yok)" "yok" \
@@ -346,7 +369,7 @@ check "Valkey: kimliksiz (default) kullanıcı kapalı" "NOAUTH" "$(vk - - PING)
 
 limited=$(PTOKEN=$TPI partner initech "-o /dev/null -D - https://$PARTNER_HOST:8443/partner/v1/accounts & \
   $(printf 'curl -s --cacert /ca.pem --cert /p/initech.crt --key /p/initech.key -H "Authorization: Bearer $TOKEN" --resolve %s:8443:$(getent hosts edge-lb | cut -d" " -f1) -o /dev/null -D - https://%s:8443/partner/v1/accounts & ' \
-     $(for i in $(seq 9); do echo "$PARTNER_HOST $PARTNER_HOST"; done)) wait" | grep -ci '^x-envoy-ratelimited: true')
+     $(for i in $(seq 9); do echo "$PARTNER_HOST $PARTNER_HOST"; done)) wait" | grep -ci '^x-envoy-ratelimited: true' || true)
 check "Global kota: initech (5/dk) aşınca 429 (ratelimit servisi, sayaç mgmt Valkey'de)" "yes" \
   "$([[ ${limited:-0} -gt 0 ]] && echo yes || echo "no (429 sayısı: ${limited:-0})")"
 check "Global kota sayaçları Valkey'de yalnızca rl: önekiyle" "rl:partner_partner_id_" \
@@ -364,50 +387,89 @@ check "PostgreSQL ve Valkey imzalı image'larla (digest)" "2" \
   "$(kubectl --context "$(ctx mgmt)" -n data get pods -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}' \
      | grep -c "^$LAB_REGISTRY/lab/.*@sha256:" || true)"
 
-log "9) Kimlik: token doğrulama ve iç JWT (token exchange)"
+log "9) Kimlik: introspection, IdP token exchange ve iç JWT"
 refresh_tokens
-check "Token'sız istek reddediliyor: web (401)" "401" "$(NOAUTH=1 edge www / -o /dev/null -w '%{http_code}')"
+check "Oturumsuz istek reddediliyor: web /api (401)" "401" "$(NOAUTH=1 edge www /api/ -o /dev/null -w '%{http_code}')"
 check "Token'sız istek reddediliyor: mobil (401)" "401" "$(NOAUTH=1 mobile /mobile/v1/accounts -o /dev/null -w '%{http_code}')"
 check "Token'sız istek reddediliyor: partner (401)" "401" \
   "$(PTOKEN=- partner acme "-o /dev/null -w '%{http_code}' https://$PARTNER_HOST:8443/partner/v1/")"
 check "Token'sız istek reddediliyor: şube (401)" "401" \
   "$(BTOKEN=- branch device "-o /dev/null -w '%{http_code}' https://$BRANCH_HOST/branch/v1/")"
-# Gerçek token'ın gövdesinde yalnızca sub değiştirilir (iss, azp, exp aynı); imza artık tutmaz
-tampered="$(echo "$TM" | cut -d. -f1).$(jwt_payload "$TM" | sed 's/"sub":"[^"]*"/"sub":"saldirgan"/' | base64 -w0 | tr '+/' '-_' | tr -d '=').$(echo "$TM" | cut -d. -f3)"
+# Gerçek token'ın gövdesinde yalnızca jti değiştirilir (lightweight token'da sub yok; iss, azp, exp aynı); imza artık
+# tutmaz -> IdP introspection: aktif değil
+tampered="$(echo "$TM" | cut -d. -f1).$(jwt_payload "$TM" | sed 's/"jti":"[^"]*"/"jti":"saldirgan"/' | base64 -w0 | tr '+/' '-_' | tr -d '=').$(echo "$TM" | cut -d. -f3)"
 check "Değiştirilmiş token (imza tutmuyor) reddediliyor (401)" "401" \
   "$(NOAUTH=1 mobile /mobile/v1/accounts -H "Authorization: Bearer $tampered" -o /dev/null -w '%{http_code}')"
-check "Başka client'ın token'ı (mobil token'ı web kanalında) reddediliyor (403)" "403" \
-  "$(NOAUTH=1 edge www / -H "Authorization: Bearer $TM" -o /dev/null -w '%{http_code}')"
+check "Web kanalı bearer token kabul etmiyor (mobil token, cookie yok: 401)" "401" \
+  "$(NOAUTH=1 edge www /api/ -H "Authorization: Bearer $TM" -o /dev/null -w '%{http_code}')"
 check "Müşteri token'ı şube kanalında reddediliyor (403)" "403" \
   "$(BTOKEN=$TM branch device "-o /dev/null -w '%{http_code}' https://$BRANCH_HOST/branch/v1/accounts")"
+check "Müşteri token'ı partner kanalında reddediliyor (403)" "403" \
+  "$(PTOKEN=$TM partner acme "-o /dev/null -w '%{http_code}' https://$PARTNER_HOST:8443/partner/v1/accounts")"
 check "Partner token'ı başka partner'ın sertifikasıyla reddediliyor (acme token + initech sertifikası, 403)" "403" \
   "$(partner initech "-o /dev/null -w '%{http_code}' https://$PARTNER_HOST:8443/partner/v1/accounts")"
 check "Personel token'ı + cihaz sertifikası: hesaplar (200)" "200" \
   "$(branch device "-o /dev/null -w '%{http_code}' https://$BRANCH_HOST/branch/v1/accounts")"
+mclaims=$(jwt_payload "$TM")
+check "Dış token lightweight: rol ve kişisel veri taşımıyor (içeriği yalnızca introspection'da)" "yok" \
+  "$(grep -qE '"(realm_access|email|name|preferred_username)"' <<<"$mclaims" && echo "var: $mclaims" || echo yok)"
+check "Dış token'ın audience'ı yalnızca kanalının exchange client'ı (mobil -> auth-mobile)" '"aud":"auth-mobile"' "$mclaims"
 
-hdrs=$(edge www /headers)
+hdrs=$(edge www /api/headers)
 check "İç servise x-user-jwt ulaşıyor" '"X-User-Jwt"' "$hdrs"
-check "Dış access token (Authorization) içeri girmiyor" "yok" "$(echo "$hdrs" | grep -qi '"Authorization"' && echo var || echo yok)"
+check "Tarayıcı cookie'si ve dış token içeri girmiyor" "yok" \
+  "$(echo "$hdrs" | grep -qiE '"(Authorization|Cookie)"' && echo var || echo yok)"
 ij=$(echo "$hdrs" | grep -A1 '"X-User-Jwt"' | tail -1 | tr -d ' "')
 claims=$(jwt_payload "$ij")
-check "İç JWT: issuer DMZ'nin (auth.dmz.corp.mesh)" '"iss":"auth.dmz.corp.mesh"' "$claims"
-check "İç JWT: audience internal-apis, kanal web, rol customer" '"aud":"internal-apis"' "$claims"
-check "İç JWT: kanal ve rol taşınıyor" '"channel":"web"' "$claims"
+check "İç JWT'yi Keycloak imzalıyor (iss = customers realm'i)" "\"iss\":\"$SSO_URL/realms/customers\"" "$claims"
+check "İç JWT: audience internal-apis" '"aud":"internal-apis"' "$claims"
+check "İç JWT: kanal web (exchange client'ının claim'i)" '"channel":"web"' "$claims"
+check "İç JWT: acr ve sid taşınıyor" "2" "$(grep -oE '"(acr|sid)":"[^"]+"' <<<"$claims" | wc -l | tr -d ' ')"
 ttl=$(echo "$claims" | sed -n 's/.*"exp":\([0-9]*\).*/\1/p'); iat=$(echo "$claims" | sed -n 's/.*"iat":\([0-9]*\).*/\1/p')
-check "İç JWT: ömür en fazla 5 dk" "yes" "$([[ -n $ttl && -n $iat && $((ttl - iat)) -le 300 ]] && echo yes || echo "no (${ttl:-?}-${iat:-?})")"
+check "İç JWT: ömür en fazla 2 dk" "yes" "$([[ -n $ttl && -n $iat && $((ttl - iat)) -le 120 ]] && echo yes || echo "no (${ttl:-?}-${iat:-?})")"
+check "İç JWT: kişisel veri yok (ad, e-posta)" "yok" \
+  "$(grep -qE '"(email|name|given_name|family_name)"' <<<"$claims" && echo var || echo yok)"
 pclaims=$(jwt_payload "$(partner acme "https://$PARTNER_HOST:8443/partner/v1/headers" | grep -A1 '"X-User-Jwt"' | tail -1 | tr -d ' "')")
-check "İç JWT (partner): partner_id sertifikadan" '"partner_id":"acme"' "$pclaims"
+check "İç JWT (partner): partners realm'i, partner_id IdP'den" '"partner_id":"acme"' "$pclaims"
 bclaims=$(jwt_payload "$(branch device "https://$BRANCH_HOST/branch/v1/headers" | grep -A1 '"X-User-Jwt"' | tail -1 | tr -d ' "')")
-check "İç JWT (şube): cihaz ve rol" '"branch_device":"sube-0001"' "$bclaims"
-check "account-api isteği kullanıcıyla logluyor (sub, kanal)" 'channel="mobile"' \
+check "İç JWT (şube): personelin şubesi (branch_id) cihaz sertifikasıyla eşleşiyor" "\"branch_id\":\"$BRANCH_DEVICE\"" "$bclaims"
+check "account-api isteği kullanıcıyla logluyor (sub, kanal, oturum)" 'channel="mobile"' \
   "$(mobile /mobile/v1/accounts -o /dev/null; kubectl --context "$(ctx cluster-a)" -n account-api logs deploy/account-api --tail=20 2>/dev/null)"
+check "Internal yalnızca Keycloak realm issuer'larına güveniyor (DMZ issuer'ı yok)" "yok" \
+  "$(kubectl --context "$(ctx cluster-a)" get requestauthentication -A -o jsonpath='{..issuer}' | grep -q 'auth.dmz' && echo var || echo yok)"
+check "DMZ'de iç JWT imza anahtarı yok (auth-signing-key hiçbir cluster'da yok)" "yok" \
+  "$(for c in $CLUSTERS; do kubectl --context "$(ctx "$c")" get secret -A --field-selector metadata.name=auth-signing-key -o name 2>/dev/null; done | grep -q . && echo var || echo yok)"
+
+log "Web oturumu (token handler: cookie <-> token)"
+check "Web: giriş Authorization Code + PKCE ile, tarayıcıda yalnızca oturum cookie'si" "__Host-sid " "$(sed -n 's/^COOKIES=//p' <<<"$WLOGIN")"
+check "Web: oturum cookie'si HttpOnly, Secure, SameSite=Strict" "yes" \
+  "$(c=$(sed -n 's/^SET_COOKIE=//p' <<<"$WLOGIN" | tr 'A-Z' 'a-z'); [[ $c == *httponly* && $c == *secure* && $c == *samesite=strict* ]] && echo yes || echo "no ($c)")"
+check "Web: giriş boyunca tarayıcıya giden yanıtlarda token yok" "0" "$(sed -n 's/^TOKEN_LEAK=//p' <<<"$WLOGIN")"
+check "Web: CSRF header'ı olmadan POST reddediliyor (403)" "403" \
+  "$(NOAUTH=1 edge www /api/api/echo -H "Cookie: __Host-sid=$WSID" -X POST -d x -o /dev/null -w '%{http_code}')"
+check "Web: sahte cookie reddediliyor (401)" "401" \
+  "$(NOAUTH=1 edge www /api/ -H "Cookie: __Host-sid=$(openssl rand -hex 32)" -o /dev/null -w '%{http_code}')"
+check "Oturum deposu: Valkey'de yalnızca sess: önekiyle, cookie değeri anahtarda yok (hash)" "yes" \
+  "$(k=$(vk admin valkey-admin --scan --pattern 'sess:*'); [[ -n $k && $k != *"$WSID"* ]] && echo yes || echo "no")"
+check "Oturum deposu: web_session kullanıcısı başka öneki okuyamıyor (ACL)" "NOPERM" \
+  "$(vk web_session valkey-web-session GET rl:x)"
+check "Web: logout (CSRF ile) 204" "204" "$(edge www /auth/logout -X POST -o /dev/null -w '%{http_code}')"
+check "Web: logout sonrası aynı cookie geçersiz (401)" "401" "$(edge www /api/ -o /dev/null -w '%{http_code}')"
+
+# IdP'de oturum kapatılırsa (ör. "tüm cihazlardan çıkış", SOC) dış token introspection'da aktif değil olur. auth-service
+# iç JWT'yi en fazla 30 sn önbellekte tutar; iptal en geç bu sürede etkili olur.
+mresp=$(kc_full customers -d grant_type=password -d client_id=mobile-app -d username=ayse --data-urlencode "password=$(pwf kc-customer-ayse)")
+mt=$(sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p' <<<"$mresp"); mr=$(sed -n 's/.*"refresh_token":"\([^"]*\)".*/\1/p' <<<"$mresp")
+before=$(NOAUTH=1 mobile /mobile/v1/accounts -H "Authorization: Bearer $mt" -o /dev/null -w '%{http_code}')
+kc_logout customers -d client_id=mobile-app -d "refresh_token=$mr"
+sleep 31
+check "IdP'de kapatılan oturumun token'ı 30 sn içinde reddediliyor (200 -> 401)" "200 -> 401" \
+  "$before -> $(NOAUTH=1 mobile /mobile/v1/accounts -H "Authorization: Bearer $mt" -o /dev/null -w '%{http_code}')"
 
 check "Keycloak yönetim konsolu internetten kapalı (/admin, 403)" "403" \
   "$(NOAUTH=1 edge sso /admin/ -o /dev/null -w '%{http_code}')"
 check "Keycloak master realm'i internetten kapalı (403)" "403" \
   "$(NOAUTH=1 edge sso /realms/master/protocol/openid-connect/certs -o /dev/null -w '%{http_code}')"
-check "İç JWT imza anahtarı yalnızca DMZ'de" "dmz" \
-  "$(for c in $CLUSTERS; do kubectl --context "$(ctx "$c")" get secret -A --field-selector metadata.name=auth-signing-key -o name 2>/dev/null | grep -q . && echo -n "$c "; done | xargs)"
 
 log "7) Politika (Kyverno, admission)"
 for c in $CLUSTERS; do

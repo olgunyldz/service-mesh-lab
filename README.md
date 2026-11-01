@@ -17,7 +17,7 @@ Giriş noktaları (host'ta `--resolve ...:8443:127.0.0.1` ve `certs/edge/ca.pem`
 
 | Kanal | Adres |
 |-------|-------|
-| web | **https://www.apps.example.local:8443** (Web BFF) |
+| web | **https://www.apps.example.local:8443** (giriş: `/auth/login`; API: `/api/*`, oturum cookie'siyle) |
 | mobile | https://mobile-api.apps.example.local:8443/mobile/v1/ |
 | partner | https://partner-api.apps.example.local:8443/partner/v1/ (istemci sertifikası: `certs/partner/acme.crt`) |
 | branch (şube) | https://branch-api.corp.internal/branch/v1/: yalnızca şube ağından (`branch-net`, cihaz sertifikası `certs/branch/sube-0001.crt`); host'tan ve internetten erişilemez |
@@ -26,11 +26,12 @@ Giriş noktaları (host'ta `--resolve ...:8443:127.0.0.1` ve `certs/edge/ca.pem`
 
 | # | Test | Sonuç |
 |---|------|-------|
-| 1 | İnternet → edge (HAProxy + WAF) → web gateway → Web BFF → DMZ egress → cluster-a → api-a (HTTPS) | ✅ |
-| – | Kanallar: web (BFF, CORS, güvenlik header'ları), mobil (yalnızca `/mobile/v1/*`), partner (istemci sertifikası, izin listesi, kota 429); sahte `x-channel`/`x-partner-id` eziliyor; web gateway BFF'i atlayıp internal'a çıkamıyor | ✅ |
+| 1 | İnternet → edge (HAProxy + WAF) → web gateway → token handler → DMZ egress → cluster-a → web-bff → api-a (HTTPS) | ✅ |
+| – | Kanallar: web (token handler, internal BFF, CORS, güvenlik header'ları), mobil (yalnızca `/mobile/v1/*`), partner (istemci sertifikası, izin listesi, kota 429); sahte `x-channel`/`x-partner-id` eziliyor; web gateway token handler'ı atlayıp internal'a çıkamıyor; DMZ'de BFF yok | ✅ |
 | – | Şube kanalı: şube WAN'ı → iç firewall → branch-gateway (cihaz sertifikası, kimlik `x-branch-device` ile arka uca); sertifikasız/yabancı CA reddi; şube ağından diğer kapılara ve internetten şube kanalına yol yok | ✅ |
 | 5 | Veri: account-api → PostgreSQL ve api-a → Valkey (mgmt), mesh üzerinden; servis başına kullanıcı (başka şema/yazma reddi, Valkey ACL); DMZ'den PostgreSQL'e yol yok; partner başına global kota (429) | ✅ |
-| – | Kimlik (token exchange): her kanalda token zorunlu (401); sahte/değiştirilmiş token, yanlış client/realm, başka partner'ın sertifikası reddediliyor; içeri yalnızca iç JWT giriyor (Authorization girmiyor); Keycloak yönetim konsolu internetten kapalı | ✅ |
+| – | Kimlik (IdP token exchange): her kanalda kimlik zorunlu (401); değiştirilmiş token, yanlış client/realm, başka partner'ın sertifikası, başka şubenin cihazı reddediliyor; iç JWT'yi Keycloak imzalıyor (≤ 2 dk, `channel`, `acr`, `sid`, kişisel veri yok); IdP'de kapatılan oturum 30 sn içinde reddediliyor; DMZ'de imza anahtarı yok; Keycloak yönetim konsolu internetten kapalı | ✅ |
+| – | Web oturumu: tarayıcıda token yok, yalnızca `__Host-sid` (HttpOnly, Secure, SameSite=Strict); CSRF'siz POST 403; sahte cookie 401; logout sonrası 401; oturum deposu Valkey'de hash'li anahtarla, ayrı ACL kullanıcısıyla | ✅ |
 | – | Edge: HTTP → HTTPS (301), HSTS, TLS 1.1 reddi, TLS 1.2/1.3 kabulü | ✅ |
 | – | Edge: WAF XSS ve SQL injection denemelerini engelliyor (403) | ✅ |
 | – | Edge: sahte `X-Forwarded-For` ve `x-user-jwt` içeri geçmiyor | ✅ |
@@ -72,7 +73,8 @@ Kullanılan sürümler:
 | PostgreSQL | 18.1 (alpine) | mgmt, tek replika StatefulSet |
 | Valkey | 9.0.0 (alpine) | mgmt; Redis uyumlu, BSD lisanslı |
 | Envoy ratelimit | `f4e76690` | DMZ; partner başına global kota |
-| Go servisleri | Go 1.27.1, distroless static | `web-bff`, `account-api` (pgx v5.7.6) |
+| Go servisleri | Go 1.27.1, distroless static | `web-token-handler`, `auth-service` (yalnızca stdlib), `web-bff`, `account-api` (pgx v5.7.6) |
+| Keycloak | 26.8.0 (optimize image) | mgmt; standard token exchange (RFC 8693), introspection, lightweight access token |
 
 ---
 
@@ -174,7 +176,7 @@ flowchart TB
     subgraph DMZ["İç DMZ · kind-dmz"]
         direction TB
         dmzgw["web gateway · dmz-ingressgateway<br/>LB 172.18.200.10 · www"]
-        bff["web-bff (Go) + waypoint"]
+        bff["web-token-handler (Go) + waypoint<br/>cookie ↔ token · BFF yok"]
         mobgw["mobile-gateway<br/>LB 172.18.200.11 · mobile-api"]
         pargw["partner-gateway<br/>LB 172.18.200.12 · partner-api"]
         brgw["branch-gateway<br/>LB 172.18.200.13 · branch-api.corp.internal"]
@@ -188,11 +190,16 @@ flowchart TB
     subgraph A["cluster-a · kind-cluster-a"]
         direction TB
         agw["istio-ingressgateway<br/>LB 172.18.201.10<br/>AuthZ: dmz-egressgateway"]
+        subgraph nsbff["ns channel-bff · ambient"]
+            webbff["web-bff (Go) + waypoint<br/>yalnızca channel=web"]
+        end
         subgraph nsa["ns api-a · ambient"]
             awp["waypoint<br/>L7 AuthZ + routing"]
             aapi["api-a x2<br/>podinfo :9898"]
         end
         aeg["istio-egressgateway<br/>ns istio-egress"]
+        agw -->|"HBONE · web-bff host'u"| webbff
+        webbff -->|"HBONE"| awp
         agw -->|"HBONE"| awp
         awp <-->|"HBONE · ztunnel"| aapi
         awp -->|"mTLS :443"| aeg
@@ -225,7 +232,7 @@ flowchart TB
     classDef edge fill:#fef3c7,stroke:#d97706,color:#78350f
     classDef ext fill:#f3f4f6,stroke:#6b7280,color:#111827
     class dmzgw,mobgw,pargw,brgw,dmzeg,agw,bgw,aeg,beg gw
-    class bff,awp,bwp,aapi,bapi app
+    class bff,webbff,awp,bwp,aapi,bapi app
     class haproxy,waf edge
     class user,internet,branch ext
 ```
@@ -259,12 +266,12 @@ DMZ'ye dört kanaldan girilir (`06 · dmz-channels`). İnternet kanalları edge'
 
 | Kanal | Host | DMZ'deki yol | Kanala özel kurallar |
 |-------|------|--------------|----------------------|
-| web | `www.apps.example.local` | web gateway (`dmz-ingressgateway`) → **web-bff** → waypoint → egress | CORS (yalnızca kendi origin'imiz), BFF güvenlik header'ları, 50 rps |
+| web | `www.apps.example.local` | web gateway (`dmz-ingressgateway`) → **web-token-handler** (cookie → iç JWT) → waypoint → egress → internal **web-bff** | Tarayıcıda token yok (oturum cookie'si, CSRF), CORS (yalnızca kendi origin'imiz), güvenlik header'ları, 50 rps |
 | mobile | `mobile-api.apps.example.local` | `mobile-gateway` → egress | Yalnızca `/mobile/v1/*` (önek kaldırılır), 30 rps |
 | partner | `partner-api.apps.example.local` | edge'de istemci sertifikası → `partner-gateway` → egress | Partner CA sertifikası zorunlu, izin listesi (`acme`), yalnızca `/partner/v1/*`, 5 rps |
 | branch (şube) | `branch-api.corp.internal` | **edge yok:** şube WAN'ı → `branch-fw` (TCP 443) → `branch-gateway` → egress | Branch CA cihaz sertifikası (gateway'de), `x-branch-device`, yalnızca `/branch/v1/*`, 20 rps |
 
-Web kanalı adım adım:
+Web kanalı adım adım (oturum açılmış; giriş akışı: [Kullanıcı kimliği yayılımı](#kullanıcı-kimliği-yayılımı-token-exchange)):
 
 ```mermaid
 sequenceDiagram
@@ -276,31 +283,33 @@ sequenceDiagram
     end
     box rgb(255,237,213) İç DMZ · kind-dmz
         participant D as web gateway<br/>dmz-ingressgateway
-        participant B as web-bff<br/>(+ waypoint)
+        participant B as web-token-handler<br/>(+ waypoint)
         participant E as dmz-egressgateway
     end
     box rgb(219,234,254) cluster-a
         participant G as istio-ingressgateway
+        participant C as web-bff<br/>(ns channel-bff)
         participant W as waypoint<br/>ns api-a
         participant P as api-a pod
     end
 
-    U->>H: GET / · TLS :8443 · Host www.apps.example.local
+    U->>H: GET /api/ · Cookie __Host-sid · TLS :8443 · Host www.apps.example.local
     Note over H: TLS 1.2+ sonlandır · hız/bağlantı sınırı<br/>X-Forwarded-*, x-user-jwt, x-partner-id, x-channel sil
     H->>F: HTTP :8080 (edge-net)
     Note over F: OWASP CRS kuralları · Host → kanal gateway'i
     F->>D: mTLS :443 → 172.18.200.10 · istemci sertifikası CN=edge-waf
-    Note over D: VirtualService web → web-bff<br/>x-channel: web · CORS · 50 rps
+    Note over D: VirtualService web → web-token-handler<br/>x-channel: web · Authorization silinir · CORS · 50 rps
     D->>B: HBONE (ztunnel) :8080
-    Note over B: BFF → api-a Service (waypoint)<br/>authority → api-a.apps.example.local
+    Note over B: cookie → oturum (Valkey) → auth-service:<br/>introspection + token exchange → iç JWT (Keycloak, 2 dk)<br/>web-bff Service (waypoint) · authority → web-bff.apps.example.local
     B->>E: mTLS ISTIO_MUTUAL :443 (waypoint kimliği)
-    Note over E: AuthZ: yalnızca BFF waypoint, mobile-gw, partner-gw<br/>zone-exit → cluster-a.internal.mesh
+    Note over E: AuthZ: yalnızca token handler waypoint, mobile-gw, partner-gw, branch-gw<br/>zone-exit → cluster-a.internal.mesh
     E->>G: mTLS ISTIO_MUTUAL → 172.18.201.10:443
-    Note over G: AuthZ allow-only-dmz-egress
-    G->>W: HBONE :15008
-    Note over W: AuthZ api-a-allow-ingress (GET/POST)
+    Note over G: AuthZ allow-only-dmz-egress + iç JWT (3 realm issuer'ı)
+    G->>C: HBONE (channel-bff waypoint: channel=web)
+    C->>W: HBONE :15008 (iç JWT taşınır)
+    Note over W: AuthZ api-a-allow-ingress (ingress gw veya web-bff, GET/POST, iç JWT)
     W->>P: HBONE → HTTP :9898
-    P-->>U: 200 OK · api-a @ cluster-a · HSTS + BFF güvenlik header'ları
+    P-->>U: 200 OK · api-a @ cluster-a · HSTS + güvenlik header'ları
 ```
 
 | Adım | Nereden → Nereye | Port / Protokol | Şifreleme | Tanımlayan kaynak |
@@ -310,14 +319,14 @@ sequenceDiagram
 | 3 | edge-lb → edge-waf | `:8080` HTTP (`edge-net` ağı) | Yok (edge içi) | `backend waf` |
 | 4 | edge-waf: OWASP CRS, kanal seçimi | Paranoia 1, engelleme modu; Host → gateway VIP'i | – | `WAF_MODE` ([config.env](config.env)), [edge/waf-channels.conf.template](edge/waf-channels.conf.template) |
 | 5 | edge-waf → kanal gateway'i | `172.18.200.10/11/12:443` (`kind` ağı) | **Karşılıklı TLS** (Edge-DMZ Zone CA) | [edge/waf-proxy-backend-ssl.conf.template](edge/waf-proxy-backend-ssl.conf.template), Gateway'ler (`MUTUAL`) |
-| 6 | Kanal gateway'i: yönlendirme ve kanal kuralları | web: `www` → web-bff; mobile/partner: önek kaldırılır, authority `api-a.apps.example.local`; `x-channel`; hız sınırı | – | [manifests/dmz/20-public-gateway.yaml](manifests/dmz/20-public-gateway.yaml), [21-mobile-channel.yaml](manifests/dmz/21-mobile-channel.yaml), [22-partner-channel.yaml](manifests/dmz/22-partner-channel.yaml), [25-rate-limits.yaml](manifests/dmz/25-rate-limits.yaml) |
-| 7 | (web) gateway → web-bff → waypoint | HBONE | **mTLS** | [manifests/dmz/10-web-bff.yaml](manifests/dmz/10-web-bff.yaml) |
+| 6 | Kanal gateway'i: yönlendirme ve kanal kuralları | web: `www` → web-token-handler; mobile/partner/branch: ext_authz (auth-service) ve önek kaldırılır, authority `api-a.apps.example.local`; `x-channel`; hız sınırı | – | [manifests/dmz/20-public-gateway.yaml](manifests/dmz/20-public-gateway.yaml), [21-mobile-channel.yaml](manifests/dmz/21-mobile-channel.yaml), [22-partner-channel.yaml](manifests/dmz/22-partner-channel.yaml), [25-rate-limits.yaml](manifests/dmz/25-rate-limits.yaml) |
+| 7 | (web) gateway → web-token-handler → auth-service, waypoint | HBONE | **mTLS** | [manifests/dmz/10-web-token-handler.yaml](manifests/dmz/10-web-token-handler.yaml), [12-auth-service.yaml](manifests/dmz/12-auth-service.yaml) |
 | 8 | Kanal arka ucu → dmz-egressgateway | `:443` | **mTLS** (`ISTIO_MUTUAL`) | `DestinationRule dmz-egressgateway` (istio-egress) |
-| 9 | dmz-egressgateway: kimlik kontrolü ve yönlendirme | yalnızca web-bff waypoint'i, `mobile-gateway`, `partner-gateway`, `branch-gateway`; `zone-exit` → `cluster-a.internal.mesh` | – | [manifests/dmz/30-internal-clusters.yaml](manifests/dmz/30-internal-clusters.yaml) |
+| 9 | dmz-egressgateway: kimlik kontrolü ve yönlendirme | yalnızca token handler'ın waypoint'i, `mobile-gateway`, `partner-gateway`, `branch-gateway`; `zone-exit` → `cluster-a.internal.mesh` | – | [manifests/dmz/30-internal-clusters.yaml](manifests/dmz/30-internal-clusters.yaml) |
 | 10 | dmz-egressgateway → cluster-a ingress gw | `172.18.201.10:443` | **mTLS** (`ISTIO_MUTUAL`, SNI `api-a.apps.example.local`) | `ServiceEntry` + `DestinationRule cluster-a-gateway` |
-| 11 | cluster-a ingress gw: kimlik kontrolü | istemci sertifikası `corp.mesh/ns/istio-egress/sa/dmz-egressgateway` olmalı | – | [manifests/cluster-a/30-internal-gateway.yaml](manifests/cluster-a/30-internal-gateway.yaml) `allow-only-dmz-egress` |
+| 11 | cluster-a ingress gw: kimlik kontrolü | istemci sertifikası `corp.mesh/ns/istio-egress/sa/dmz-egressgateway` olmalı ve Keycloak imzalı iç JWT (`requestPrincipals`); web'de `web-bff.apps.example.local` → `channel-bff/web-bff` | – | [manifests/cluster-a/30-internal-gateway.yaml](manifests/cluster-a/30-internal-gateway.yaml) `allow-only-dmz-egress` |
 | 12 | cluster-a ingress gw → waypoint | HBONE `:15008` | **mTLS** | `Service api-a` üzerindeki `istio.io/ingress-use-waypoint: "true"` |
-| 13 | waypoint: L7 yetki kontrolü | kaynak `istio-ingressgateway`, metot `GET`/`POST` | – | [manifests/cluster-a/40-security.yaml](manifests/cluster-a/40-security.yaml) |
+| 13 | waypoint: L7 yetki kontrolü | kaynak `istio-ingressgateway` veya `channel-bff/web-bff`, metot `GET`/`POST`, iç JWT | – | [manifests/cluster-a/40-security.yaml](manifests/cluster-a/40-security.yaml) |
 | 14 | waypoint → ztunnel → api-a pod | HBONE `:15008` → `:9898` | **mTLS** | [manifests/cluster-a/10-api-a.yaml](manifests/cluster-a/10-api-a.yaml) |
 
 `api-a.apps.example.local` artık dışarıya açık değil; yalnızca zone'lar arası iç ad olarak kullanılıyor. Ayrıntılar: [docs/06-dmz-channels.md](docs/06-dmz-channels.md).
@@ -475,8 +484,10 @@ Her workload sertifikası `spiffe://corp.mesh/ns/<namespace>/sa/<serviceaccount>
 
 | Kimlik | Nerede | Kullanım |
 |--------|--------|----------|
-| `corp.mesh/ns/istio-ingress/sa/dmz-ingressgateway` | dmz | Web kanalı: edge'den gelen trafiği web-bff'e verir |
-| `corp.mesh/ns/web-bff/sa/web-bff`, `.../web-bff/sa/waypoint` | dmz | Web BFF ve çıkışını egress'e taşıyan waypoint |
+| `corp.mesh/ns/istio-ingress/sa/dmz-ingressgateway` | dmz | Web kanalı: edge'den gelen trafiği token handler'a verir |
+| `corp.mesh/ns/edge-web/sa/web-token-handler`, `.../edge-web/sa/waypoint` | dmz | Web token handler (cookie ↔ token) ve çıkışlarını (Keycloak, Valkey, web-bff) egress'e taşıyan waypoint |
+| `corp.mesh/ns/auth/sa/auth-service` | dmz | Introspection + token exchange (yalnızca kanal gateway'leri ve token handler çağırabilir) |
+| `corp.mesh/ns/channel-bff/sa/web-bff` | cluster-a | Web BFF (internal): domain servislerini iç JWT ile çağırır |
 | `corp.mesh/ns/istio-mobile/sa/mobile-gateway` | dmz | Mobil kanal |
 | `corp.mesh/ns/istio-partner/sa/partner-gateway` | dmz | Partner kanalı |
 | `corp.mesh/ns/istio-branch/sa/branch-gateway` | dmz | Şube kanalı |
@@ -489,17 +500,20 @@ Her workload sertifikası `spiffe://corp.mesh/ns/<namespace>/sa/<serviceaccount>
 
 | Hedef | İzin verilen kaynak | Kural | Uygulandığı yer |
 |-------|---------------------|-------|-----------------|
-| dmz-egressgateway | web-bff waypoint'i, `mobile-gateway`, `partner-gateway`, `branch-gateway` (web gateway değil) | L4/L7 | gateway Envoy |
-| web-bff | yalnızca web gateway (`dmz-ingressgateway`), port 8080 | L4 | ztunnel |
-| web-bff çıkışı (api-a Service) | yalnızca `web-bff` | L7 | waypoint (web-bff) |
+| dmz-egressgateway | token handler'ın waypoint'i, `mobile-gateway`, `partner-gateway`, `branch-gateway` (web gateway değil) | L4/L7 | gateway Envoy |
+| web-token-handler | yalnızca web gateway (`dmz-ingressgateway`), port 8080 | L4 | ztunnel |
+| token handler çıkışları (web-bff, Keycloak, Valkey Service'leri) | yalnızca `web-token-handler`; Keycloak'ta yalnızca customers realm'inin token ve logout uçları | L7 | waypoint (edge-web) |
+| auth-service | kanal gateway'leri ve `web-token-handler`, port 8080 | L4 | ztunnel |
+| auth-service çıkışı (Keycloak) | yalnızca `auth-service`; 3 realm'in token ve introspect uçları, POST | L7 | waypoint (auth) |
 | mobile-gateway | yalnızca `/mobile/v1/*`, GET/POST | L7 | gateway Envoy |
 | partner-gateway | `x-partner-id` ∈ {acme} (edge'de sertifikadan), `/partner/v1/*`, GET/POST | L7 | gateway Envoy |
 | branch-gateway | Branch CA cihaz sertifikası (TLS), `/branch/v1/*`, GET/POST | TLS + L7 | gateway Envoy |
-| cluster-a ingress gw | yalnızca `dmz-egressgateway` (cluster-b aktifken + `istio-egressgateway`) | L4/L7 | gateway Envoy |
+| cluster-a ingress gw | yalnızca `dmz-egressgateway` (cluster-b aktifken + `istio-egressgateway`) ve Keycloak imzalı iç JWT | L4/L7 | gateway Envoy |
+| web-bff (channel-bff) | yalnızca `istio-ingressgateway`, customers realm'inin JWT'si, `channel=web` | L7 | waypoint (channel-bff) |
 | cluster-b ingress gw | `dmz-egressgateway` + `istio-egressgateway` | L4/L7 | gateway Envoy |
 | api-a namespace'i (varsayılan) | hiçbiri (`allow-nothing`) | L4 | ztunnel |
 | api-a pod'ları | yalnızca `api-a/sa/waypoint` | L4 | ztunnel |
-| api-a servisi | yalnızca `istio-ingressgateway`, `GET`/`POST` | L7 | waypoint |
+| api-a servisi | yalnızca `istio-ingressgateway` ve `channel-bff/web-bff`, `GET`/`POST`, iç JWT | L7 | waypoint |
 | cluster-a egress gw | yalnızca `api-a/sa/waypoint` | L4/L7 | gateway Envoy |
 | api-b servisi | yalnızca `istio-ingressgateway`, `GET`/`POST` | L7 | waypoint |
 | cluster-a/b mesh geneli | – | mTLS `STRICT` | ztunnel |
@@ -567,7 +581,7 @@ Kiali'de görülen birleşik graph (workload görünümü, loadgen çalışırke
 
 | Kenar | Trafik |
 |-------|--------|
-| `dmz/dmz-ingressgateway` → `dmz/web-bff` → `dmz/waypoint` → `dmz/dmz-egressgateway` → `dmz/cluster-a-gateway` | Akış 1, web kanalı |
+| `dmz/dmz-ingressgateway` → `dmz/web-token-handler` → `dmz/waypoint` → `dmz/dmz-egressgateway` → `cluster-a/istio-ingressgateway` → `cluster-a/web-bff` | Akış 1, web kanalı |
 | `dmz/mobile-gateway`, `dmz/partner-gateway`, `dmz/branch-gateway` → `dmz/dmz-egressgateway` | Akış 1, mobil, partner ve şube kanalları |
 | `cluster-a/istio-ingressgateway` → `cluster-a/waypoint` → `cluster-a/api-a` | Akış 1, mTLS |
 | `dmz/dmz-egressgateway` → `dmz/mgmt-gateway` · `cluster-a/istio-egressgateway` → `cluster-a/mgmt-gateway` | Metrik gönderimi (~1 rps her biri) |
@@ -595,7 +609,10 @@ Graph'ı okurken dikkat edilecekler:
 | dmz-ingressgateway (web kanalı) | dmz | istio-ingress | helm `istio/gateway` |
 | mobile-gateway / partner-gateway / branch-gateway | dmz | istio-mobile / istio-partner / istio-branch | helm `istio/gateway` |
 | branch-fw (iç firewall) + branch-terminal | – (Docker, `branch-net`; branch-fw ayrıca `kind`) | – | `scripts/06c-deploy-branch.sh` |
-| web-bff (Go) + waypoint | dmz | web-bff | `services/web-bff`, `manifests/dmz/10-web-bff.yaml` |
+| web-token-handler (Go) + waypoint | dmz | edge-web | `services/web-token-handler`, `manifests/dmz/10-web-token-handler.yaml` |
+| auth-service (Go) + waypoint | dmz | auth | `services/auth-service`, `manifests/dmz/12-auth-service.yaml` |
+| web-bff (Go) + waypoint | cluster-a | channel-bff | `services/web-bff`, `manifests/cluster-a/16-channel-bff.yaml` |
+| Keycloak | mgmt | iam | `images/keycloak`, `infra/keycloak/`, `manifests/mgmt/30-keycloak.yaml` |
 | ratelimit (Envoy) + waypoint | dmz | ratelimit | `manifests/dmz/26-global-rate-limit.yaml` |
 | account-api (Go) + waypoint | cluster-a | account-api | `services/account-api`, `manifests/cluster-a/15-account-api.yaml` |
 | PostgreSQL, Valkey | mgmt | data | `manifests/mgmt/20-data.yaml` |
@@ -633,9 +650,10 @@ service-mesh/
 │   └── values/                 # helm values: istiod, cni, ztunnel, ingress/egress gw, kiali
 ├── manifests/
 │   ├── dmz/
-│   │   ├── 00-namespaces.yaml          # istio-ingress/egress, istio-mobile, istio-partner, istio-branch, web-bff
-│   │   ├── 10-web-bff.yaml             # Web BFF, çıkış Service'i + waypoint, AuthZ
-│   │   ├── 20-public-gateway.yaml      # web kanalı: www → web-bff, CORS, x-channel
+│   │   ├── 00-namespaces.yaml          # istio-ingress/egress, istio-mobile, istio-partner, istio-branch, edge-web, auth
+│   │   ├── 10-web-token-handler.yaml   # web token handler (cookie ↔ token), Keycloak/Valkey/web-bff çıkışları, AuthZ
+│   │   ├── 12-auth-service.yaml        # ext_authz: introspection + Keycloak token exchange
+│   │   ├── 20-public-gateway.yaml      # web kanalı: www → web-token-handler, CORS, x-channel; sso host'u
 │   │   ├── 21-mobile-channel.yaml      # mobile-gateway: /mobile/v1/* → egress
 │   │   ├── 22-partner-channel.yaml     # partner-gateway: izin listesi, /partner/v1/* → egress
 │   │   ├── 23-branch-channel.yaml      # branch-gateway: cihaz sertifikası, /branch/v1/* → egress
@@ -649,9 +667,11 @@ service-mesh/
 │   │   ├── 00-namespaces.yaml          # ambient + waypoint etiketleri
 │   │   ├── 10-api-a.yaml               # podinfo (backend opsiyonel, ConfigMap'ten; Valkey önbelleği)
 │   │   ├── 15-account-api.yaml         # account-api (PostgreSQL), waypoint, AuthZ
+│   │   ├── 16-channel-bff.yaml         # web-bff (internal), waypoint, AuthZ (yalnızca channel=web)
 │   │   ├── 20-waypoint.yaml            # waypoint + seccomp ConfigMap
 │   │   ├── 30-internal-gateway.yaml    # ISTIO_MUTUAL gateway + AuthZ
 │   │   ├── 40-security.yaml            # STRICT mTLS, allow-nothing, L4/L7 AuthZ, egress gw AuthZ
+│   │   ├── 45-request-authentication.yaml  # iç JWT: 3 Keycloak realm issuer'ı, inline JWKS
 │   │   ├── 50-egress.yaml              # ServiceEntry → waypoint → egress gw → httpbin.org
 │   │   ├── 55-data-exit.yaml           # veri çıkışı: postgres/valkey Service → waypoint → egress → mgmt
 │   │   ├── 60-metrics-exit.yaml        # Prometheus -> istio-egressgateway -> mgmt (remote_write)
@@ -682,11 +702,14 @@ service-mesh/
 │   ├── 08-verify.sh            # uçtan uca testler (✔/✘ özeti)
 │   └── 99-destroy.sh           # --certs, --cache
 ├── services/
-│   ├── web-bff/                # Go: web kanalının BFF'i (distroless, imzalı)
+│   ├── web-token-handler/      # Go: web kanalının DMZ bileşeni (cookie ↔ token, oturum Valkey'de)
+│   ├── auth-service/           # Go: ext_authz (introspection + Keycloak token exchange)
+│   ├── web-bff/                # Go: web kanalının BFF'i (internal, channel-bff)
 │   └── account-api/            # Go: hesapları PostgreSQL'den okuyan internal servis
 ├── tests/
 │   ├── zone-direct-path.yaml   # "tek kapı" negatif testi için geçici rota
-│   └── web-bypass-bff.yaml     # web gateway'in BFF'i atlayamadığını gösteren geçici rota
+│   ├── web-bypass-bff.yaml     # web gateway'in token handler'ı atlayamadığını gösteren geçici rota
+│   └── web-login.sh            # web'e tarayıcı gibi giriş (Authorization Code + PKCE), cookie bayrakları ve token sızıntısı
 ├── docs/
 │   ├── README.md               # adımların listesi
 │   ├── 00-setup.md             # her adımın dokümanı: yapılanlar, değişen dosyalar,
@@ -773,12 +796,12 @@ bash scripts/08-verify.sh      # her test ✔/✘ olarak raporlanır, sonunda ö
 # Manuel (Git Bash). --ssl-no-revoke: Windows curl'ü CRL kontrolü yapar, lab CA'sının CRL'i yok
 H=www.apps.example.local
 C="--ssl-no-revoke --cacert certs/edge/ca.pem --resolve $H:8443:127.0.0.1"
-curl $C https://$H:8443/                                   # web-bff -> api-a
-curl $C https://$H:8443/bff/v1/dashboard                   # BFF'in birleştirdiği yanıt
+curl $C https://$H:8443/                                   # token handler'ın statik sayfası
+curl $C https://$H:8443/api/                               # 401: oturum yok (web'de token değil cookie; giriş /auth/login)
+# Web'e giriş tarayıcıdan ya da Linux curl'lü container'dan: tests/web-login.sh (bkz. 08-verify.sh web_login())
 M=mobile-api.apps.example.local
 curl --ssl-no-revoke --cacert certs/edge/ca.pem --resolve $M:8443:127.0.0.1 https://$M:8443/mobile/v1/
 # Partner: Windows curl'ü PEM istemci sertifikası kullanamaz; Linux curl'lü container'dan (bkz. 08-verify.sh partner())
-curl $C -X POST -d selam https://$H:8443/api/echo           # echo (cluster-b aktifse api-b'ye gider)
 curl $C -s -o /dev/null -w '%{http_code}\n' "https://$H:8443/?id=1%27%20OR%20%271%27=%271"   # WAF: 403
 curl -sI -H "Host: $H" http://127.0.0.1:8080/               # 301 -> https://...:8443/
 ```
@@ -843,9 +866,10 @@ Kurulum, Docker'da cluster'lardan bağımsız üç kalıcı registry container'�
 
 ## Kullanıcı kimliği yayılımı (token exchange)
 
-> `08 · token-exchange` ile uygulandı. Ayrıntılar: [docs/08-token-exchange.md](docs/08-token-exchange.md).
+> `08 · token-exchange` ile başladı, `09a · idp-token-exchange` ile IdP tabanlı modele geçti. Ayrıntılar:
+> [docs/08-token-exchange.md](docs/08-token-exchange.md), [docs/09a-idp-token-exchange.md](docs/09a-idp-token-exchange.md).
 
-Dışarıdan gelen access token DMZ'de doğrulanır ve orada bırakılır. İçeriye yalnızca DMZ'nin imzaladığı, kısa ömürlü bir **iç JWT** girer; internal servisler kullanıcıyı bu JWT'den tanır.
+Dışarıdan gelen kimlik bilgisi (mobil ve partner access token'ı, şube personel token'ı, web'de oturum cookie'si) DMZ'de bırakılır. İçeriye yalnızca **Keycloak'ın imzaladığı**, 2 dakikalık bir **iç JWT** girer. Bu JWT'yi DMZ'deki auth-service, RFC 8693 token exchange ile Keycloak'tan alır; DMZ'de imza anahtarı yoktur.
 
 ```mermaid
 sequenceDiagram
@@ -860,32 +884,42 @@ sequenceDiagram
     participant A as servis
 
     U->>KC: login / token (sso host'u, edge → web gateway → egress → mgmt)
-    KC-->>U: access token (RS256, 5 dk, yalnızca client'ın rolü)
+    KC-->>U: lightweight access token (aud = kanalın exchange client'ı, rol ve kişisel veri yok)
     U->>G: istek · Authorization: Bearer
     G->>AS: ext_authz (x-auth-channel gateway'den, x-partner-id / XFCC)
-    Note over AS: imza (Keycloak JWKS) · iss = kanalın realm'i<br/>azp = kanalın client'ı (partner: = sertifika CN)<br/>rol · exp · typ
-    AS-->>G: 200 + x-user-jwt (iss auth.dmz.corp.mesh, aud internal-apis, ≤ 5 dk)
+    AS->>KC: introspection (aktif mi, oturum açık mı, azp, rol)
+    Note over AS: iss = kanalın realm'i · azp = kanalın client'ı<br/>(partner: = sertifika CN) · rol · şube cihazı
+    AS->>KC: token exchange (RFC 8693, kanalın exchange client'ı, audience internal-apis)
+    KC-->>AS: iç JWT (realm imzalı, 2 dk, channel, acr, sid, roles)
+    AS-->>G: 200 + x-user-jwt (30 sn önbellekli)
     Note over G: Authorization silinir
     G->>E: mTLS · x-user-jwt
     E->>GA: mTLS · x-user-jwt
-    Note over GA: RequestAuthentication (inline JWKS)<br/>requestPrincipals zorunlu
+    Note over GA: RequestAuthentication (3 realm issuer'ı, inline JWKS)<br/>requestPrincipals zorunlu
     GA->>WA: HBONE
-    Note over WA: iç JWT tekrar doğrulanır · rol kontrolü
+    Note over WA: iç JWT tekrar doğrulanır · rol / kanal kontrolü
     WA->>A: x-user-jwt (servis claim'leri okur)
 ```
 
-| Kanal | Realm | Kabul edilen client (`azp`) | Ek koşul | İç JWT'ye eklenen |
-|-------|-------|-----------------------------|----------|-------------------|
-| web | `customers` | `web-bff` | rol `customer` | `channel=web` |
-| mobile | `customers` | `mobile-app` | rol `customer` | `channel=mobile` |
-| partner | `partners` | sertifika CN'i (`x-partner-id`) | client credentials, rol `partner` (token sertifikaya bağlı) | `partner_id` |
-| branch | `staff` | `branch-teller` | rol `teller`/`operations` + cihaz sertifikası (XFCC) | `branch_device` |
+**Web kanalında** tarayıcı hiç token görmez:
+- `web-token-handler` (DMZ) giriş akışını sunucu tarafında yürütür: Authorization Code + PKCE, `web-app` gizli client.
+- Token'ları oturum deposunda (Valkey, `sess:*`) tutar; tarayıcıya yalnızca `__Host-sid` cookie'si (HttpOnly, Secure, SameSite=Strict) gider.
+- Her `/api/*` isteğinde cookie'yi oturuma çevirir, auth-service'e kendisi sorar ve isteği iç JWT ile internal'daki `web-bff`'e iletir.
 
-- **İmza anahtarı yalnızca DMZ'de durur.** Internal cluster'lar açık anahtarı `RequestAuthentication` içinde **inline JWKS** olarak bilir; internal'dan DMZ'ye ağ çağrısı yok.
-- **Dış token içeri girmez.** Kanal gateway'leri `Authorization` header'ını siler. İstemcinin gönderdiği `x-user-jwt`'yi edge zaten siler; içeride imza doğrulaması DMZ dışında üretilmiş JWT'yi reddeder.
-- **Kısa ömür.** İç JWT en fazla 5 dakika yaşar ve dış token'dan uzun yaşamaz.
+| Kanal | Realm | Dış client (`azp`) | Exchange client (`channel`) | Ek koşul | İç JWT'ye eklenen |
+|-------|-------|--------------------|-----------------------------|----------|-------------------|
+| web | `customers` | `web-app` (token handler) | `auth-web` (`web`) | rol `customer`, oturum cookie'si + CSRF | – |
+| mobile | `customers` | `mobile-app` | `auth-mobile` (`mobile`) | rol `customer` | – |
+| partner | `partners` | sertifika CN'i (`x-partner-id`) | `auth-partner` (`partner`) | client credentials, rol `partner` (token sertifikaya bağlı) | `partner_id` |
+| branch | `staff` | `branch-teller` | `auth-branch` (`branch`) | rol `teller`/`operations` + cihaz sertifikası; `branch_id` = cihaz | `branch_id` |
+
+- **İç JWT'yi IdP imzalar.** DMZ ele geçirilse bile içeri girecek kimliği DMZ uyduramaz; kanal bilgisi (`channel`) de IdP'nin imzaladığı bir claim.
+- **Internal yalnızca Keycloak realm anahtarlarına güvenir.** Açık anahtarlar `RequestAuthentication`'da inline JWKS. Realm anahtarları kurulumda üretilip Keycloak'a verildiği için internal'dan IdP'ye ağ çağrısı yok.
+- **Dış token içeri girmez ve içerik taşımaz.** Kanal gateway'leri `Authorization`'ı siler. Dış token lightweight: içeriği yalnızca introspection ile okunur. `aud`'u yalnızca kendi kanalının exchange client'ı olduğundan başka kanalda çevrilemez.
+- **Kısa ömür, iptal.** İç JWT 2 dk yaşar. Introspection, IdP'de kapatılan oturumu yakalar (önbellek nedeniyle en geç 30 sn).
+- **Kişisel veri yok.** İç JWT'de ad ve e-posta yok; servisler kullanıcıyı `sub` ile tanır.
 - **Header aktarımı uygulamanın işi.** Mesh header'ları kendiliğinden kopyalamaz; web-bff `x-user-jwt`'yi upstream çağrılarına taşır.
-- **Consent:** first-party (web, mobil, şube) ve partner client credentials akışlarında yok. Üçüncü taraf açık bankacılık rızası: `09b · consent`.
+- **Consent:** first-party (web, mobil, şube) ve partner client credentials akışlarında yok. Üçüncü taraf açık bankacılık rızası: `09c · consent`.
 
 ## Hedef katman modeli (planlanan)
 
@@ -957,8 +991,9 @@ Her adım ayrı bir branch'te yapılır; her branch bir önceki biten branch'ten
 | 06 | `dmz-channels` | Mobile GW, Partner GW ve şube kanalı (ayrı Istio gateway'ler), Web BFF; ingress host bazlı yönlendirme, internal'a egress üzerinden; kanal bazlı rate limit, CORS, güvenlik header'ları | ✅ |
 | 07 | `data` | mgmt'te PostgreSQL ve Valkey (Redis uyumlu); internal servislerden mgmt gateway üzerinden mTLS (TCP) erişim; servis başına DB kullanıcısı; partner başına global rate limit | ✅ |
 | 08 | `token-exchange` | DMZ'de auth-service (access token → iç JWT), Keycloak mgmt'te (kanal client'ları, kısa ömürlü token, brute force, personel OTP); internal'da iç JWT zorunlu; ayrıntılar: [Kullanıcı kimliği yayılımı](#kullanıcı-kimliği-yayılımı-token-exchange) | ✅ |
-| 09 | `l7-policies` | Waypoint'te claim bazlı yetkilendirme (rol, kanal, `acr`) ve header kuralları; Redis ile kullanıcı ve partner bazlı global rate limit ve kota | ⏳ |
-| 09b | `consent` | Açık bankacılık rızası: üçüncü taraf client (ör. `fintech-x`) için authorization code akışında müşteri rızası; rızaları tutan `consent-service` (Go, PostgreSQL): hesap, izin, süre; consent ID'nin iç JWT'ye taşınması, account-api'nin yalnızca rızadaki hesapları döndürmesi; rızanın geri alınması. First-party (web, mobil, şube) ve partner client credentials akışlarında consent yok (bkz. `08`) | ⏳ |
+| 09a | `idp-token-exchange` | İç JWT'yi Keycloak üretir (introspection + RFC 8693 token exchange, kanal başına exchange client'ı, 2 dk, `channel`/`acr`/`sid`, kişisel veri yok); DMZ'de imza anahtarı yok; lightweight dış token'lar; web'de token handler (cookie oturumu, CSRF, refresh rotation), BFF internal'da (`channel-bff`); ayrıntılar: [docs/09a-idp-token-exchange.md](docs/09a-idp-token-exchange.md) | ✅ |
+| 09b | `l7-policies` | Waypoint'te claim bazlı yetkilendirme: API scope'ları (`accounts:read`, `transfers:write`), `acr` seviyeleri ve step-up, kanal kuralları, nesne seviyesinde yetki (BOLA); örnek yazma ucu (transfer); kullanıcı bazlı global kota | ⏳ |
+| 09c | `consent` | Açık bankacılık rızası: üçüncü taraf client (ör. `fintech-x`) için authorization code akışında müşteri rızası; rızaları tutan `consent-service` (Go, PostgreSQL): hesap, izin, süre; consent ID'nin iç JWT'ye taşınması, account-api'nin yalnızca rızadaki hesapları döndürmesi; rızanın geri alınması. First-party (web, mobil, şube) ve partner client credentials akışlarında consent yok (bkz. `08`) | ⏳ |
 | 10 | `logging` | mgmt'te Loki + Fluent Bit; access log'lara `x-request-id`, `zone`, `channel`; Kubernetes audit log | ⏳ |
 | 11 | `tracing` | mgmt'te Grafana Tempo + OpenTelemetry; gateway, waypoint ve servis span'leri; Grafana'da log ↔ trace geçişi | ⏳ |
 | 12 | `traffic-mgmt` | Canary (v1/v2 ağırlıklı yönlendirme), fault injection (gecikme/hata), circuit breaker, outlier detection; etkiler Kiali ve Tempo'da izlenir | ⏳ |

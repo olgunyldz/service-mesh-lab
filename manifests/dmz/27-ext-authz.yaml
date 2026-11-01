@@ -1,25 +1,8 @@
-# Kanal gateway'lerinde harici yetkilendirme (08 · token-exchange). Her istek önce auth-service'e sorulur
+# Kanal gateway'lerinde harici yetkilendirme (08 · token-exchange, 09a). Her istek önce auth-service'e sorulur
 # (sağlayıcılar: istio/values/istiod-dmz.yaml). İzin verilirse x-user-jwt eklenir; Authorization VirtualService'te silinir.
 # CUSTOM politikalar ALLOW/DENY'den önce değerlendirilir; kanal AuthZ'leri (yol, izin listesi) ayrıca uygulanır.
-apiVersion: security.istio.io/v1
-kind: AuthorizationPolicy
-metadata:
-  name: ext-authz
-  namespace: istio-ingress
-spec:
-  selector:
-    matchLabels:
-      istio: dmz-ingressgateway
-  action: CUSTOM
-  provider:
-    name: auth-web
-  rules:
-    - to:
-        - operation:
-            hosts: ["www.apps.example.local", "www.apps.example.local:*"]
-            notPaths: ["/healthz"]   # edge'in hazırlık kontrolü (BFF'in kendi sağlık ucu, internal'a gitmez)
-            notMethods: ["OPTIONS"]  # CORS preflight token taşımaz; CORS filtresi yanıtlar, internal'a giderse JWT'siz reddedilir
----
+# Web kanalında gateway'de ext_authz yok: tarayıcı token taşımaz; web-token-handler cookie'yi oturuma çevirip
+# auth-service'e kendisi sorar (10-web-token-handler.yaml).
 # SSO host'unda yönetim uçları DMZ'de de kapalı (mgmt'te ayrıca kapalı: derinlemesine savunma)
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy

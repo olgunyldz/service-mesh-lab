@@ -29,6 +29,7 @@ user default off
 user admin on >$(pw valkey-admin) ~* &* +@all
 user api_a on >$(pw valkey-api-a) ~cache:api-a:* ~api-a-* resetchannels -@all +@read +@write +@keyspace +ping +hello +auth -@dangerous
 user ratelimit on >$(pw valkey-ratelimit) ~rl:* resetchannels -@all +@read +@write +@keyspace +@transaction +ping +hello +auth -@dangerous
+user web_session on >$(pw valkey-web-session) ~sess:* resetchannels -@all +get +set +del +ping +hello +auth
 EOF
 )
 secret mgmt data valkey-acl --from-literal=users.acl="$acl"
@@ -48,10 +49,20 @@ secret mgmt iam keycloak-db --from-literal=KC_DB_PASSWORD="$(pw pg-keycloak)"
 secret mgmt iam keycloak-admin --from-literal=KC_BOOTSTRAP_ADMIN_USERNAME=admin \
   --from-literal=KC_BOOTSTRAP_ADMIN_PASSWORD="$(pw keycloak-admin)"
 
-# mgmt: realm'ler (client secret'ları ve test kullanıcı parolalarıyla). Direct grant (ROPC) yalnızca lab testleri için.
+# mgmt: realm'ler (client secret'ları, test kullanıcı parolaları ve realm imza anahtarıyla). Direct grant (ROPC) yalnızca
+# lab testleri için (mobil, personel); web'de yok: web-app gizli client, giriş tarayıcıda Authorization Code + PKCE ile.
+pem_body() { grep -v -- '-----' "$1" | tr -d '\r\n'; }   # PEM -> tek satır base64 (realm JSON'undaki key provider'a)
 tmp=$(cd "$(mktemp -d)" && (pwd -W 2>/dev/null || pwd))   # Windows kubectl için C:/... biçimi
 for f in "$ROOT_DIR"/infra/keycloak/realm-*.json; do
+  realm=$(basename "$f" .json); realm=${realm#realm-}
   sed -e "s|__LAB_DIRECT_GRANT__|true|g" \
+      -e "s|__IDP_PRIVATE_KEY__|$(pem_body "$ROOT_DIR/certs/idp/$realm.key")|g" \
+      -e "s|__IDP_CERTIFICATE__|$(pem_body "$ROOT_DIR/certs/idp/$realm.crt")|g" \
+      -e "s|__WEB_APP_SECRET__|$(pw kc-web-app)|g" \
+      -e "s|__AUTH_WEB_SECRET__|$(pw kc-auth-web)|g" \
+      -e "s|__AUTH_MOBILE_SECRET__|$(pw kc-auth-mobile)|g" \
+      -e "s|__AUTH_PARTNER_SECRET__|$(pw kc-auth-partner)|g" \
+      -e "s|__AUTH_BRANCH_SECRET__|$(pw kc-auth-branch)|g" \
       -e "s|__CUSTOMER_PASSWORD__|$(pw kc-customer-ayse)|g" \
       -e "s|__STAFF_PASSWORD__|$(pw kc-staff-teller01)|g" \
       -e "s|__PARTNER_ACME_SECRET__|$(pw kc-partner-acme)|g" \
@@ -61,6 +72,12 @@ done
 secret mgmt iam keycloak-realms $(for f in "$tmp"/*.json; do printf -- '--from-file=%s ' "$f"; done)
 rm -rf "$tmp"
 
-# dmz: iç JWT imza anahtarı (yalnızca auth-service; internal cluster'lar yalnızca açık anahtarı bilir)
-secret dmz auth auth-signing-key --from-file=signing.key="$ROOT_DIR/certs/auth/signing.key"
+# --- Token exchange ve web oturumu (09a · idp-token-exchange) ---
+# dmz: auth-service'in kanal başına exchange client'ları (iç JWT'yi Keycloak imzalar; DMZ'de imza anahtarı yok)
+secret dmz auth auth-exchange-clients --from-literal=AUTH_WEB_SECRET="$(pw kc-auth-web)" \
+  --from-literal=AUTH_MOBILE_SECRET="$(pw kc-auth-mobile)" --from-literal=AUTH_PARTNER_SECRET="$(pw kc-auth-partner)" \
+  --from-literal=AUTH_BRANCH_SECRET="$(pw kc-auth-branch)"
+# dmz: web-token-handler -> Keycloak (web-app gizli client'ı) ve oturum deposu (mgmt Valkey, web_session kullanıcısı)
+secret dmz edge-web web-token-handler --from-literal=CLIENT_SECRET="$(pw kc-web-app)" \
+  --from-literal=VALKEY_USER=web_session --from-literal=VALKEY_PASSWORD="$(pw valkey-web-session)"
 

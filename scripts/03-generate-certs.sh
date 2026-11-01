@@ -123,16 +123,20 @@ if [[ ! -f "branch/${BRANCH_DEVICE}.crt" ]]; then
     -extfile branch/client-ext.cnf -out "branch/${BRANCH_DEVICE}.crt"
 fi
 
-# İç JWT imza anahtarı (auth-service, DMZ). Özel anahtar yalnızca DMZ'ye gider; internal cluster'lar açık anahtarı
-# RequestAuthentication'da inline JWKS olarak bilir (internal'dan DMZ'ye ağ çağrısı yok). Gerçekte HSM/Vault Transit.
-mkdir -p auth
-if [[ ! -f auth/jwks.json ]]; then
-  log "İç JWT imza anahtarı (RS256) ve JWKS üretiliyor"
-  openssl genrsa -out auth/signing.key 2048 2>/dev/null
+# Realm imza anahtarları (09a · idp-token-exchange): iç JWT'yi Keycloak imzalar (RFC 8693 token exchange).
+# Anahtar burada üretilip realm'e verilir (05b, realm JSON'undaki rsa key provider'ı); internal cluster'lar açık anahtarı
+# RequestAuthentication'da inline JWKS olarak bilir: kurulum sırasına ve internal'dan IdP'ye ağ çağrısına bağımlılık yok.
+# kid yazılmaz: Envoy, kid'siz JWK'yı her token için dener (Keycloak kid'i anahtardan kendisi türetir). Gerçekte HSM.
+mkdir -p idp
+for realm in customers partners staff; do
+  [[ -f idp/$realm.jwks.json ]] && continue
+  log "Realm imza anahtarı (RS256): $realm"
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "idp/$realm.key" 2>/dev/null   # PKCS#8 (Keycloak bunu ister)
+  openssl req -new -x509 -sha256 -days 397 -key "idp/$realm.key" -subj "/CN=$realm" -out "idp/$realm.crt"
   # JWK: n = modülün base64url'i, e = 65537 (AQAB)
-  n=$(openssl rsa -in auth/signing.key -noout -modulus | cut -d= -f2 | xxd -r -p | base64 -w0 | tr '+/' '-_' | tr -d '=')
-  printf '{"keys":[{"kty":"RSA","use":"sig","alg":"RS256","kid":"internal-1","n":"%s","e":"AQAB"}]}' "$n" > auth/jwks.json
-fi
+  n=$(openssl rsa -in "idp/$realm.key" -noout -modulus | cut -d= -f2 | xxd -r -p | base64 -w0 | tr '+/' '-_' | tr -d '=')
+  printf '{"keys":[{"kty":"RSA","use":"sig","alg":"RS256","n":"%s","e":"AQAB"}]}' "$n" > "idp/$realm.jwks.json"
+done
 
 # Image imzalama anahtarı (cosign). Gerçekte özel anahtar KMS/HSM'de (ör. Vault Transit) durur ve yalnızca CI kullanır.
 mkdir -p cosign

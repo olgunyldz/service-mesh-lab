@@ -21,6 +21,18 @@ metadata:
     policy.corp.mesh/image-source: lab-registry
     pod-security.kubernetes.io/enforce: restricted
 ---
+# channel-bff (09a): kanal BFF'leri (şimdilik web-bff). DMZ'de iş mantığı yok; ekran birleştirme burada
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: channel-bff
+  labels:
+    zone: internal
+    istio.io/dataplane-mode: ambient
+    istio.io/use-waypoint: waypoint
+    policy.corp.mesh/image-source: lab-registry
+    pod-security.kubernetes.io/enforce: restricted
+---
 apiVersion: v1
 kind: Namespace
 metadata:

@@ -139,8 +139,8 @@ func logRequests(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 		if r.URL.Path != "/healthz" && r.URL.Path != "/readyz" {
 			u := userFrom(r)
-			log.Printf("%s %s sub=%q roles=%v channel=%q partner=%q device=%q request_id=%q %s", r.Method, r.URL.Path,
-				u.Sub, u.Roles, u.Channel, u.PartnerID, u.Device, r.Header.Get("x-request-id"), time.Since(start).Round(time.Millisecond))
+			log.Printf("%s %s sub=%q roles=%v channel=%q partner=%q branch=%q sid=%q request_id=%q %s", r.Method, r.URL.Path,
+				u.Sub, u.Roles, u.Channel, u.PartnerID, u.BranchID, u.Sid, r.Header.Get("x-request-id"), time.Since(start).Round(time.Millisecond))
 		}
 	})
 }
@@ -150,7 +150,8 @@ type user struct {
 	Roles     []string `json:"roles"`
 	Channel   string   `json:"channel"`
 	PartnerID string   `json:"partner_id"`
-	Device    string   `json:"branch_device"`
+	BranchID  string   `json:"branch_id"` // personelin şubesi (IdP'deki grup attribute'u; 09a)
+	Sid       string   `json:"sid"`       // IdP oturumu: aynı oturumun istekleri ilişkilendirilebilir
 }
 
 // userFrom: x-user-jwt payload'unu okur (doğrulama mesh'te yapıldı)

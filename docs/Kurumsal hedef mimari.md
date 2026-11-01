@@ -137,6 +137,551 @@ Web'de tarayıcı hiç token görmez: elinde yalnızca oturum cookie'si vardır.
 
 **Üç kanalın ortak noktası:** internal'a giriş her zaman `int-ingressgw` üzerinden, mTLS ve kısa ömürlü internal JWT ile olur. Fark yalnızca giriş kapısındadır: mobil ve web için `dmz-egressgw`, şube için `branch-gw`.
 
+## Login ve servis akışları (hedef, sequence diyagramları)
+
+Bu bölüm altı kanalın prod hedefindeki giriş (login) ve örnek servis akışlarını adım adım gösterir. Ortak kurallar:
+
+- **Ortak katmanlar:**
+  - Sağlayıcı katmanı (DDoS/CDN) ve edge (`gslb-01/02`, `f5-edge-dc1/dc2` + WAF) internet kanallarında her istekte yer alır.
+  - Diyagramlarda bu katmanlar tek kutuda gösterildi ("Edge").
+  - İç firewall (edge → DMZ) ve internal firewall (DMZ / şube / kart zone → internal) yalnızca NET tablosundaki akışlara izin verir.
+- **Kimlik:**
+  - Dış token her zaman opaktır (phantom token).
+  - DMZ'de `auth-proxy` IdP'de introspection yapar, internal JWT'yi RFC 8693 token exchange ile IdP'den alır (IAM-05).
+  - Internal JWT: ömür ≤ 2 dk, `aud=internal`; claim'ler `sub`, `channel`, `acr`, `device_id`, `scope`, `sid` ve kanala özel olanlar.
+- **Internal tarafta doğrulama:**
+  - `int-ingressgw` MUTUAL TLS'i ve internal JWT'yi (Keycloak JWKS) doğrular.
+  - Her namespace'in waypoint'i JWT'yi yeniden doğrular ve claim bazlı L7 kararı verir.
+  - Servisler nesne seviyesinde yetki (BOLA) uygular.
+- **Kayıt:** tüm duraklar `correlationId` ile log, metrik ve iz üretir; diyagramlarda tekrar yazılmadı.
+- **İsimler:** "Detaylı topoloji ve isimlendirme" tablosundaki adlar kullanıldı (A/B eki yazılmadı).
+
+### Mobil: ilk kurulum (cihaz bağlama) ve biyometrik giriş
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Müşteri
+    participant APP as Mobil uygulama<br/>Secure Enclave / Keystore
+    participant ATT as Play Integrity /<br/>App Attest
+    box rgb(255,243,217) Edge
+        participant EDGE as DDoS/CDN · GSLB<br/>f5-edge + WAF
+    end
+    box rgb(255,232,212) DMZ · ocp-dmz
+        participant ING as dmz-ingressgw
+        participant AP as auth-proxy<br/>(edge-mobile)
+        participant RD as dmz-redis
+        participant EG as dmz-egressgw
+    end
+    box rgb(225,244,241) Kimlik zone
+        participant KC as keycloak<br/>realm customers
+        participant DR as device-registry
+        participant RS as redis-session
+    end
+    participant OUT as Dış çıkış zone<br/>SMS gateway
+
+    rect rgb(245,245,245)
+    Note over C,OUT: İlk kurulum: cihaz bağlama (CH-02)
+    C->>APP: Uygulamayı açar, "Kayıt ol"
+    APP->>ATT: Uygulama bütünlük kanıtı ister (nonce)
+    ATT-->>APP: Attestation token
+    APP->>EDGE: GET auth.banka.com.tr/authorize (PKCE S256, state, nonce, attestation)
+    EDGE->>ING: TLS yeniden şifreleme · yalnızca F5 → :443
+    ING->>AP: host auth.banka.com.tr
+    AP->>EG: IdP'ye tek çıkış (mTLS)
+    EG->>KC: authorize
+    KC-->>C: Giriş ekranı (TCKN / müşteri no + parola)
+    C->>KC: Kimlik bilgileri
+    KC->>OUT: OTP SMS (kayıtlı telefon)
+    OUT-->>C: OTP
+    C->>KC: OTP
+    Note over KC: Brute force sayacı · riskli giriş kontrolü (yeni cihaz)
+    APP->>APP: Biyometrik doğrulama · Secure Enclave'de anahtar çifti üretir (private key cihazdan çıkmaz)
+    APP->>KC: Public key + attestation token + cihaz bilgisi
+    KC->>DR: Cihazı kaydet (device_id ↔ sub ↔ public key)
+    DR-->>KC: device_id
+    KC-->>APP: Authorization code (redirect)
+    end
+
+    rect rgb(235,245,255)
+    Note over C,OUT: Her girişte: biyometrik giriş (CH-03)
+    C->>APP: Uygulamayı açar · yüz / parmak izi
+    APP->>APP: Biyometri cihaz anahtarının kilidini açar
+    APP->>EDGE: authorize (PKCE) · login_hint = device_id
+    EDGE->>ING: :443
+    ING->>AP: auth host
+    AP->>EG: mTLS
+    EG->>KC: authorize
+    KC-->>APP: Challenge (nonce)
+    APP->>APP: Challenge'ı cihaz private key'i ile imzalar
+    APP->>KC: İmzalı challenge
+    KC->>DR: device_id'nin public key'i ile imza doğrulama, cihaz aktif mi?
+    DR-->>KC: Geçerli
+    Note over KC: acr=2 (cihaz + biyometri) · oturum (sid) açılır
+    KC->>RS: Oturum kaydı (sid, device_id, acr)
+    KC-->>APP: Authorization code
+    APP->>APP: DPoP anahtar çifti (cihazda) · DPoP proof (htm, htu, iat, jti)
+    APP->>EDGE: POST /token (code, code_verifier, DPoP proof)
+    EDGE->>ING: :443
+    ING->>AP: /token
+    AP->>RD: DPoP jti daha önce kullanıldı mı?
+    RD-->>AP: Hayır (jti kaydedilir, TTL)
+    AP->>EG: mTLS
+    EG->>KC: Token isteği
+    KC-->>APP: Opak access token (≤ 5 dk, DPoP'a bağlı, cnf.jkt) + refresh token (rotation)
+    end
+```
+
+### Mobil: para transferi (step-up ve işlem imzası)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Müşteri
+    participant APP as Mobil uygulama
+    box rgb(255,243,217) Edge
+        participant EDGE as DDoS/CDN · GSLB<br/>f5-edge + WAF
+    end
+    box rgb(255,232,212) DMZ · ocp-dmz
+        participant ING as dmz-ingressgw
+        participant MGW as mobile-gw<br/>(edge-mobile)
+        participant AP as auth-proxy
+        participant RD as dmz-redis
+        participant EG as dmz-egressgw
+    end
+    box rgb(225,244,241) Kimlik zone
+        participant KC as keycloak
+    end
+    box rgb(228,238,252) Internal · ocp-apps
+        participant IIG as int-ingressgw
+        participant BFF as mobile-bff<br/>(channel-bff waypoint)
+        participant TR as transfer-svc<br/>(odeme waypoint)
+        participant FR as fraud-svc
+        participant TS as tx-signing-svc
+        participant IA as core-adapter<br/>(integration)
+    end
+    box rgb(231,233,251) Core · ocp-core
+        participant CORE as core-ingressgw<br/>core-app
+    end
+    box rgb(240,232,251) Veri zone
+        participant DB as pg / kafka
+    end
+
+    C->>APP: Alıcı IBAN + tutar
+    APP->>EDGE: POST m-api/v1/transfers · Authorization: DPoP opak token · DPoP proof · attestation · Idempotency-Key
+    EDGE->>ING: WAF (OWASP, şema) · header temizliği · :443
+    ING->>MGW: host m-api → mobile-gw
+    Note over MGW: DPoP proof (htm, htu, iat) · jti tekrarı dmz-redis'te<br/>attestation · minimum sürüm · cihaz/kullanıcı/IP rate limit
+    MGW->>RD: jti kontrol + kaydet
+    MGW->>AP: Token doğrula ve çevir
+    AP->>EG: mTLS
+    EG->>KC: Introspection (active, sub, sid, cnf.jkt, device_id, acr, scope)
+    KC-->>AP: active · acr=2 · cnf.jkt = DPoP anahtarı
+    AP->>KC: Token exchange (RFC 8693, audience internal)
+    KC-->>AP: Internal JWT (channel=mobile, acr=2, device_id, sid, scope, ≤ 2 dk)
+    Note over MGW: Dış token istekten silinir
+    MGW->>EG: x-internal-jwt · mTLS (dmz-egress sertifikası)
+    EG->>IIG: Internal firewall: yalnızca egress → int-ingressgw:443 · MUTUAL TLS
+    Note over IIG: İstemci sertifikası Corp CA · JWT imzası (Keycloak JWKS), aud, exp
+    IIG->>BFF: channel-bff waypoint: aud=internal, channel=mobile, acr ≥ 2
+    BFF->>TR: odeme waypoint: yalnızca BFF kimliği · scope transfers:write
+    Note over TR: Yeni alıcı + tutar: acr=3 (işlem imzası) gerekli
+    TR-->>APP: 401 insufficient_user_authentication (acr_values=3, işlem özeti hash'i)
+
+    rect rgb(255,248,230)
+    Note over C,TS: Step-up: dinamik bağlama (CH-08)
+    APP-->>C: Tutar + alıcıyı gösterir, onay ister
+    C->>APP: Biyometrik onay
+    APP->>APP: Cihaz anahtarıyla imza: tutar + alıcı + nonce
+    APP->>EDGE: authorize (acr_values=3, imzalı işlem özeti)
+    EDGE->>KC: (ING → auth-proxy → EG üzerinden)
+    KC->>TS: İşlem imzası doğrula (device_id public key, tutar + alıcı)
+    TS-->>KC: Geçerli
+    KC-->>APP: Yeni opak token (acr=3, işlem bağlamına bağlı, kısa ömürlü)
+    end
+
+    APP->>EDGE: POST /v1/transfers (aynı Idempotency-Key, yeni token, DPoP)
+    EDGE->>MGW: ING üzerinden · aynı kontroller
+    MGW->>AP: introspection + exchange (acr=3)
+    AP-->>MGW: Internal JWT (acr=3)
+    MGW->>IIG: EG → internal firewall → MUTUAL TLS
+    IIG->>BFF: channel-bff waypoint
+    BFF->>TR: odeme waypoint: scope + acr=3
+    Note over TR: BOLA: kaynak hesap bu sub'ın mı?<br/>idempotency: aynı anahtar daha önce işlendi mi?<br/>günlük limit
+    TR->>FR: Risk skoru (cihaz, IP, tutar, alıcı yeni mi)
+    FR-->>TR: Düşük risk
+    TR->>TS: İmza ↔ tutar ve alıcı eşleşmesi
+    TS-->>TR: Geçerli
+    TR->>IA: Transfer (REST)
+    IA->>CORE: int-egressgw → core-ingressgw (MUTUAL TLS, yalnızca adapter kimliği)
+    CORE-->>IA: Posting tamam (dekont no)
+    IA-->>TR: Sonuç
+    TR->>DB: outbox → kafka: payment-events
+    TR-->>APP: 201 Created (dekont no) · BFF ekrana göre biçimler
+```
+
+### Web: giriş (sunucu tarafında OIDC, mobil push onayı)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Müşteri (tarayıcı)
+    participant APPM as Mobil uygulama<br/>(onay cihazı)
+    box rgb(255,243,217) Edge
+        participant EDGE as DDoS/CDN · GSLB<br/>f5-edge + WAF
+    end
+    box rgb(255,232,212) DMZ · ocp-dmz
+        participant ING as dmz-ingressgw
+        participant WS as web-static<br/>(edge-web)
+        participant WTH as web-token-handler<br/>(edge-web)
+        participant AP as auth-proxy
+        participant EG as dmz-egressgw
+    end
+    box rgb(225,244,241) Kimlik zone
+        participant KC as keycloak
+        participant RS as redis-session
+    end
+    participant OUT as Dış çıkış zone<br/>push gateway (APNs/FCM)
+
+    C->>EDGE: GET ib.banka.com.tr/
+    EDGE->>ING: CDN önbelleği yoksa · :443
+    ING->>WS: / ve /assets/**
+    WS-->>C: SPA (CSP, HSTS, X-Frame-Options) · token ve sır yok
+    C->>EDGE: GET /auth/login
+    EDGE->>ING: :443
+    ING->>WTH: /auth/**
+    Note over WTH: state + nonce + PKCE verifier üretir<br/>state'i kısa ömürlü __Host-login cookie'sine bağlar
+    WTH-->>C: 302 auth.banka.com.tr/authorize (code, PKCE S256, state, nonce)
+    C->>EDGE: authorize
+    EDGE->>AP: ING üzerinden auth host
+    AP->>EG: mTLS
+    EG->>KC: authorize
+    KC-->>C: Giriş ekranı
+    C->>KC: Kullanıcı adı + parola
+    Note over KC: Brute force · bot skoru (edge) · riskli giriş
+    KC->>OUT: Push bildirimi: "Web girişini onayla" (CIBA benzeri)
+    OUT-->>APPM: Push
+    APPM->>APPM: Biyometri + cihaz anahtarıyla onay imzası
+    APPM->>KC: İmzalı onay (mobil kanal üzerinden, DPoP)
+    Note over KC: acr=2 · sid oluşur
+    KC-->>C: 302 ib.banka.com.tr/auth/callback?code&state
+    C->>WTH: callback (EDGE → ING üzerinden)
+    Note over WTH: state = __Host-login cookie'si mi? (tek kullanımlık)
+    WTH->>AP: Token isteği (code, code_verifier, private_key_jwt)
+    AP->>KC: EG üzerinden token endpoint (arka kanal)
+    KC-->>WTH: Opak access token + refresh token + id_token
+    Note over WTH: nonce kontrolü
+    WTH->>RS: Oturum: sid → token'lar (anahtar = cookie değerinin hash'i, TTL = idle timeout)
+    WTH-->>C: 302 / · Set-Cookie __Host-sid (HttpOnly, Secure, SameSite=Strict)
+    Note over C: Tarayıcıda yalnızca oturum cookie'si var (CH-06)
+```
+
+### Web: hesap hareketleri sorgusu
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Müşteri (tarayıcı)
+    box rgb(255,243,217) Edge
+        participant EDGE as DDoS/CDN · GSLB<br/>f5-edge + WAF
+    end
+    box rgb(255,232,212) DMZ · ocp-dmz
+        participant ING as dmz-ingressgw
+        participant WTH as web-token-handler
+        participant AP as auth-proxy
+        participant EG as dmz-egressgw
+    end
+    box rgb(225,244,241) Kimlik zone
+        participant KC as keycloak
+        participant RS as redis-session
+    end
+    box rgb(228,238,252) Internal · ocp-apps
+        participant IIG as int-ingressgw
+        participant BFF as web-bff<br/>(channel-bff waypoint)
+        participant ACC as account-svc<br/>(hesap waypoint)
+    end
+    box rgb(240,232,251) Veri zone
+        participant DB as pg-a
+    end
+
+    C->>EDGE: GET /api/accounts/123/transactions · Cookie __Host-sid · X-CSRF-Token
+    EDGE->>ING: WAF · :443
+    ING->>WTH: /api/**
+    WTH->>RS: Oturumu bul (hash(cookie))
+    RS-->>WTH: Token'lar · oluşturma zamanı
+    Note over WTH: idle ve absolute timeout · CSRF (durum değiştiren isteklerde) · oturum bazında rate limit
+    opt Access token süresi doluyor
+        WTH->>KC: refresh_token grant (AP → EG üzerinden, rotation)
+        KC-->>WTH: Yeni token çifti (eski refresh token geçersiz)
+        WTH->>RS: Oturumu güncelle
+    end
+    WTH->>AP: Exchange isteği (channel=web)
+    AP->>KC: Introspection + token exchange (EG üzerinden)
+    KC-->>AP: Internal JWT (channel=web, acr, sid, scope, ≤ 2 dk)
+    AP-->>WTH: Internal JWT
+    WTH->>EG: Yalnızca izinli header'lar + internal JWT (cookie içeri girmez)
+    EG->>IIG: Internal firewall · MUTUAL TLS
+    IIG->>BFF: JWT doğrulama · channel-bff waypoint: channel=web
+    BFF->>ACC: hesap waypoint: yalnızca BFF kimliği · scope accounts:read
+    Note over ACC: BOLA: hesap 123 bu sub'ın mı?
+    ACC->>DB: SELECT (servis başına DB kullanıcısı, TLS)
+    DB-->>ACC: Hareketler
+    ACC-->>BFF: Hareketler
+    Note over BFF: Sayfalama · IBAN ve kart no maskeleme · ekran için birleştirme
+    BFF-->>C: 200 JSON (no-store)
+```
+
+### Şube: personel girişi ve limit üstü işlemde dört göz onayı
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor T as Gişe personeli
+    actor Y as Yetkili (şube müdürü)
+    participant TERM as Şube terminali<br/>AD oturumu · TPM'de cihaz sertifikası
+    participant BFW as Şube firewall<br/>SD-WAN · NAC
+    box rgb(238,242,247) Şube zone
+        participant BGW as branch-gw
+    end
+    box rgb(225,244,241) Kimlik zone
+        participant AD as AD / Kerberos
+        participant KC as keycloak<br/>realm staff
+    end
+    box rgb(228,238,252) Internal · ocp-apps
+        participant IIG as int-ingressgw
+        participant BB as branch-bff<br/>(channel-bff waypoint)
+        participant TR as transfer-svc
+        participant IA as core-adapter
+    end
+    participant CORE as core<br/>(ocp-core)
+    participant SIEM as SIEM / UEBA
+
+    T->>TERM: Windows oturumu (Kerberos TGT, AD)
+    TERM->>BFW: 802.1X (NAC): kayıtlı cihaz mı?
+    BFW-->>TERM: Ağa kabul · internete doğrudan çıkış kapalı
+    TERM->>BGW: MPLS üzerinden TLS · cihaz sertifikasıyla mTLS
+    Note over BGW: Sertifika ↔ şube kodu eşleşmesi · mesai saati · şube IP aralığı
+    TERM->>KC: authorize (PKCE) · SPNEGO / Kerberos (branch-gw üzerinden)
+    KC->>AD: Kerberos bileti doğrulama · grup üyelikleri
+    AD-->>KC: Kullanıcı + gruplar (gişe)
+    Note over KC: staff_role=teller · branch_id (AD/IdP'deki şube) · acr=2
+    KC-->>TERM: Authorization code → token (opak, kısa ömürlü)
+
+    T->>TERM: Limit üstü havale (müşteri kimlik doğrulaması yapıldı)
+    TERM->>BGW: POST /branch/v1/transfers · token · cihaz sertifikası
+    BGW->>KC: Introspection + token exchange
+    KC-->>BGW: Internal JWT (channel=branch, branch_id, staff_role=teller, device_id, sid)
+    Note over BGW: branch_id = cihaz sertifikasının şubesi mi?
+    BGW->>IIG: Internal firewall: yalnızca branch-gw → int-ingressgw:443 · MUTUAL TLS
+    IIG->>BB: channel-bff waypoint: channel=branch, personel rolü
+    BB->>TR: odeme waypoint
+    Note over TR: Tutar gişe limitinin üstünde → beklemeye alınır
+    TR-->>TERM: 202 Accepted · onay bekliyor (işlem no)
+    TR->>SIEM: Olay: limit üstü işlem talebi (kim, hangi şube, kimin adına)
+
+    Y->>TERM: Kendi terminalinden onay ekranı
+    Note over Y,KC: Yetkili kendi oturumuyla (aynı akış) · step-up (acr=3, OTP)
+    TERM->>BGW: POST /branch/v1/approvals/işlem-no · yetkilinin token'ı
+    BGW->>KC: Introspection + exchange (staff_role=manager, acr=3)
+    BGW->>IIG: Internal JWT
+    IIG->>BB: channel-bff waypoint
+    BB->>TR: Onay
+    Note over TR: Onaylayan ≠ talep eden · aynı şube · rol yeterli
+    TR->>IA: Transfer
+    IA->>CORE: int-egressgw → core-ingressgw
+    CORE-->>IA: Posting tamam
+    IA-->>TR: Sonuç
+    TR->>SIEM: Denetim izi: talep eden, onaylayan, cihazlar, saat
+    TR-->>TERM: İşlem tamamlandı (dekont)
+```
+
+### Partner (açık bankacılık): rıza (FAPI 2.0) ve hesap bilgisi sorgusu
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Müşteri
+    participant TPP as Partner (TPP)<br/>uygulama + backend
+    box rgb(255,243,217) Edge
+        participant EDGE as DDoS/CDN · GSLB<br/>f5-edge (mTLS) + WAF
+    end
+    box rgb(255,232,212) DMZ · ocp-dmz
+        participant ING as dmz-ingressgw
+        participant PGW as partner-gw<br/>(edge-partner)
+        participant AP as auth-proxy
+        participant EG as dmz-egressgw
+    end
+    box rgb(225,244,241) Kimlik zone
+        participant KC as keycloak<br/>realm partners / customers
+        participant CS as consent-svc
+    end
+    box rgb(228,238,252) Internal · ocp-apps
+        participant IIG as int-ingressgw
+        participant ACC as account-svc<br/>(hesap waypoint)
+    end
+
+    rect rgb(245,245,245)
+    Note over C,ACC: Rıza: PAR + authorization code (FAPI 2.0, CH-10, GW-10, GW-11)
+    TPP->>EDGE: POST api.banka.com.tr/par · mTLS (partner sertifikası) · private_key_jwt · authorization_details (hesaplar, izinler, süre)
+    EDGE->>ING: İstemci sertifikası doğrulanır · :443
+    ING->>PGW: host api → partner-gw
+    PGW->>EG: mTLS
+    EG->>KC: PAR
+    KC-->>TPP: request_uri (kısa ömürlü)
+    TPP-->>C: Bankaya yönlendir (ya da app2app: mobil uygulamaya)
+    C->>KC: authorize?request_uri (auth host, EDGE → ING → auth-proxy → EG)
+    KC-->>C: Giriş + MFA (müşteri realm'i, acr=2)
+    KC-->>C: Rıza ekranı: hangi partner, hangi hesaplar, hangi izinler, ne kadar süre
+    C->>KC: Hesapları seçer, onaylar
+    KC->>CS: Rıza kaydı (consent_id, partner, hesaplar, izinler, bitiş)
+    CS-->>KC: consent_id
+    KC-->>TPP: Redirect (code)
+    TPP->>EDGE: POST /token · mTLS · private_key_jwt · code + PKCE
+    EDGE->>PGW: ING üzerinden
+    PGW->>KC: EG üzerinden
+    KC-->>TPP: Access token (sertifikaya bağlı: cnf x5t-S256, consent_id) + refresh token
+    end
+
+    TPP->>EDGE: GET /accounts/123/balances · mTLS · access token · x-fapi-interaction-id · JWS imzası
+    EDGE->>ING: :443
+    ING->>PGW: partner-gw
+    Note over PGW: Sertifika ↔ token bağı (RFC 8705) · istek imzası (GW-13)<br/>partner planı ve kotası · şema doğrulaması
+    PGW->>AP: Doğrula ve çevir
+    AP->>KC: Introspection (active, cnf, consent_id, scope) · EG üzerinden
+    AP->>CS: Rıza geçerli mi? Hesap 123 rızada mı, izin "bakiye" var mı, süresi dolmuş mu, geri alınmış mı?
+    CS-->>AP: Geçerli
+    AP->>KC: Token exchange
+    KC-->>AP: Internal JWT (channel=partner, partner_id, consent_id, sub=müşteri, scope)
+    PGW->>EG: Internal JWT
+    EG->>IIG: Internal firewall · MUTUAL TLS
+    IIG->>ACC: hesap waypoint: channel=partner, scope accounts:balances:read
+    Note over ACC: Hesap consent_id'deki hesaplardan biri mi? (BOLA + rıza)
+    ACC-->>PGW: Bakiye
+    PGW-->>TPP: 200 · yanıt imzalı (JWS) · x-fapi-interaction-id
+    Note over C,CS: Müşteri rızayı mobil/web'den geri çekebilir (IAM-10): consent-svc iptal eder, sonraki çağrı 403
+```
+
+### ATM: kendi kartıyla nakit çekim
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Kart sahibi
+    participant ATM as ATM<br/>EPP (PIN pad) · kart okuyucu
+    box rgb(238,242,247) ATM ağı
+        participant AFW as atm-fw<br/>özel ATM ağı
+    end
+    box rgb(253,227,227) Kart zone · ocp-pci (PCI DSS)
+        participant ASW as atm-sw<br/>(NDC/DDC)
+        participant HSM as hsm-01/02
+        participant TOK as tokenization
+        participant ISO as iso8583-adapter
+    end
+    box rgb(228,238,252) Internal · ocp-apps
+        participant IIG as int-ingressgw
+        participant CARD as card-svc<br/>(kart waypoint)
+        participant FR as fraud-svc
+        participant IA as core-adapter
+    end
+    participant CORE as core<br/>(ocp-core)
+
+    C->>ATM: Kartı takar (EMV çip) · PIN girer · tutar seçer
+    ATM->>ATM: EPP, PIN bloğunu TPK ile şifreler (açık PIN hiçbir yerde yok)
+    ATM->>AFW: NDC işlem isteği (TLS, terminal sertifikası)
+    AFW->>ASW: Yalnızca kayıtlı TID'ler
+    ASW->>HSM: PIN çevirme (TPK → ZPK) ve doğrulama (PVV/offset) · ARQC doğrulama
+    HSM-->>ASW: PIN doğru · kriptogram geçerli
+    ASW->>TOK: PAN → token
+    TOK-->>ASW: Token PAN
+    ASW->>ISO: ISO 8583 0200 (token PAN, tutar, TID)
+    ISO->>IIG: REST · adapter'ın Corp CA sertifikası · internal firewall: yalnızca adapter → int-ingressgw:443
+    Note over IIG: MUTUAL TLS · adapter yalnızca /cards/** ve /authorizations/** (CARD-06)
+    IIG->>CARD: kart waypoint: yalnızca adapter kimliği
+    CARD->>FR: Gerçek zamanlı risk (konum, sıklık, tutar)
+    FR-->>CARD: Uygun
+    Note over CARD: Kart durumu · günlük ATM limiti
+    CARD->>IA: Bakiye bloke (hold)
+    IA->>CORE: int-egressgw → core-ingressgw
+    CORE-->>IA: Bloke tamam
+    IA-->>CARD: Onay kodu
+    CARD-->>ISO: Onay (p99 1 sn altı, CARD-07)
+    ISO-->>ASW: ISO 8583 0210 (onay)
+    ASW-->>ATM: NDC: para ver komutu + ARPC
+    ATM-->>C: Nakit + kart + fiş
+    ATM->>ASW: Tamamlandı (dispense sonucu)
+    alt Para verilemedi (sıkışma)
+        ASW->>ISO: 0420 reversal
+        ISO->>CARD: Bloke kaldır
+    else Tamamlandı
+        ASW->>ISO: 0202 / tamamlama
+        ISO->>CARD: Bloke → kesin borç (posting)
+    end
+    alt Internal erişilemiyor
+        Note over ASW,ISO: Stand-in: kart bazında offline limitle onay (CARD-08), sonradan mutabakat
+    end
+```
+
+### POS: kart ödemesi yetkilendirme (bankamızın kartı, başka bankanın POS'u)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Kart sahibi
+    participant POS as POS terminali<br/>(üye işyeri)
+    participant ACQ as Acquirer banka<br/>(üye işyerinin bankası)
+    participant SCH as Kart şeması / BKM<br/>Visa · Mastercard · TROY
+    box rgb(253,227,227) Kart zone · ocp-pci (PCI DSS)
+        participant PSW as pos-sw<br/>(issuer, ISO 8583)
+        participant HSM as hsm-01/02
+        participant TOK as tokenization
+        participant ISO as iso8583-adapter
+    end
+    box rgb(228,238,252) Internal · ocp-apps
+        participant IIG as int-ingressgw
+        participant CARD as card-svc<br/>(kart waypoint)
+        participant FR as fraud-svc
+        participant IA as core-adapter
+    end
+    participant CORE as core<br/>(ocp-core)
+    participant DB as kafka<br/>(veri zone)
+
+    C->>POS: Temassız / çip · (gerekirse online PIN)
+    POS->>POS: EMV: ARQC kriptogramı üretilir
+    POS->>ACQ: Yetkilendirme isteği (APN / internet, TLS)
+    ACQ->>SCH: ISO 8583 0100 (BIN'e göre yönlendirme)
+    SCH->>PSW: Özel hat (dış çıkış zone'undan değil, OUT-08) · 0100
+    Note over PSW: MID / TID, BIN kontrolü
+    PSW->>HSM: ARQC doğrulama · ARPC üretimi · online PIN varsa doğrulama
+    HSM-->>PSW: Geçerli · ARPC
+    PSW->>TOK: PAN → token
+    TOK-->>PSW: Token PAN
+    PSW->>ISO: 0100 (token PAN, tutar, MCC, işyeri)
+    ISO->>IIG: REST · MUTUAL TLS · internal firewall
+    IIG->>CARD: kart waypoint: yalnızca adapter kimliği, /authorizations/**
+    par Paralel kontroller
+        CARD->>FR: Risk skoru (MCC, ülke, sıklık, cihaz)
+        FR-->>CARD: Uygun
+    and
+        Note over CARD: Kart durumu · kart limiti (kredi kartı) / bakiye (banka kartı)
+    end
+    opt Banka kartı
+        CARD->>IA: Bakiye bloke
+        IA->>CORE: int-egressgw → core-ingressgw
+        CORE-->>IA: Tamam
+    end
+    CARD->>DB: Olay: authorization-events (fraud modeli, bildirim)
+    CARD-->>ISO: Onay kodu (p99 1 sn altı)
+    ISO-->>PSW: 0110
+    PSW-->>SCH: 0110 + ARPC
+    SCH-->>ACQ: 0110
+    ACQ-->>POS: Onay
+    POS-->>C: Fiş · SMS / push bildirimi (bildirim servisi → dış çıkış)
+    Note over PSW,SCH: Gün sonu: takas ve mutabakat dosyaları (clearing / settlement), eod-batch ile kesin borç
+    alt Üye işyeri de bizim (on-us)
+        Note over POS,PSW: POS → pos-sw (acquiring modülü) → issuer tarafına doğrudan, şemaya gitmeden
+    end
+```
+
 ## Kanal gereksinimleri (CH)
 
 İnternet kanalları (mobil, web, partner) DMZ'den, kapalı ağ kanalları (şube, ATM, POS) kendi zone'larından girer. Hiçbir kanal internal'a doğrudan bağlanamaz.
@@ -400,15 +945,17 @@ Bu mimari, [service-mesh-lab](../README.md) deposunda kind üzerinde küçültü
 | Konu | Hedef | Lab'deki durum | Plan |
 | --- | --- | --- | --- |
 | Şube gateway yeri | Ayrı şube zone'u (`branch-gw-a/b`) | `branch-gateway` DMZ cluster'ında, ayrı namespace ve VIP ile (bellek bütçesi) | Sapma kalıcı; zone ayrımı firewall konteyneri (`branch-fw`) ve ayrı ağla temsil edilir |
-| Internal JWT'yi kim üretir | IdP (RFC 8693 token exchange, IAM-05) | DMZ'deki `auth-service` kendi anahtarıyla imzalıyor | IdP tabanlı token exchange'e taşınacak |
-| Internal JWT ömrü ve claim'ler | ≤ 2 dk; `acr`, `scope`, `device_id`, `sid` dahil | 5 dk; `sub`, `channel`, `roles` ve kanala özel claim'ler | 2 dk ve tam claim seti, L7 politikalarıyla birlikte |
-| BFF yeri | Internal `channel-bff` (INT-07, GW-09) | `web-bff` DMZ'de | Internal'a taşınacak; DMZ'de yalnızca token handler kalır |
+| Internal JWT'yi kim üretir | IdP (RFC 8693 token exchange, IAM-05) | ✅ Keycloak üretiyor (`09a`): auth-service introspection + token exchange yapıyor, DMZ'de imza anahtarı yok. Keycloak V2 exchange realm içinde çalıştığı için realm başına issuer (3 issuer) | – |
+| Internal JWT ömrü ve claim'ler | ≤ 2 dk; `acr`, `scope`, `device_id`, `sid` dahil | 2 dk; `sub`, `channel`, `acr`, `sid`, `roles`, `scope` (+ `partner_id`, `branch_id`); kişisel veri yok (`09a`). `scope` boş, `acr` tek seviye; `device_id` yok (istek anındaki cihazı IdP bilemiyor) | Scope'lar ve `acr` seviyeleri `09b`; `device_id` DPoP / cihaz bağlama adımında |
+| BFF yeri | Internal `channel-bff` (INT-07, GW-09) | ✅ `web-bff` internal'da (`channel-bff`); DMZ'de `web-token-handler` (cookie oturumu, CSRF), tarayıcıda token yok (`09a`). Oturum deposu mgmt Valkey'de (hedefte kimlik zone'unda `redis-session`) | `mobile-bff`, `branch-bff` sonraki adımlarda |
 | Cluster sayısı ve node | Zone başına cluster, her DC'de, çok node | Tek node'lu kind cluster'ları: `dmz`, `cluster-a`, `mgmt`; `cluster-b` kapalı | `cluster-b` A/B adımında geri gelir; core, PCI ve veri ayrı cluster olarak temsil edilmez (veri `mgmt`'te) |
-| Edge | DDoS / CDN, GSLB, F5 + WAF | Docker konteynerinde HAProxy + Coraza WAF | Ürün davranışı temsil edilir, ürün değil |
+| Edge | DDoS / CDN, GSLB, F5 + WAF | Docker konteynerinde HAProxy + ModSecurity (OWASP CRS) | Ürün davranışı temsil edilir, ürün değil |
 
 ## Değişiklik geçmişi
 
 | Tarih | Değişiklik |
 | --- | --- |
 | Oct 31, 2026 | İlk sürüm |
+| Nov 1, 2026 (3) | Yeni bölüm "Login ve servis akışları": mobil (cihaz bağlama, biyometrik giriş, step-up ve işlem imzalı transfer), web (sunucu tarafında OIDC + mobil push onayı, hesap hareketleri), şube (Kerberos/AD girişi, dört göz onayı), partner (FAPI 2.0 PAR + rıza, hesap sorgusu), ATM (nakit çekim, reversal, stand-in) ve POS (issuer yetkilendirme, on-us) için Mermaid sequence diyagramları |
+| Nov 1, 2026 (2) | Lab sapmaları güncellendi: iç JWT'yi IdP üretiyor (2 dk, `channel`/`acr`/`sid`), web-bff internal'da, web'de token handler (`09a · idp-token-exchange`) |
 | Nov 1, 2026 | Çizimlerle karşılaştırma sonrası güncelleme: core banking zone, dış çıkış zone ve ATM · POS ağı zone listesine eklendi; cluster listesi zone başına cluster olarak yazıldı (`ocp-dmz`, `ocp-apps`, `ocp-core`, `ocp-pci`, `ocp-data`, `ocp-mgmt`); topoloji tablosuna domain namespace'leri, core, veri (Oracle, MSSQL, RabbitMQ, nesne depolama) ve dış çıkış bileşenleri eklendi; görseller `zone-ozet.png` ve `topology-prod-full.png` ile değiştirildi; yeni CORE, DATA ve OUT bölümleri; INT-15, INT-16 ve NET-15..21 eklendi, NET-05, NET-11 ve yasak akışlar güncellendi; IAM-05'e internal JWT'yi IdP'nin ürettiği ve kanala özel claim'ler eklendi; varsayımlar ile lab sapmaları bölümleri eklendi |

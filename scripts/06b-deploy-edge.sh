@@ -49,10 +49,12 @@ docker run -d --name edge-lb --restart unless-stopped --network "$EDGE_NETWORK" 
   "$HAPROXY_IMAGE" >/dev/null
 
 # İnternet istemcisi simülasyonu: Kiali grafiklerinin canlı görünmesi için sürekli trafik.
-# Her saniye: web (GET /, POST /api/echo, BFF dashboard), mobil (GET /mobile/v1/), partner (acme sertifikasıyla
-# GET /partner/v1/); her 10 turda bir web'de /status/500. cluster-b aktifse api-b'ye de (cluster-b/21-api-b-route.yaml).
-# 08'den itibaren her kanal token ister: loadgen Keycloak'tan (sso host'u, edge üzerinden) token alır ve 4 dakikada bir
-# yeniler (token ömrü 5 dk). Müşteri için direct grant (lab istisnası), partner için client credentials.
+# Her saniye: web (GET /, POST /api/api/echo, BFF dashboard), mobil (GET /mobile/v1/accounts), partner (acme sertifikasıyla
+# GET /partner/v1/); her 10 turda bir web'de /api/status/500. cluster-b aktifse api-b'ye de (cluster-b/21-api-b-route.yaml).
+# Mobil ve partner token'ları Keycloak'tan (sso host'u, edge üzerinden), 4 dakikada bir yenilenir (ömür 5 dk): mobil için
+# direct grant (lab istisnası), partner için client credentials. Web'de token yok (09a): loadgen tarayıcı gibi giriş yapar
+# (/auth/login -> Keycloak giriş formu -> callback) ve oturum cookie'siyle gezer; oturum düşerse yeniden giriş yapar.
+# Web yolları token handler'da /api önekini kaybeder: /api/api/echo -> web-bff /api/echo -> api-a (podinfo) /api/echo.
 extra=""
 has_cluster cluster-b && extra="api-b.${APPS_DOMAIN}"
 pwf() { cat "$ROOT_DIR/certs/data/$1.pw" 2>/dev/null || true; }
@@ -71,21 +73,33 @@ docker run -d --name loadgen --restart unless-stopped --network "$EDGE_NETWORK" 
     token() { r=$1; shift
       curl -s --cacert /ca.pem --resolve "$SSO:8443:$(ip)" "https://$SSO:8443/realms/$r/protocol/openid-connect/token" "$@" \
         | sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p"; }
-    i=0
+    J=/tmp/web.jar
+    c() { curl -s --cacert /ca.pem --resolve "$WEB:8443:$(ip)" --resolve "$SSO:8443:$(ip)" -c $J -b $J "$@"; }
+    web_login() {  # tarayıcı gibi: Authorization Code + PKCE (token handler yürütür), giriş formu IdP sayfasında
+      rm -f $J
+      loc=$(c -o /dev/null -w "%{redirect_url}" "https://$WEB:8443/auth/login")
+      action=$(c "$loc" | grep -o "action=\"[^\"]*login-actions/authenticate[^\"]*\"" | head -1 | cut -d\" -f2 | sed "s/&amp;/\&/g")
+      cb=$(c -o /dev/null -w "%{redirect_url}" --data-urlencode username=ayse --data-urlencode "password=$CUSTOMER_PW" "$action")
+      c -o /dev/null "$cb"
+      CSRF=$(c "https://$WEB:8443/auth/session" | sed -n "s/.*\"csrf\":\"\([^\"]*\)\".*/\1/p")
+    }
+    i=0; last=0
     while true; do
-      if [ $((i % 240)) -eq 0 ] || [ -z "$TW" ]; then
-        TW=$(token customers -d grant_type=password -d client_id=web-bff -d username=ayse --data-urlencode "password=$CUSTOMER_PW")
+      now=$(date +%s); if [ $((now - last)) -ge 200 ] || [ -z "$TM" ]; then last=$now
         TM=$(token customers -d grant_type=password -d client_id=mobile-app -d username=ayse --data-urlencode "password=$CUSTOMER_PW")
         TP=$(token partners -d grant_type=client_credentials -d client_id=acme --data-urlencode "client_secret=$ACME_SECRET")
       fi
+      if [ $((i % 60)) -eq 0 ] && [ "$(c -o /dev/null -w "%{http_code}" "https://$WEB:8443/auth/session")" != 200 ]; then
+        web_login
+      fi
       i=$((i+1))
-      req "$WEB" -H "Authorization: Bearer $TW" "https://$WEB:8443/"
-      req "$WEB" -H "Authorization: Bearer $TW" -X POST -d ping "https://$WEB:8443/api/echo"
-      req "$WEB" -H "Authorization: Bearer $TW" "https://$WEB:8443/bff/v1/dashboard"
+      c -o /dev/null "https://$WEB:8443/"
+      c -o /dev/null -H "X-CSRF-Token: $CSRF" -X POST -d ping "https://$WEB:8443/api/api/echo"
+      c -o /dev/null "https://$WEB:8443/api/bff/v1/dashboard"
       req "$MOBILE" -H "Authorization: Bearer $TM" "https://$MOBILE:8443/mobile/v1/accounts"
       req "$PARTNER" -H "Authorization: Bearer $TP" --cert /partner.crt --key /partner.key "https://$PARTNER:8443/partner/v1/"
-      for h in $EXTRA; do req "$h" -H "Authorization: Bearer $TW" "https://$h:8443/"; done
-      [ $((i % 10)) -eq 0 ] && req "$WEB" -H "Authorization: Bearer $TW" "https://$WEB:8443/status/500"
+      for h in $EXTRA; do req "$h" -H "Authorization: Bearer $TM" "https://$h:8443/"; done
+      [ $((i % 10)) -eq 0 ] && c -o /dev/null "https://$WEB:8443/api/status/500"
       sleep 1
     done' >/dev/null
 

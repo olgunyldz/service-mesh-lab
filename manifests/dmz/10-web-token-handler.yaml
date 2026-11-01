@@ -1,0 +1,298 @@
+# web-token-handler (services/web-token-handler): web kanalının DMZ bileşeni (09a). Tarayıcıda yalnızca oturum cookie'si;
+# token'lar oturum deposunda (mgmt Valkey, sess:*). Akış:
+#   dmz-ingressgateway (web) -> web-token-handler --> auth-service (introspection + token exchange -> iç JWT)
+#                                                 --> [web-bff Service, waypoint] -> dmz-egressgateway -> cluster-a web-bff
+#                                                 --> [keycloak Service, waypoint] -> dmz-egressgateway -> mgmt Keycloak
+#                                                 --> [valkey Service, waypoint] -> dmz-egressgateway :16379 -> mgmt Valkey
+# İş mantığı yok; BFF internal'da (cluster-a, ns channel-bff).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: web-token-handler
+  namespace: edge-web
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-token-handler
+  namespace: edge-web
+spec:
+  replicas: 1   # gerçekte en az 2; refresh kilidi o zaman dağıtık olmalı (oturum deposunda)
+  selector:
+    matchLabels:
+      app: web-token-handler
+  template:
+    metadata:
+      labels:
+        app: web-token-handler
+        version: v1
+    spec:
+      serviceAccountName: web-token-handler
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: handler
+          image: lab-registry:5000/lab/web-token-handler:0.1.0   # build + imza: 03b-publish-images.sh
+          env:
+            - name: PUBLIC_URL   # tarayıcının gördüğü adres (lab'de edge 8443'te); redirect_uri bunun altında
+              value: https://www.apps.example.local:8443
+            - name: ISSUER       # tarayıcının yönlendirildiği IdP adresi (authorize)
+              value: https://sso.apps.example.local:8443/realms/customers
+            - name: IDP_BASE     # token uçları: mesh içi (aşağıdaki seçicisiz Service, DMZ egress üzerinden)
+              value: http://keycloak.edge-web.svc.cluster.local/realms/customers
+            - name: CLIENT_ID
+              value: web-app
+            - name: AUTHZ_URL
+              value: http://auth-service.auth.svc.cluster.local:8080
+            - name: BFF_URL
+              value: http://web-bff.edge-web.svc.cluster.local
+            - name: VALKEY_ADDR
+              value: valkey.edge-web.svc.cluster.local:6379
+          envFrom:
+            - secretRef:
+                name: web-token-handler   # CLIENT_SECRET, VALKEY_USER, VALKEY_PASSWORD (05b-create-data-secrets.sh)
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-token-handler
+  namespace: edge-web
+spec:
+  selector:
+    app: web-token-handler
+  ports:
+    - name: http
+      port: 8080
+---
+# --- Çıkışlar: seçicisiz Service'ler (arkasında pod yok). Trafiği waypoint alır ve dmz-egressgateway'e yönlendirir ---
+# web-bff (internal, zone'lar arası iç ad web-bff.apps.example.local)
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-bff
+  namespace: edge-web
+  labels:
+    istio.io/use-waypoint: waypoint
+spec:
+  ports:
+    - name: http
+      port: 80
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: web-bff-via-egress
+  namespace: edge-web
+spec:
+  hosts:
+    - web-bff.edge-web.svc.cluster.local
+  http:
+    - rewrite:
+        authority: web-bff.apps.example.local   # egress gateway ve cluster-a bu adla yönlendirir
+      route:
+        - destination:
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443
+      timeout: 10s
+---
+# Keycloak (mgmt): code değişimi, refresh, logout
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: edge-web
+  labels:
+    istio.io/use-waypoint: waypoint
+spec:
+  ports:
+    - name: http
+      port: 80
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: keycloak-via-egress
+  namespace: edge-web
+spec:
+  hosts:
+    - keycloak.edge-web.svc.cluster.local
+  http:
+    - rewrite:
+        authority: sso.apps.example.local
+      route:
+        - destination:
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443
+      timeout: 5s
+---
+# Oturum deposu (mgmt Valkey; web_session kullanıcısı yalnızca sess:* anahtarlarında)
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey
+  namespace: edge-web
+  labels:
+    istio.io/use-waypoint: waypoint
+spec:
+  ports:
+    - name: tcp-valkey
+      port: 6379
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: valkey-via-egress
+  namespace: edge-web
+spec:
+  hosts:
+    - valkey.edge-web.svc.cluster.local
+  tcp:
+    - route:
+        - destination:
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 16379
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: waypoint-options
+  namespace: edge-web
+data:
+  deployment: |
+    spec:
+      template:
+        spec:
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: waypoint
+  namespace: edge-web
+  labels:
+    istio.io/waypoint-for: service
+spec:
+  gatewayClassName: istio-waypoint
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: waypoint-options
+  listeners:
+    - name: mesh
+      port: 15008
+      protocol: HBONE
+---
+# --- Yetkilendirme: varsayılan reddet ---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-nothing
+  namespace: edge-web
+spec: {}
+---
+# Token handler'a yalnızca web kanalının gateway'i erişebilir (ztunnel, L4)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: web-token-handler-allow-web-gateway
+  namespace: edge-web
+spec:
+  selector:
+    matchLabels:
+      app: web-token-handler
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/dmz-ingressgateway
+      to:
+        - operation:
+            ports: ["8080"]
+---
+# Çıkış servislerini yalnızca token handler kullanabilir (waypoint). Politikalar Service'e bağlı; waypoint geneline
+# yazılan ALLOW, aynı waypoint'teki servis kısıtlarıyla birleşip (OR) onları genişletirdi.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: web-bff-upstream-allow-handler
+  namespace: edge-web
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: web-bff
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/edge-web/sa/web-token-handler
+---
+# Keycloak'ta yalnızca müşteri realm'inin token ve logout uçları (authorize tarayıcıdan, doğrudan sso host'una gider)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: keycloak-allow-handler
+  namespace: edge-web
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/edge-web/sa/web-token-handler
+      to:
+        - operation:
+            methods: ["POST"]
+            paths: ["/realms/customers/protocol/openid-connect/token", "/realms/customers/protocol/openid-connect/logout"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: valkey-allow-handler
+  namespace: edge-web
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: valkey
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/edge-web/sa/web-token-handler
