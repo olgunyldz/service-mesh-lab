@@ -32,8 +32,14 @@ spec:
           type: RuntimeDefault
       containers:
         - name: api
-          image: lab-registry:5000/lab/account-api:0.4.0   # build + imza: 03b-publish-images.sh
+          image: lab-registry:5000/lab/account-api:0.5.0   # build + imza: 03b-publish-images.sh
           env:
+            # Dört göz (09e): bu tutarın üzerindeki şube transferi aynı şubeden başka bir yetkilinin onayını bekler.
+            # Değerler iş kararı (lab varsayılanı)
+            - name: APPROVAL_LIMIT
+              value: "10000"
+            - name: APPROVAL_TTL
+              value: 30m
             - name: PGHOST
               value: postgres.account-api.svc.cluster.local   # seçicisiz Service (55-data-exit.yaml)
             - name: PGPORT
@@ -156,12 +162,14 @@ spec:
             principals:
               - corp.mesh/ns/account-api/sa/account-api
 ---
-# L7 (waypoint'te, 09b · l7-policies, 09c · mobile-binding): account-api'ye her kanal yalnızca kendi kapısından:
-#   web -> web-bff, mobil -> mobile-bff, partner ve şube -> internal ingress gateway. Her kural ayrı bir izin (OR);
-#   her kuralda kimlik + iç JWT + işlem + claim koşulları birlikte (AND):
+# L7 (waypoint'te, 09b · l7-policies, 09c · mobile-binding, 09e · branch-controls): account-api'ye her kanal yalnızca
+#   kendi kapısından: web -> web-bff, mobil -> mobile-bff, şube -> branch-bff, partner -> internal ingress gateway.
+#   Her kural ayrı bir izin (OR); her kuralda kimlik + iç JWT + işlem + claim koşulları birlikte (AND):
 #   hesap okuma       GET /accounts*                 scope accounts:read
 #   ürün kataloğu     GET /products                  partner, scope products:read
-#   transfer          POST /accounts/{id}/transfers  scope transfers:write; şubede ayrıca gişe/operasyon rolü.
+#   transfer          POST /accounts/{id}/transfers  scope transfers:write; şubede ayrıca gişe/operasyon/yetkili rolü.
+#   onay (dört göz)   GET /approvals, POST /approvals/{id}/approve: şube, scope transfers:write, yetkili rolü (09e).
+#                     Talep eden ≠ onaylayan ve aynı şube kuralları uygulamada (mesh talebin kime ait olduğunu bilemez).
 #                     Web/mobilde doğrulama seviyesi 2 (step-up) uygulamada: Keycloak exchange acr'yi taşımıyor,
 #                     seviye IdP imzalı loa_map claim'inde (JSON) ve waypoint onu okuyamıyor
 # Partner için yazma kuralı yok. Hesabın kime ait olduğu (BOLA) uygulamada kontrol edilir.
@@ -222,7 +230,21 @@ spec:
             paths: ["/accounts", "/accounts/*"]
       when:
         - key: request.auth.claims[channel]
-          values: ["partner", "branch"]
+          values: ["partner"]
+        - key: request.auth.claims[scope]
+          values: ["accounts:read"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/channel-bff/sa/branch-bff
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/staff/*"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/accounts", "/accounts/*"]
+      when:
+        - key: request.auth.claims[channel]
+          values: ["branch"]
         - key: request.auth.claims[scope]
           values: ["accounts:read"]
     - from:
@@ -276,10 +298,8 @@ spec:
     - from:
         - source:
             principals:
-              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
-            requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
-                                "https://sso.apps.example.local:8443/realms/partners/*",
-                                "https://sso.apps.example.local:8443/realms/staff/*"]
+              - corp.mesh/ns/channel-bff/sa/branch-bff
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/staff/*"]
       to:
         - operation:
             methods: ["POST"]
@@ -290,4 +310,23 @@ spec:
         - key: request.auth.claims[scope]
           values: ["transfers:write"]
         - key: request.auth.claims[roles]
-          values: ["teller", "operations"]
+          values: ["teller", "operations", "supervisor"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/channel-bff/sa/branch-bff
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/staff/*"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/approvals"]
+        - operation:
+            methods: ["POST"]
+            paths: ["/approvals/{*}/approve"]
+      when:
+        - key: request.auth.claims[channel]
+          values: ["branch"]
+        - key: request.auth.claims[scope]
+          values: ["transfers:write"]
+        - key: request.auth.claims[roles]
+          values: ["supervisor"]

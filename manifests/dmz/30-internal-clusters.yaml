@@ -100,6 +100,7 @@ spec:
     - api-a.apps.example.local
     - web-bff.apps.example.local   # web kanalının BFF'i (internal, 09a); token handler'dan gelir
     - mobile-bff.apps.example.local   # mobil kanalın BFF'i (internal, 09c); mobile-gateway'den gelir
+    - branch-bff.apps.example.local   # şube kanalının BFF'i (internal, 09e); branch-gateway'den gelir
   gateways:
     - zone-exit
   http:

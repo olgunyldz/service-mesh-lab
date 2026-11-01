@@ -122,6 +122,17 @@ if [[ ! -f "branch/${BRANCH_DEVICE}.crt" ]]; then
     -CA branch/ca.pem -CAkey branch/ca-key.pem -CAcreateserial \
     -extfile branch/client-ext.cnf -out "branch/${BRANCH_DEVICE}.crt"
 fi
+# İkinci şubenin terminali (09e · branch-controls): başka şubenin yetkilisi onay veremez testi
+if [[ ! -f "branch/${BRANCH_DEVICE2}.crt" ]]; then
+  log "İkinci şube terminal sertifikası ($BRANCH_DEVICE2)"
+  openssl req -new -nodes -newkey rsa:2048 -sha256 \
+    -keyout "branch/${BRANCH_DEVICE2}.key" -out "branch/${BRANCH_DEVICE2}.csr" -subj "/O=branch/OU=${BRANCH_DEVICE2}/CN=${BRANCH_DEVICE2}"
+  printf 'basicConstraints=CA:false\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth\n' \
+    > branch/client-ext.cnf
+  openssl x509 -req -sha256 -days 397 -in "branch/${BRANCH_DEVICE2}.csr" \
+    -CA branch/ca.pem -CAkey branch/ca-key.pem -CAcreateserial \
+    -extfile branch/client-ext.cnf -out "branch/${BRANCH_DEVICE2}.crt"
+fi
 
 # Realm imza anahtarları (09a · idp-token-exchange): iç JWT'yi Keycloak imzalar (RFC 8693 token exchange).
 # Anahtar burada üretilip realm'e verilir (05b, realm JSON'undaki rsa key provider'ı); internal cluster'lar açık anahtarı

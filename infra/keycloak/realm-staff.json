@@ -84,6 +84,10 @@
       {
         "name": "operations",
         "description": "Operasyon"
+      },
+      {
+        "name": "supervisor",
+        "description": "Şube yetkilisi: limit üstü işlemlerde dört göz onayı (09e)"
       }
     ]
   },
@@ -93,6 +97,14 @@
       "attributes": {
         "branch_id": [
           "sube-0001"
+        ]
+      }
+    },
+    {
+      "name": "sube-0002",
+      "attributes": {
+        "branch_id": [
+          "sube-0002"
         ]
       }
     }
@@ -237,6 +249,46 @@
       "groups": [
         "/sube-0001"
       ]
+    },
+    {
+      "username": "yetkili01",
+      "enabled": true,
+      "firstName": "Şube 1",
+      "lastName": "Yetkilisi",
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "__STAFF_SUP1_PASSWORD__",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "supervisor"
+      ],
+      "groups": [
+        "/sube-0001"
+      ]
+    },
+    {
+      "username": "yetkili02",
+      "enabled": true,
+      "firstName": "Şube 2",
+      "lastName": "Yetkilisi",
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "__STAFF_SUP2_PASSWORD__",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "supervisor"
+      ],
+      "groups": [
+        "/sube-0002"
+      ]
     }
   ],
   "scopeMappings": [
@@ -244,14 +296,16 @@
       "client": "branch-teller",
       "roles": [
         "teller",
-        "operations"
+        "operations",
+        "supervisor"
       ]
     },
     {
       "client": "auth-branch",
       "roles": [
         "teller",
-        "operations"
+        "operations",
+        "supervisor"
       ]
     }
   ],
