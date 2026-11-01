@@ -2,7 +2,7 @@
 <defs><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto"><path d="M0,1 L9,5 L0,9" fill="none" stroke="#b3b3ad" stroke-width="1.4"/></marker><marker id="ab" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2f7bd8"/></marker></defs>
 <rect width="2630" height="3175" fill="#ffffff"/>
 <text x="40" y="46" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="25" font-weight="600" fill="#1f1f1f">Banka prod topolojisi (hedef): kanal → zone → cluster → domain → veri → dış çıkış</text>
-<text x="40" y="78" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" fill="#5f5f5a">2 DC aktif-aktif · OpenShift · Istio ambient · internet kanalları ortak edge + ortak DMZ (kanal başına namespace) · şube kendi zone'u · ATM/POS → PCI · core legacy ayrı cluster · dışarıya yalnızca dış çıkış zone'undan</text>
+<text x="40" y="78" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" fill="#5f5f5a">2 DC aktif-aktif · OpenShift · Istio ambient · ortak edge + ortak DMZ (kanal başına namespace, iş mantığı yok) · BFF internal'da · iç JWT'yi IdP üretir · şube kendi zone'u · ATM/POS → PCI · core legacy ayrı cluster · dışarıya yalnızca dış çıkış zone'undan</text>
 <g transform="translate(0,50)">
 <path d="M 20,88 L 1476,88 L 1476,204 L 20,204 Z" fill="#fdecec" fill-opacity="0.55" stroke="#e3a1a1" stroke-width="3" stroke-dasharray="14 8"/>
 <path d="M 1484,88 L 2192,88 L 2192,204 L 1484,204 Z" fill="#eef2f7" fill-opacity="0.7" stroke="#94a3b8" stroke-width="3" stroke-dasharray="14 8"/>
@@ -27,6 +27,8 @@
 <text x="1749" y="368" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">ISO 8583 · NDC/DDC (TLS)</text>
 <text x="1749" y="394" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">TID / MID izin listesi</text>
 <text x="1749" y="420" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">internet edge'inden geçmez</text>
+<rect x="40" y="494" width="1420" height="22" rx="5" fill="#fbe9e4" stroke="#c4634a" stroke-width="1.4"/>
+<text x="300" y="510.0" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#8a2f1c" text-anchor="start">İÇ FIREWALL (farklı üretici) · yalnızca F5 → DMZ :443</text>
 <rect x="40" y="540" width="1420" height="430" rx="12" fill="#ffe8d4" stroke="#ec9656" stroke-width="1.8" stroke-dasharray="7 6"/>
 <text x="1436" y="576" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#5f5f5a" text-anchor="end">açık bankacılık büyürse: ayrı partner DMZ cluster'ı</text>
 <rect x="1500" y="540" width="660" height="430" rx="12" fill="#fde3e3" stroke="#dc6262" stroke-width="1.8" stroke-dasharray="7 6"/>
@@ -39,7 +41,9 @@
 <text x="1524" y="1158" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">AD / LDAP federasyonu (personel)</text>
 <text x="1524" y="1184" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">MFA · step-up (acr) · brute force</text>
 <text x="1524" y="1210" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">device-registry · consent-svc</text>
-<text x="1524" y="1236" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">redis-session · PostgreSQL HA · HSM</text>
+<text x="1524" y="1236" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">token exchange (RFC 8693) → iç JWT ≤ 2 dk</text>
+<text x="1524" y="1262" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">introspection · JWKS (internal doğrular)</text>
+<text x="1524" y="1288" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">redis-session · PostgreSQL HA · HSM</text>
 <rect x="1500" y="1360" width="660" height="340" rx="12" fill="#ffefe3" stroke="#e39b62" stroke-width="1.8" stroke-dasharray="7 6"/>
 <text x="1524" y="1396" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="#7a3b10" text-anchor="start">Dış çıkış zone (outbound DMZ)</text>
 <text x="1524" y="1426" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">outbound NGFW · hedef izin listesi</text>
@@ -67,6 +71,8 @@
 <text x="1524" y="2246" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">erişim: rol bazlı, loglanır</text>
 <rect x="40" y="2520" width="2120" height="410" rx="12" fill="#e5f4e5" stroke="#6abd6a" stroke-width="1.8" stroke-dasharray="7 6"/>
 <text x="2136" y="2556" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#5f5f5a" text-anchor="end">tüm cluster'lar: log, metrik ve iz → mgmt</text>
+<rect x="40" y="978" width="1456" height="24" rx="5" fill="#fbe9e4" stroke="#c4634a" stroke-width="1.4"/>
+<text x="860" y="995.0" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#8a2f1c" text-anchor="start">INTERNAL FIREWALL · yalnızca gateway'ler → int-ingressgw :443</text>
 <path d="M 392.5,385 L 412.5,385" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
 <path d="M 740.0,385 L 760.0,385" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
 <path d="M 1087.5,385 L 1107.5,385" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
@@ -82,9 +88,9 @@
 <path d="M 270.0,188 L 270.0,250" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
 <path d="M 750.0,188 L 750.0,250" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
 <path d="M 1230.0,188 L 1230.0,250" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
-<path d="M 1271.25,465 L 1271.25,515 L 286.66666666666663,515 L 286.66666666666663,600" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
-<path d="M 749.9999999999999,515 L 749.9999999999999,600" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
-<path d="M 1271.25,515 L 1213.3333333333333,515 L 1213.3333333333333,600" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M 1271.25,465 L 1271.25,528 L 286.66666666666663,528 L 286.66666666666663,600" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M 749.9999999999999,528 L 749.9999999999999,600" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M 1271.25,528 L 1213.3333333333333,528 L 1213.3333333333333,600" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
 <path d="M 1605,188 L 1605,250" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
 <path d="M 1830,188 L 1830,250" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
 <path d="M 2055,188 L 2055,250" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
@@ -92,7 +98,7 @@
 <path d="M 286.66666666666663,940 L 286.66666666666663,1100" fill="none" stroke="#2f7bd8" stroke-width="3" marker-end="url(#ab)"/>
 <path d="M 1500,380 L 1488,380 L 1488,1135 L 1435,1135" fill="none" stroke="#2f7bd8" stroke-width="3" marker-end="url(#ab)"/>
 <path d="M 1500,870 L 1474,870 L 1474,1170 L 1435,1170" fill="none" stroke="#2f7bd8" stroke-width="3" marker-end="url(#ab)"/>
-<path d="M 829.9999999999999,940 L 829.9999999999999,1000 L 1580,1000 L 1580,1040" fill="none" stroke="#b3b3ad" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#ag)"/>
+<path d="M 829.9999999999999,940 L 829.9999999999999,1031 L 1580,1031 L 1580,1040" fill="none" stroke="#b3b3ad" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#ag)"/>
 <path d="M 2160,690 L 2244,690" fill="none" stroke="#b3b3ad" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#ag)"/>
 <path d="M 228.75,1671 L 228.75,1800" fill="none" stroke="#2f7bd8" stroke-width="3" marker-end="url(#ab)"/>
 <path d="M 1435.0,1610 L 1448,1610 L 1448,2365 L 1435,2365" fill="none" stroke="#2f7bd8" stroke-width="3" marker-end="url(#ab)"/>
@@ -140,44 +146,44 @@
 <text x="780.0" y="421" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#2b2b2b" text-anchor="start">DC başına HA çift</text>
 <rect x="1107.5" y="305" width="327.5" height="160" rx="12" fill="#ffffff" stroke="#e2b04a" stroke-width="1.6"/>
 <text x="1127.5" y="339" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="600" fill="#1f1f1f" text-anchor="start">F5 LTM + Advanced WAF</text>
-<text x="1127.5" y="369" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#2b2b2b" text-anchor="start">VIP: ib · m-api · api</text>
+<text x="1127.5" y="369" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#2b2b2b" text-anchor="start">VIP: ib · m-api · api · auth</text>
 <text x="1127.5" y="395" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#2b2b2b" text-anchor="start">TLS 1.3 · anahtar HSM'de</text>
 <text x="1127.5" y="421" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#2b2b2b" text-anchor="start">partner: mTLS · bot koruma</text>
 <text x="1127.5" y="447" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#2b2b2b" text-anchor="start">header temizliği · 5xx maske</text>
 <rect x="65.0" y="600" width="443.3333333333333" height="150" rx="10" fill="#ffffff" stroke="#ec9656" stroke-width="1.4"/>
-<text x="81.0" y="628" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns web</text>
-<text x="81.0" y="652" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">web-gw · CORS · CSP</text>
-<text x="81.0" y="674" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">web-bff · token handler</text>
-<text x="81.0" y="696" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">oturum cookie'si (HttpOnly)</text>
-<text x="81.0" y="718" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">x-channel=web · local kota</text>
+<text x="81.0" y="628" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns edge-web</text>
+<text x="81.0" y="652" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">web-static (SPA) · CSP · CORS</text>
+<text x="81.0" y="674" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">web-token-handler: cookie ↔ token</text>
+<text x="81.0" y="696" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">HttpOnly · SameSite · CSRF</text>
+<text x="81.0" y="718" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">CIBA / QR onay akışı</text>
 <rect x="528.3333333333333" y="600" width="443.3333333333333" height="150" rx="10" fill="#ffffff" stroke="#ec9656" stroke-width="1.4"/>
-<text x="544.3333333333333" y="628" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns mobile</text>
-<text x="544.3333333333333" y="652" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">mobile-gw · /mobile/v1/*</text>
-<text x="544.3333333333333" y="674" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">uygulama doğrulama (attestation)</text>
-<text x="544.3333333333333" y="696" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">cihaz bağlama (device-registry)</text>
+<text x="544.3333333333333" y="628" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns edge-mobile</text>
+<text x="544.3333333333333" y="652" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">mobile-gw · DPoP doğrulama</text>
+<text x="544.3333333333333" y="674" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">attestation · minimum sürüm</text>
+<text x="544.3333333333333" y="696" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">cihaz bağlama (device_id)</text>
 <text x="544.3333333333333" y="718" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">x-channel=mobile · local kota</text>
 <rect x="991.6666666666666" y="600" width="443.3333333333333" height="150" rx="10" fill="#ffffff" stroke="#ec9656" stroke-width="1.4"/>
-<text x="1007.6666666666666" y="628" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns partner</text>
-<text x="1007.6666666666666" y="652" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">partner-gw · açık bankacılık API</text>
+<text x="1007.6666666666666" y="628" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns edge-partner</text>
+<text x="1007.6666666666666" y="652" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">FAPI 2.0 · PAR · private_key_jwt</text>
 <text x="1007.6666666666666" y="674" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">mTLS ↔ token bağı (RFC 8705)</text>
-<text x="1007.6666666666666" y="696" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">consent kontrolü (consent-svc)</text>
-<text x="1007.6666666666666" y="718" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">partner izin listesi · kota</text>
+<text x="1007.6666666666666" y="696" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">consent kontrolü · izin listesi</text>
+<text x="1007.6666666666666" y="718" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">geliştirici portalı · sandbox</text>
 <rect x="65.0" y="790" width="443.3333333333333" height="150" rx="10" fill="#ffffff" stroke="#ec9656" stroke-width="1.4"/>
 <text x="81.0" y="818" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns istio-egress · internal'a tek kapı</text>
-<text x="81.0" y="842" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">dmz-egressgw: kanal arka uçları</text>
+<text x="81.0" y="842" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">dmz-egressgw → yalnızca channel-bff</text>
 <text x="81.0" y="864" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">port + kimlik AuthZ · mTLS</text>
-<text x="81.0" y="886" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">Authorization silinir</text>
-<text x="81.0" y="908" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">x-user-jwt taşınır</text>
+<text x="81.0" y="886" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">dış token silinir; iç JWT taşınır</text>
+<text x="81.0" y="908" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">OCSP / CRL (→ dış çıkış)</text>
 <rect x="528.3333333333333" y="790" width="443.3333333333333" height="150" rx="10" fill="#ffffff" stroke="#ec9656" stroke-width="1.4"/>
-<text x="544.3333333333333" y="818" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns auth · token exchange</text>
+<text x="544.3333333333333" y="818" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns auth · auth-proxy</text>
 <text x="544.3333333333333" y="842" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">ext_authz: her kanal, her istek</text>
-<text x="544.3333333333333" y="864" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">dış token: imza, iss, aud, exp</text>
-<text x="544.3333333333333" y="886" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">iç JWT: RS256 · 5 dk · jti</text>
-<text x="544.3333333333333" y="908" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">imza anahtarı HSM / Vault Transit</text>
+<text x="544.3333333333333" y="864" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">opak dış token → IdP introspection</text>
+<text x="544.3333333333333" y="886" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">RFC 8693 → iç JWT (IdP imzalar)</text>
+<text x="544.3333333333333" y="908" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">≤ 2 dk · acr · scope · device_id · sid</text>
 <rect x="991.6666666666666" y="790" width="443.3333333333333" height="150" rx="10" fill="#ffffff" stroke="#ec9656" stroke-width="1.4"/>
-<text x="1007.6666666666666" y="818" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns ratelimit</text>
+<text x="1007.6666666666666" y="818" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns ratelimit · edge-cache</text>
 <text x="1007.6666666666666" y="842" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">global kota (partner, kullanıcı)</text>
-<text x="1007.6666666666666" y="864" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">dmz-redis: sayaç · jti önbelleği</text>
+<text x="1007.6666666666666" y="864" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">dmz-redis: sayaç · DPoP jti</text>
 <text x="1007.6666666666666" y="886" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">fail-open; local kota korur</text>
 <text x="1007.6666666666666" y="908" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">kota aşımı: 429</text>
 <rect x="1525.0" y="600" width="295.0" height="150" rx="10" fill="#ffffff" stroke="#dc6262" stroke-width="1.4"/>
@@ -191,74 +197,76 @@
 <text x="1856.0" y="674" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">acquiring · sanal POS</text>
 <text x="1856.0" y="696" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">3DS ACS · terminal yönetimi</text>
 <rect x="1525.0" y="790" width="295.0" height="150" rx="10" fill="#ffffff" stroke="#dc6262" stroke-width="1.4"/>
-<text x="1541.0" y="818" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns card</text>
-<text x="1541.0" y="842" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">kart yönetimi · basım</text>
-<text x="1541.0" y="864" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">tokenization (PAN → token)</text>
-<text x="1541.0" y="886" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">Oracle (kart DB, TDE)</text>
+<text x="1541.0" y="818" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns card · iso8583-adapter</text>
+<text x="1541.0" y="842" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">kart yönetimi · tokenization</text>
+<text x="1541.0" y="864" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">iso8583-adapter: REST ↔ ISO 8583</text>
+<text x="1541.0" y="886" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">yalnızca /cards/**, /authorizations/**</text>
+<text x="1541.0" y="908" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">stand-in (core kapalıyken onay)</text>
 <rect x="1840.0" y="790" width="295.0" height="150" rx="10" fill="#ffffff" stroke="#dc6262" stroke-width="1.4"/>
 <text x="1856.0" y="818" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">HSM · şema bağlantıları</text>
-<text x="1856.0" y="842" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">payShield HSM (PIN, CVV, anahtar)</text>
+<text x="1856.0" y="842" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">payShield HSM (PIN, CVV) · RKL</text>
 <text x="1856.0" y="864" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">şema bağlantısı (özel hat)</text>
 <text x="1856.0" y="886" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">takas · mutabakat</text>
+<text x="1856.0" y="908" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">kart DB: Oracle (TDE)</text>
 <rect x="65" y="1100" width="1370" height="95" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
 <text x="81" y="1128" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns istio-ingress · int-ingressgw (MUTUAL TLS)</text>
-<text x="81" y="1152" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">AuthZ: yalnızca dmz-egressgw, branch-gw ve kart zone kimlikleri · RequestAuthentication: iç JWT (inline JWKS)</text>
-<text x="81" y="1174" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">her domain namespace'inde waypoint (claim bazlı L7 yetki) · ztunnel: mTLS, L4 varsayılan reddet · imzalı image</text>
+<text x="81" y="1152" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">AuthZ: yalnızca dmz-egressgw, branch-gw ve kart zone kimlikleri → channel-bff · RequestAuthentication: iç JWT (Keycloak JWKS, ≤ 2 dk)</text>
+<text x="81" y="1174" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">her domain namespace'inde waypoint (acr · scope · rol · sub ile L7 yetki) · ztunnel: mTLS, L4 varsayılan reddet · imzalı image</text>
 <rect x="65.0" y="1225" width="327.5" height="130" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
-<text x="81.0" y="1253" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns hesap</text>
-<text x="81.0" y="1277" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">account · statement</text>
-<text x="81.0" y="1299" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">waypoint: rol + sub (BOLA)</text>
-<text x="81.0" y="1321" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">PostgreSQL (servis başına DB)</text>
+<text x="81.0" y="1253" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns channel-bff</text>
+<text x="81.0" y="1277" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">mobile-bff · web-bff · branch-bff</text>
+<text x="81.0" y="1299" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">kanal başına toplama (aggregation)</text>
+<text x="81.0" y="1321" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">iç JWT'yi domain'e iletir</text>
 <rect x="412.5" y="1225" width="327.5" height="130" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
-<text x="428.5" y="1253" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns odeme</text>
-<text x="428.5" y="1277" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">transfer · eft-fast · orkestrasyon</text>
-<text x="428.5" y="1299" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">saga · idempotency · step-up</text>
-<text x="428.5" y="1321" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">Kafka: payment-events</text>
+<text x="428.5" y="1253" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns hesap</text>
+<text x="428.5" y="1277" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">account · statement</text>
+<text x="428.5" y="1299" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">waypoint: rol + sub (BOLA)</text>
+<text x="428.5" y="1321" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">PostgreSQL (servis başına DB)</text>
 <rect x="760.0" y="1225" width="327.5" height="130" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
-<text x="776.0" y="1253" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns kart</text>
-<text x="776.0" y="1277" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">card-api (yalnızca token PAN)</text>
-<text x="776.0" y="1299" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">limit · kampanya</text>
-<text x="776.0" y="1321" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">→ kart zone (tokenization)</text>
+<text x="776.0" y="1253" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns odeme</text>
+<text x="776.0" y="1277" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">transfer · eft-fast · orkestrasyon</text>
+<text x="776.0" y="1299" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">saga · idempotency · step-up</text>
+<text x="776.0" y="1321" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">Kafka: payment-events</text>
 <rect x="1107.5" y="1225" width="327.5" height="130" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
-<text x="1123.5" y="1253" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns kredi</text>
-<text x="1123.5" y="1277" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">kredi başvuru · skorlama</text>
-<text x="1123.5" y="1299" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">KKB sorgusu (egress)</text>
-<text x="1123.5" y="1321" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">RabbitMQ: legacy onay akışı</text>
+<text x="1123.5" y="1253" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns kart</text>
+<text x="1123.5" y="1277" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">card-api (yalnızca token PAN)</text>
+<text x="1123.5" y="1299" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">limit · kampanya</text>
+<text x="1123.5" y="1321" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">→ kart zone (tokenization)</text>
 <rect x="65.0" y="1383" width="327.5" height="130" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
-<text x="81.0" y="1411" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns musteri</text>
-<text x="81.0" y="1435" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">customer · kyc · onboarding</text>
-<text x="81.0" y="1457" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">e-imza · NFC kimlik</text>
-<text x="81.0" y="1479" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">MSSQL CRM (legacy) okuma</text>
+<text x="81.0" y="1411" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns kredi</text>
+<text x="81.0" y="1435" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">kredi başvuru · skorlama</text>
+<text x="81.0" y="1457" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">KKB sorgusu (egress)</text>
+<text x="81.0" y="1479" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">RabbitMQ: legacy onay akışı</text>
 <rect x="412.5" y="1383" width="327.5" height="130" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
-<text x="428.5" y="1411" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns fraud</text>
-<text x="428.5" y="1435" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">gerçek zamanlı fraud</text>
-<text x="428.5" y="1457" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">Kafka Streams · kural + ML</text>
-<text x="428.5" y="1479" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">işlem öncesi karar</text>
+<text x="428.5" y="1411" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns musteri</text>
+<text x="428.5" y="1435" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">customer · kyc · onboarding</text>
+<text x="428.5" y="1457" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">e-imza · NFC kimlik</text>
+<text x="428.5" y="1479" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">MSSQL CRM (legacy) okuma</text>
 <rect x="760.0" y="1383" width="327.5" height="130" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
-<text x="776.0" y="1411" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns bildirim</text>
-<text x="776.0" y="1435" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">SMS · push · e-posta</text>
-<text x="776.0" y="1457" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">RabbitMQ / Kafka tüketici</text>
-<text x="776.0" y="1479" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">→ dış çıkış (SMS/push gw)</text>
+<text x="776.0" y="1411" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns security</text>
+<text x="776.0" y="1435" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">tx-signing-svc (işlem imzası)</text>
+<text x="776.0" y="1457" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">fraud: Kafka Streams · kural + ML</text>
+<text x="776.0" y="1479" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">işlem öncesi karar · step-up</text>
 <rect x="1107.5" y="1383" width="327.5" height="130" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
-<text x="1123.5" y="1411" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns raporlama</text>
-<text x="1123.5" y="1435" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">ekstre · dekont üretimi</text>
-<text x="1123.5" y="1457" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">batch (CronJob)</text>
-<text x="1123.5" y="1479" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">→ veri ambarı (CDC)</text>
+<text x="1123.5" y="1411" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns bildirim</text>
+<text x="1123.5" y="1435" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">SMS · push · e-posta</text>
+<text x="1123.5" y="1457" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">RabbitMQ / Kafka tüketici</text>
+<text x="1123.5" y="1479" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">→ dış çıkış (SMS/push gw)</text>
 <rect x="65.0" y="1541" width="327.5" height="130" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
-<text x="81.0" y="1569" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns core-adapter</text>
-<text x="81.0" y="1593" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">anti-corruption layer</text>
-<text x="81.0" y="1615" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">REST ↔ core API / MQ</text>
+<text x="81.0" y="1569" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns integration</text>
+<text x="81.0" y="1593" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">core-adapter (anti-corruption)</text>
+<text x="81.0" y="1615" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">kurum: EFT/FAST · SWIFT · KKB</text>
 <text x="81.0" y="1637" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">strangler: kademeli taşıma</text>
 <rect x="412.5" y="1541" width="327.5" height="130" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
-<text x="428.5" y="1569" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns olay</text>
-<text x="428.5" y="1593" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">outbox → Kafka (Debezium)</text>
-<text x="428.5" y="1615" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">Schema Registry · Avro</text>
-<text x="428.5" y="1637" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">olay tabanlı entegrasyon</text>
+<text x="428.5" y="1569" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns raporlama</text>
+<text x="428.5" y="1593" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">ekstre · dekont üretimi</text>
+<text x="428.5" y="1615" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">batch (CronJob)</text>
+<text x="428.5" y="1637" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">→ veri ambarı (CDC)</text>
 <rect x="760.0" y="1541" width="327.5" height="130" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
-<text x="776.0" y="1569" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns kurum-adaptor</text>
-<text x="776.0" y="1593" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">EFT/FAST · SWIFT · KKB</text>
-<text x="776.0" y="1615" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">kurum başına sertifika</text>
-<text x="776.0" y="1637" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">mesaj dönüşümü (ISO 20022)</text>
+<text x="776.0" y="1569" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns olay</text>
+<text x="776.0" y="1593" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">outbox → Kafka (Debezium)</text>
+<text x="776.0" y="1615" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">Schema Registry · Avro</text>
+<text x="776.0" y="1637" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">olay tabanlı entegrasyon</text>
 <rect x="1107.5" y="1541" width="327.5" height="130" rx="10" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4"/>
 <text x="1123.5" y="1569" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">ns istio-egress</text>
 <text x="1123.5" y="1593" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">int-egressgw (port + kimlik)</text>
@@ -352,8 +360,8 @@
 <text x="1474.3333333333333" y="2603" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">SIEM / SOAR</text>
 <text x="1474.3333333333333" y="2627" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">QRadar / Splunk</text>
 <text x="1474.3333333333333" y="2649" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">k8s audit · DB audit</text>
-<text x="1474.3333333333333" y="2671" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">korelasyon · alarm</text>
-<text x="1474.3333333333333" y="2693" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">otomatik müdahale</text>
+<text x="1474.3333333333333" y="2671" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">WORM arşiv · NTP (zaman)</text>
+<text x="1474.3333333333333" y="2693" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">korelasyon · SOAR</text>
 <rect x="1806.6666666666665" y="2575" width="328.3333333333333" height="156" rx="10" fill="#ffffff" stroke="#6abd6a" stroke-width="1.4"/>
 <text x="1822.6666666666665" y="2603" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">Olay yönetimi</text>
 <text x="1822.6666666666665" y="2627" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">Opsgenie / PagerDuty</text>
@@ -386,7 +394,7 @@
 <text x="1126.0" y="2868" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">Transit (imza, şifre)</text>
 <rect x="1458.3333333333333" y="2750" width="328.3333333333333" height="156" rx="10" fill="#ffffff" stroke="#6abd6a" stroke-width="1.4"/>
 <text x="1474.3333333333333" y="2778" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f1f1f" text-anchor="start">Erişim</text>
-<text x="1474.3333333333333" y="2802" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">bastion · VDI</text>
+<text x="1474.3333333333333" y="2802" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">bastion · VDI → API :6443</text>
 <text x="1474.3333333333333" y="2824" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">PAM (CyberArk)</text>
 <text x="1474.3333333333333" y="2846" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">MFA · oturum kaydı</text>
 <text x="1474.3333333333333" y="2868" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2b2b2b" text-anchor="start">just-in-time yetki</text>
@@ -460,8 +468,8 @@
 <text x="2249" y="521" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#ffffff" letter-spacing="0.6">DIŞ DÜNYA · ÇIKIŞ HEDEFLERİ</text>
 <rect x="54" y="262" width="348.59999999999997" height="34" rx="6" fill="#fff3d9"/>
 <text x="64" y="286" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="#7a5200" text-anchor="start">Internet Edge · ortak (DC1/DC2)</text>
-<rect x="54" y="552" width="581.8" height="34" rx="6" fill="#ffe8d4"/>
-<text x="64" y="576" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="#8a3d0b" text-anchor="start">DMZ zone · ocp-dmz (DC1/DC2) · kanal başına namespace</text>
+<rect x="54" y="552" width="762.0" height="34" rx="6" fill="#ffe8d4"/>
+<text x="64" y="576" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="#8a3d0b" text-anchor="start">DMZ zone · ocp-dmz (DC1/DC2) · kanal başına namespace · iş mantığı yok</text>
 <text x="757.9999999999999" y="772" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">ext_authz</text>
 <text x="1261.3333333333333" y="772" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">kota</text>
 <rect x="54" y="1052" width="899.8" height="34" rx="6" fill="#e4eefc"/>
@@ -472,11 +480,11 @@
 <text x="64" y="2086" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="#4b2a85" text-anchor="start">Data zone · ocp-data + VM (DC1 ⇄ DC2 replikasyon)</text>
 <rect x="54" y="2532" width="422.8" height="34" rx="6" fill="#e5f4e5"/>
 <text x="64" y="2556" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="#1f5f1f" text-anchor="start">Yönetim ve gözlem · ocp-mgmt (DC1/DC2)</text>
-<text x="1223.3333333333333" y="545" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">mTLS (Edge-DMZ CA)</text>
-<text x="298.66666666666663" y="980" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="600" fill="#1f1f1f" text-anchor="start">mTLS + iç JWT</text>
+<text x="1281.25" y="483" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">mTLS (Edge-DMZ CA)</text>
+<text x="298.66666666666663" y="962" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="600" fill="#1f1f1f" text-anchor="start">mTLS + iç JWT (IdP)</text>
 <text x="1481" y="760" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#1f1f1f" text-anchor="middle" transform="rotate(-90 1481 760)">şube: mTLS + iç JWT</text>
 <text x="1467" y="1060" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#1f1f1f" text-anchor="middle" transform="rotate(-90 1467 1060)">kart: token PAN</text>
-<text x="1120" y="992" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#5f5f5a" text-anchor="start">auth-service → Keycloak: OIDC · JWKS</text>
+<text x="841.9999999999999" y="962" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#5f5f5a" text-anchor="start">auth-proxy → IdP: introspection · token exchange</text>
 <text x="2170" y="680" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400" fill="#5f5f5a" text-anchor="start">özel hat</text>
 <text x="240.75" y="1728" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="600" fill="#1f1f1f" text-anchor="start">mTLS</text>
 <text x="1441" y="1880" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#1f1f1f" text-anchor="middle" transform="rotate(-90 1441 1880)">PostgreSQL · Kafka · Valkey · RabbitMQ (mTLS)</text>
