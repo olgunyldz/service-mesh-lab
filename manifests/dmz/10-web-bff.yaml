@@ -33,7 +33,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: bff
-          image: lab-registry:5000/lab/web-bff:0.1.0   # build + imza: 03b-publish-images.sh
+          image: lab-registry:5000/lab/web-bff:0.2.0   # build + imza: 03b-publish-images.sh
           env:
             - name: API_URL
               value: http://api-a.web-bff.svc.cluster.local   # aşağıdaki seçicisiz Service (waypoint'e gider)

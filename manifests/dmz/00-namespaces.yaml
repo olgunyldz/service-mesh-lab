@@ -66,3 +66,15 @@ metadata:
     istio.io/use-waypoint: waypoint
     policy.corp.mesh/image-source: lab-registry
     pod-security.kubernetes.io/enforce: restricted
+---
+# Kimlik (08 · token-exchange): kanal gateway'lerinin ext_authz servisi. İç JWT imza anahtarı yalnızca burada
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: auth
+  labels:
+    zone: dmz
+    istio.io/dataplane-mode: ambient
+    istio.io/use-waypoint: waypoint
+    policy.corp.mesh/image-source: lab-registry
+    pod-security.kubernetes.io/enforce: restricted

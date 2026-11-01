@@ -58,7 +58,7 @@ kubectl --context "$(ctx dmz)" -n istio-branch create secret generic branch-gate
   --from-file=tls.key="$ROOT_DIR/certs/branch/gateway.key" \
   --from-file=ca.crt="$ROOT_DIR/certs/branch/ca.pem" \
   --dry-run=client -o yaml | kubectl --context "$(ctx dmz)" apply -f -
-install_ingress dmz branch-gateway --ns istio-branch --octet "$(channel_vip_octet branch)"
+install_ingress dmz branch-gateway --ns istio-branch --octet "$(channel_vip_octet branch)" -f "$V/ingress-gateway-branch.yaml"
 install_egress dmz dmz-egressgateway
 
 for c in $(internal_clusters); do

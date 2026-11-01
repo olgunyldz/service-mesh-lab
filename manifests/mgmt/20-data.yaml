@@ -35,6 +35,10 @@ data:
       GRANT USAGE ON SCHEMA accounts TO account_api;
       GRANT SELECT ON accounts.accounts TO account_api;
 
+      -- Keycloak (08 · token-exchange): kendi veritabanı ve sahibi; diğer veritabanlarına erişimi yok
+      CREATE ROLE keycloak LOGIN PASSWORD '$KEYCLOAK_DB_PASSWORD' CONNECTION LIMIT 30;
+      CREATE DATABASE keycloak OWNER keycloak;
+
       -- Başka bir servisin verisi: account_api erişememeli (08-verify testi)
       CREATE SCHEMA audit;
       CREATE TABLE audit.events (id bigserial PRIMARY KEY, at timestamptz DEFAULT now(), detail text);
@@ -89,7 +93,7 @@ spec:
             - secretRef:
                 name: postgres-admin        # POSTGRES_PASSWORD
             - secretRef:
-                name: postgres-app-users    # ACCOUNT_API_PASSWORD (yalnızca init betiği kullanır)
+                name: postgres-app-users    # ACCOUNT_API_PASSWORD, KEYCLOAK_DB_PASSWORD (yalnızca init betiği kullanır)
           ports:
             - name: tcp-postgres
               containerPort: 5432
@@ -228,6 +232,14 @@ spec:
         - source:
             principals:
               - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports: ["5432"]
+    # Keycloak (mgmt içi, ns iam): kendi veritabanına
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/iam/sa/keycloak
       to:
         - operation:
             ports: ["5432"]

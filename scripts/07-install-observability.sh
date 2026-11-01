@@ -16,17 +16,26 @@ TMP=$(cd "$(mktemp -d)" && (pwd -W 2>/dev/null || pwd))
 curl -sfL "$ADDONS/prometheus.yaml" -o "$TMP/prometheus.yaml"
 curl -sfL "$ADDONS/grafana.yaml" -o "$TMP/grafana.yaml"
 
-# Prometheus yapılandırmasını cluster'a göre üretir
+# Prometheus yapılandırmasını cluster'a göre üretir.
+# Diğer cluster'larda Prometheus agent modunda: yalnızca toplar ve merkeze iletir.
+# Merkeze yalnızca Kiali ve Istio panolarının kullandığı metrikler gider (istio_*, pilot_*, up). Hepsi gönderilince
+# (envoy/coredns/kiali histogramları) merkezi Prometheus saatler içinde ~1 GB'a çıkıyordu (08 · token-exchange).
+# Merkezde saklama 6 saat (lab, bellek bütçesi); uzun süreli saklama gerekirse Thanos/Mimir.
 render_prometheus() {
   local c=$1 out="$TMP/prometheus-$1.yaml"
   if [[ $c == mgmt ]]; then
     sed -e "s|^    global:|    global:\n      external_labels:\n        cluster: $c|" \
         -e "s|            - --web.enable-lifecycle|            - --web.enable-lifecycle\n            - --web.enable-remote-write-receiver|" \
+        -e "s|--storage.tsdb.retention.time=15d|--storage.tsdb.retention.time=6h|" \
         "$TMP/prometheus.yaml" > "$out"
   else
     sed -e "s|^    global:|    global:\n      external_labels:\n        cluster: $c|" \
-        -e "s|^    scrape_configs:|    remote_write:\n      - url: http://prometheus-mgmt.istio-egress.svc.cluster.local/api/v1/write\n    scrape_configs:|" \
-        -e "s|--storage.tsdb.retention.time=15d|--storage.tsdb.retention.time=2h|" \
+        -e "s#^    scrape_configs:#    remote_write:\n      - url: http://prometheus-mgmt.istio-egress.svc.cluster.local/api/v1/write\n        write_relabel_configs:\n          - source_labels: [__name__]\n            regex: 'istio_.*|pilot_.*|up'\n            action: keep\n    scrape_configs:#" \
+        `# Agent modu: yerel veritabanı ve sorgu yok, yalnızca toplayıp merkeze gönderir (tam Prometheus ~0,6-1 GB` \
+        `# tutuyordu). Agent modu kural dosyalarını desteklemez.` \
+        -e "/^    rule_files:/,/^    - \/etc\/config\/alerts/d" \
+        -e "s|--storage.tsdb.retention.time=15d|--agent|" \
+        -e "s|--storage.tsdb.path=/data|--storage.agent.path=/data|" \
         "$TMP/prometheus.yaml" > "$out"
   fi
   echo "$out"

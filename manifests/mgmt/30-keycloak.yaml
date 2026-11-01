@@ -1,0 +1,144 @@
+# Keycloak (mgmt, ns iam): kimlik sağlayıcı. Realm'ler ilk açılışta içe aktarılır (keycloak-realms Secret'ı,
+# 05b-create-data-secrets.sh): customers (web, mobil), partners (client credentials), staff (şube personeli).
+# Dışarıya yalnızca DMZ üzerinden ve yalnızca OIDC uçları açık (35-keycloak-entry.yaml); yönetim konsolu kapalı.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keycloak
+  namespace: iam
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: iam
+spec:
+  replicas: 1   # gerçekte en az 2 (dağıtık önbellek, KC_CACHE=ispn)
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      serviceAccountName: keycloak
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: keycloak
+          image: lab-registry:5000/lab/keycloak:26.8.0-opt   # optimize build: images/keycloak/Dockerfile
+          # Optimize image: yapılandırma build'de derlendi (images/keycloak/Dockerfile). Optimize edilmemiş "start"
+          # her açılışta ~1 dk çok çekirdekli derleme yapıyordu ve mgmt node'unu CPU açlığına sokuyordu (bkz. 08 doküman).
+          args: ["start", "--optimized", "--import-realm"]
+          env:
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL
+              value: jdbc:postgresql://postgres.data.svc.cluster.local:5432/keycloak
+            - name: KC_DB_USERNAME
+              value: keycloak
+            # Token'ların issuer'ı ve kullanıcıya gösterilen adresler bu adla (DMZ üzerinden erişilen ad)
+            - name: KC_HOSTNAME
+              value: https://sso.apps.example.local:8443
+            # Arka kanal (mesh içi, ör. auth-service'in JWKS çağrısı) istek adresini kullanır
+            - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
+              value: "true"
+            - name: KC_HTTP_ENABLED   # TLS mesh'te (mTLS/HBONE); Keycloak düz HTTP dinler
+              value: "true"
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+            - name: JAVA_OPTS_KC_HEAP
+              value: "-Xms128m -Xmx384m"
+          envFrom:
+            - secretRef:
+                name: keycloak-db       # KC_DB_PASSWORD
+            - secretRef:
+                name: keycloak-admin    # KC_BOOTSTRAP_ADMIN_USERNAME / _PASSWORD (yalnızca master realm'i, ilk açılış)
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+          startupProbe:
+            httpGet:
+              path: /health/started
+              port: 9000
+            periodSeconds: 5
+            failureThreshold: 60   # ilk açılış (derleme + şema + realm içe aktarımı) birkaç dakika sürebilir
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 9000
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true   # yazılabilir yer yalnızca data (emptyDir)
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 768Mi
+          volumeMounts:
+            - name: data
+              mountPath: /opt/keycloak/data
+            - name: tmp
+              mountPath: /tmp
+            - name: realms
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: realms
+          secret:
+            secretName: keycloak-realms
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: iam
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - name: http
+      port: 8080
+---
+# --- Yetkilendirme: yalnızca mgmt ingress gateway, yalnızca HTTP portu (ztunnel, L4) ---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-nothing
+  namespace: iam
+spec: {}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: keycloak-allow-ingress
+  namespace: iam
+spec:
+  selector:
+    matchLabels:
+      app: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports: ["8080"]

@@ -107,6 +107,98 @@ spec:
               number: 443
 # cluster-b'ye çıkış: cluster-b/31-cluster-b-gateway.yaml (yalnızca cluster-b aktifken uygulanır)
 ---
+# --- Kimlik çıkışı (08 · token-exchange): SSO istekleri ve auth-service'in JWKS çağrısı -> mgmt Keycloak ---
+#   web gateway (müşteri/partner login) · branch-gateway (personel login) · auth-service waypoint (JWKS)
+#   --mTLS--> dmz-egressgateway --mTLS (SNI keycloak.mgmt.internal)--> mgmt ingress gw --> iam/keycloak
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: mgmt-keycloak
+  namespace: istio-egress
+spec:
+  hosts:
+    - keycloak.mgmt.internal
+  location: MESH_EXTERNAL
+  resolution: STATIC
+  ports:
+    - number: 443
+      name: http-mtls
+      protocol: HTTP
+  endpoints:
+    - address: __NET_PREFIX__.203.10
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: mgmt-keycloak
+  namespace: istio-egress
+spec:
+  host: keycloak.mgmt.internal
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      sni: keycloak.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: zone-exit-sso
+  namespace: istio-egress
+spec:
+  hosts:
+    - sso.apps.example.local
+  gateways:
+    - zone-exit
+  http:
+    - rewrite:
+        authority: keycloak.mgmt.internal   # mgmt ingress gateway bu adla eşleşir; Keycloak issuer'ı KC_HOSTNAME'den
+      route:
+        - destination:
+            host: keycloak.mgmt.internal
+            port:
+              number: 443
+---
+# SSO çıkışı: kim, hangi realm'e. Web gateway'in API host'larına çıkışı yine yok (yalnızca sso host'u).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-sso-exit
+  namespace: istio-egress
+spec:
+  selector:
+    matchLabels:
+      istio: dmz-egressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/dmz-ingressgateway
+      to:
+        - operation:
+            hosts: ["sso.apps.example.local"]
+            ports: ["443"]
+            paths: ["/realms/customers/*", "/realms/partners/*", "/resources/*"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-branch/sa/branch-gateway
+      to:
+        - operation:
+            hosts: ["sso.apps.example.local"]
+            ports: ["443"]
+            paths: ["/realms/staff/*"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/auth/sa/waypoint
+      to:
+        - operation:
+            hosts: ["sso.apps.example.local"]
+            ports: ["443"]
+            methods: ["GET"]
+            paths: ["/realms/{*}/protocol/openid-connect/certs"]
+---
 # --- Veri çıkışı (07 · data): global rate limit sayaçları -> mgmt Valkey ---
 #   ratelimit waypoint --mTLS--> dmz-egressgateway :16379 --mTLS (SNI valkey.mgmt.internal)--> mgmt :6379
 apiVersion: networking.istio.io/v1

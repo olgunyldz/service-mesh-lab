@@ -10,6 +10,19 @@ admissionController:
     resources:
       requests: { cpu: 100m, memory: 128Mi }
       limits: { memory: 384Mi }
+  # Yük altında (CPU/bellek baskısı) varsayılan başlangıç süresi (20 x 6 sn) yetmiyor; Kyverno yeniden başlatılıyor ve
+  # webhook fail-closed olduğu için o sırada cluster'da hiçbir pod oluşturulamıyor (08 · token-exchange'te yaşandı).
+  startupProbe:
+    httpGet: { path: /health/liveness, port: 9443, scheme: HTTPS }
+    failureThreshold: 60
+    initialDelaySeconds: 2
+    periodSeconds: 6
+  livenessProbe:
+    httpGet: { path: /health/liveness, port: 9443, scheme: HTTPS }
+    failureThreshold: 4
+    initialDelaySeconds: 15
+    periodSeconds: 30
+    timeoutSeconds: 5
 
 # Arka plan tarama ve ihlal raporları (PolicyReport). Audit modunda mevcut kaynakları da raporlar.
 reportsController:

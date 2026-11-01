@@ -51,28 +51,41 @@ docker run -d --name edge-lb --restart unless-stopped --network "$EDGE_NETWORK" 
 # İnternet istemcisi simülasyonu: Kiali grafiklerinin canlı görünmesi için sürekli trafik.
 # Her saniye: web (GET /, POST /api/echo, BFF dashboard), mobil (GET /mobile/v1/), partner (acme sertifikasıyla
 # GET /partner/v1/); her 10 turda bir web'de /status/500. cluster-b aktifse api-b'ye de (cluster-b/21-api-b-route.yaml).
+# 08'den itibaren her kanal token ister: loadgen Keycloak'tan (sso host'u, edge üzerinden) token alır ve 4 dakikada bir
+# yeniler (token ömrü 5 dk). Müşteri için direct grant (lab istisnası), partner için client credentials.
 extra=""
 has_cluster cluster-b && extra="api-b.${APPS_DOMAIN}"
+pwf() { cat "$ROOT_DIR/certs/data/$1.pw" 2>/dev/null || true; }
 
 log "loadgen (web, mobile, partner${extra:+, $extra})"
 docker rm -f loadgen >/dev/null 2>&1 || true
 docker run -d --name loadgen --restart unless-stopped --network "$EDGE_NETWORK" \
-  -e WEB="$WEB_HOST" -e MOBILE="$MOBILE_HOST" -e PARTNER="$PARTNER_HOST" -e EXTRA="$extra" \
+  -e WEB="$WEB_HOST" -e MOBILE="$MOBILE_HOST" -e PARTNER="$PARTNER_HOST" -e SSO="$SSO_HOST" -e EXTRA="$extra" \
+  -e CUSTOMER_PW="$(pwf kc-customer-ayse)" -e ACME_SECRET="$(pwf kc-partner-acme)" \
   -v "$ROOT_DIR/certs/edge/ca.pem:/ca.pem:ro" \
   -v "$ROOT_DIR/certs/partner/acme.crt:/partner.crt:ro" \
   -v "$ROOT_DIR/certs/partner/acme.key:/partner.key:ro" \
   --entrypoint /bin/sh "$LOADGEN_IMAGE" -c '
-    req() { h=$1; shift; curl -s -o /dev/null --cacert /ca.pem --resolve "$h:8443:$(getent hosts edge-lb | cut -d" " -f1)" "$@"; }
+    ip() { getent hosts edge-lb | cut -d" " -f1; }
+    req() { h=$1; shift; curl -s -o /dev/null --cacert /ca.pem --resolve "$h:8443:$(ip)" "$@"; }
+    token() { r=$1; shift
+      curl -s --cacert /ca.pem --resolve "$SSO:8443:$(ip)" "https://$SSO:8443/realms/$r/protocol/openid-connect/token" "$@" \
+        | sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p"; }
     i=0
     while true; do
+      if [ $((i % 240)) -eq 0 ] || [ -z "$TW" ]; then
+        TW=$(token customers -d grant_type=password -d client_id=web-bff -d username=ayse --data-urlencode "password=$CUSTOMER_PW")
+        TM=$(token customers -d grant_type=password -d client_id=mobile-app -d username=ayse --data-urlencode "password=$CUSTOMER_PW")
+        TP=$(token partners -d grant_type=client_credentials -d client_id=acme --data-urlencode "client_secret=$ACME_SECRET")
+      fi
       i=$((i+1))
-      req "$WEB" "https://$WEB:8443/"
-      req "$WEB" -X POST -d ping "https://$WEB:8443/api/echo"
-      req "$WEB" "https://$WEB:8443/bff/v1/dashboard"
-      req "$MOBILE" "https://$MOBILE:8443/mobile/v1/"
-      req "$PARTNER" --cert /partner.crt --key /partner.key "https://$PARTNER:8443/partner/v1/"
-      for h in $EXTRA; do req "$h" "https://$h:8443/"; done
-      [ $((i % 10)) -eq 0 ] && req "$WEB" "https://$WEB:8443/status/500"
+      req "$WEB" -H "Authorization: Bearer $TW" "https://$WEB:8443/"
+      req "$WEB" -H "Authorization: Bearer $TW" -X POST -d ping "https://$WEB:8443/api/echo"
+      req "$WEB" -H "Authorization: Bearer $TW" "https://$WEB:8443/bff/v1/dashboard"
+      req "$MOBILE" -H "Authorization: Bearer $TM" "https://$MOBILE:8443/mobile/v1/accounts"
+      req "$PARTNER" -H "Authorization: Bearer $TP" --cert /partner.crt --key /partner.key "https://$PARTNER:8443/partner/v1/"
+      for h in $EXTRA; do req "$h" -H "Authorization: Bearer $TW" "https://$h:8443/"; done
+      [ $((i % 10)) -eq 0 ] && req "$WEB" -H "Authorization: Bearer $TW" "https://$WEB:8443/status/500"
       sleep 1
     done' >/dev/null
 

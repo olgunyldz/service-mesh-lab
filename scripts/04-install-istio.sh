@@ -17,8 +17,10 @@ for c in $CLUSTERS; do
   helm upgrade --install istio-base istio/base -n istio-system --kube-context "$context" \
     --version "$ISTIO_VERSION" --wait
 
+  extra=()
+  [[ $c == dmz ]] && extra=(-f "$V/istiod-dmz.yaml")   # kanal gateway'lerinin ext_authz sağlayıcıları (08)
   helm upgrade --install istiod istio/istiod -n istio-system --kube-context "$context" \
-    --version "$ISTIO_VERSION" -f "$V/istiod.yaml" \
+    --version "$ISTIO_VERSION" -f "$V/istiod.yaml" "${extra[@]}" \
     --set global.meshID="$MESH_ID" \
     --set global.multiCluster.clusterName="$c" \
     --set global.network="$net" \

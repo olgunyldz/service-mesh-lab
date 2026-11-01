@@ -1,0 +1,7 @@
+# Yalnızca branch-gateway için (ingress-gateway.yaml'ın üzerine).
+# Terminalin cihaz sertifikası bilgisi x-forwarded-client-cert (XFCC) header'ıyla auth-service'e ve arka uca gider.
+# SANITIZE_SET: istemcinin gönderdiği XFCC silinir, gateway kendi doğruladığı sertifikadan yeniden yazar.
+podAnnotations:
+  proxy.istio.io/config: |
+    gatewayTopology:
+      forwardClientCertDetails: SANITIZE_SET

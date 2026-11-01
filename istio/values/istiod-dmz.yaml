@@ -1,0 +1,31 @@
+# Yalnızca dmz istiod'u için (istiod.yaml'ın üzerine): kanal gateway'lerinin harici yetkilendirme sağlayıcıları.
+# Kanal başına ayrı sağlayıcı: gateway, isteği auth-service'e sorarken x-auth-channel'ı kendisi ekler
+# (includeAdditionalHeadersInCheck); istemcinin gönderdiği değer bunu ezemez. auth-service yalnızca dmz'de.
+meshConfig:
+  extensionProviders:
+    - name: auth-web
+      envoyExtAuthzHttp: &authz
+        service: auth-service.auth.svc.cluster.local
+        port: 8080
+        timeout: 2s
+        failOpen: false            # auth-service erişilemezse istek reddedilir
+        includeRequestHeadersInCheck: [authorization, x-partner-id, x-forwarded-client-cert, x-request-id]
+        includeAdditionalHeadersInCheck:
+          x-auth-channel: web
+        headersToUpstreamOnAllow: [x-user-jwt]
+        headersToDownstreamOnDeny: [content-type, www-authenticate]
+    - name: auth-mobile
+      envoyExtAuthzHttp:
+        <<: *authz
+        includeAdditionalHeadersInCheck:
+          x-auth-channel: mobile
+    - name: auth-partner
+      envoyExtAuthzHttp:
+        <<: *authz
+        includeAdditionalHeadersInCheck:
+          x-auth-channel: partner
+    - name: auth-branch
+      envoyExtAuthzHttp:
+        <<: *authz
+        includeAdditionalHeadersInCheck:
+          x-auth-channel: branch

@@ -7,12 +7,50 @@ CA="$ROOT_DIR/certs/edge/ca.pem"
 PASS=0; FAIL=0
 
 # edge üzerinden istek: edge <host-öneki> <yol> [ek curl argümanları]
+# 08'den itibaren kanallar token ister: www ve mobile-api'ye müşteri token'ı otomatik eklenir (NOAUTH=1 ile eklenmez).
 edge() {
-  local host="$1.$H" path=$2; shift 2
+  local host="$1.$H" path=$2 auth=(); shift 2
+  if [[ -z ${NOAUTH:-} ]]; then
+    case $host in
+      www.*) auth=(-H "Authorization: Bearer ${TW:-}") ;;
+      mobile-api.*) auth=(-H "Authorization: Bearer ${TM:-}") ;;
+    esac
+  fi
   # --ssl-no-revoke: Windows curl'ü (schannel) CRL/OCSP kontrolü yapar; lab CA'sının iptal listesi yok
   env -u MSYS_NO_PATHCONV curl -s --max-time 15 --ssl-no-revoke --cacert "$CA" \
-    --resolve "$host:8443:127.0.0.1" "$@" "https://$host:8443$path" || true
+    --resolve "$host:8443:127.0.0.1" "${auth[@]}" "$@" "https://$host:8443$path" || true
 }
+
+# --- Kimlik (08): token'lar Keycloak'tan, lab'de direct grant (müşteri, personel) ve client credentials (partner) ---
+pwf() { cat "$ROOT_DIR/certs/data/$1.pw" 2>/dev/null; }
+kc_token() {  # kc_token <realm> <form argümanları...>: sso host'u üzerinden (edge -> web gateway -> mgmt Keycloak)
+  local realm=$1; shift
+  env -u MSYS_NO_PATHCONV curl -s --max-time 15 --ssl-no-revoke --cacert "$CA" --resolve "$SSO_HOST:8443:127.0.0.1" \
+    "https://$SSO_HOST:8443/realms/$realm/protocol/openid-connect/token" "$@" \
+    | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
+}
+staff_token() {  # personel: şube ağından, cihaz sertifikasıyla, şube gateway'inin /sso/ yolu üzerinden
+  MSYS_NO_PATHCONV=1 docker run --rm --network "$BRANCH_NETWORK" -v "$ROOT_DIR/certs/branch:/b:ro" "$LOADGEN_IMAGE" sh -c \
+    "curl -s --max-time 15 --cacert /b/ca.pem --cert /b/$BRANCH_DEVICE.crt --key /b/$BRANCH_DEVICE.key \
+       --resolve $BRANCH_HOST:443:\$(getent hosts branch-fw | cut -d' ' -f1) \
+       https://$BRANCH_HOST/sso/realms/staff/protocol/openid-connect/token -d grant_type=password \
+       -d client_id=branch-teller -d username=teller01 --data-urlencode password=$(pwf kc-staff-teller01)" 2>/dev/null \
+    | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
+}
+# Token ömrü 5 dk: her bölümün başında yenilenir
+refresh_tokens() {
+  TW=$(kc_token customers -d grant_type=password -d client_id=web-bff -d username=ayse --data-urlencode "password=$(pwf kc-customer-ayse)")
+  TM=$(kc_token customers -d grant_type=password -d client_id=mobile-app -d username=ayse --data-urlencode "password=$(pwf kc-customer-ayse)")
+  TPA=$(kc_token partners -d grant_type=client_credentials -d client_id=acme --data-urlencode "client_secret=$(pwf kc-partner-acme)")
+  TPI=$(kc_token partners -d grant_type=client_credentials -d client_id=initech --data-urlencode "client_secret=$(pwf kc-partner-initech)")
+  TS=$(staff_token)
+}
+jwt_payload() {  # base64url JWT gövdesi -> JSON
+  local p; p=$(echo "$1" | cut -d. -f2 | tr '_-' '/+')
+  while (( ${#p} % 4 )); do p="$p="; done
+  echo "$p" | base64 -d 2>/dev/null
+}
+
 
 # Sunucunun belirli bir TLS sürümüne yanıtı (istemci tarafında eski sürümler bilerek açılır)
 tls_probe() {
@@ -28,6 +66,15 @@ check() {  # check <açıklama> <beklenen> <gerçek>
     printf '  \033[31m✘\033[0m %s (beklenen: %s, gelen: %s)\n' "$1" "$2" "$3"; FAIL=$((FAIL+1))
   fi
 }
+
+log "Kimlik sağlayıcı (Keycloak) hazır mı?"
+for i in $(seq 1 60); do
+  refresh_tokens
+  [[ -n $TW && -n $TPA ]] && break
+  sleep 5
+done
+check "Keycloak'tan müşteri, partner ve personel token'ı alınabiliyor" "3" \
+  "$( (( ${#TW} > 100 )) && (( ${#TPA} > 100 )) && (( ${#TS} > 100 )) && echo 3 || echo "web=${#TW} partner=${#TPA} personel=${#TS}")"
 
 log "1) İnternet -> edge -> web gateway -> web-bff -> DMZ egress -> cluster-a -> waypoint -> api-a"
 check "HTTPS ile api-a'ya ulaşılıyor" '"message": "api-a @ cluster-a"' "$(edge www /)"
@@ -73,8 +120,8 @@ DMZ_IP="$(detect_net_prefix).$(lb_octet dmz).10"
 check "Sertifikasız HTTPS reddediliyor" "000" \
   "$(dmz_probe --cacert /c/ca.pem --resolve www.$H:443:$DMZ_IP https://www.$H/)"
 check "Düz HTTP (80) kapalı" "000" "$(dmz_probe -H "'Host: www.$H'" http://$DMZ_IP/)"
-check "WAF istemci sertifikasıyla kabul ediliyor" "200" \
-  "$(dmz_probe --cacert /c/ca.pem --cert /c/waf-client.crt --key /c/waf-client.key --resolve www.$H:443:$DMZ_IP https://www.$H/)"
+check "WAF istemci sertifikasıyla kabul ediliyor (token ile 200)" "200" \
+  "$(dmz_probe --cacert /c/ca.pem --cert /c/waf-client.crt --key /c/waf-client.key -H "'Authorization: Bearer $TW'" --resolve www.$H:443:$DMZ_IP https://www.$H/)"
 
 log "Zone geçişi: tek kapı"
 apply_rendered "$(ctx dmz)" "$ROOT_DIR/tests/zone-direct-path.yaml" >/dev/null
@@ -96,14 +143,16 @@ else
 fi
 
 log "DMZ kanalları (web / mobile / partner)"
+refresh_tokens
 # Partner istekleri Linux curl'lü bir container'dan: Windows curl'ü (schannel) PEM istemci sertifikası kullanamıyor
-partner() {  # partner <sertifika adı|-> <curl argümanları>
-  local cert=""
+partner() {  # partner <sertifika adı|-> <curl argümanları>; token: PTOKEN (varsayılan acme), PTOKEN=- token'sız
+  local cert="" token=${PTOKEN:-$TPA} auth=""
   [[ $1 != - ]] && cert="--cert /p/$1.crt --key /p/$1.key"
+  [[ $token != - ]] && auth='-H "Authorization: Bearer $TOKEN"'
   shift
-  MSYS_NO_PATHCONV=1 docker run --rm --network "$EDGE_NETWORK" -v "$ROOT_DIR/certs/partner:/p:ro" \
+  MSYS_NO_PATHCONV=1 docker run --rm --network "$EDGE_NETWORK" -e TOKEN="$token" -v "$ROOT_DIR/certs/partner:/p:ro" \
     -v "$ROOT_DIR/certs/edge/ca.pem:/ca.pem:ro" "$LOADGEN_IMAGE" sh -c \
-    "curl -s --max-time 10 --cacert /ca.pem $cert --resolve $PARTNER_HOST:8443:\$(getent hosts edge-lb | cut -d' ' -f1) $*" \
+    "curl -s --max-time 10 --cacert /ca.pem $cert $auth --resolve $PARTNER_HOST:8443:\$(getent hosts edge-lb | cut -d' ' -f1) $*" \
     2>/dev/null || true
 }
 mobile() { local path=$1; shift; edge mobile-api "$path" "$@"; }
@@ -144,12 +193,13 @@ check "Partner: sertifikasız bağlantı edge'de reddediliyor" "000" \
 check "Partner: SNI başka host, Host partner (domain fronting) 403" "403" \
   "$(edge www /partner/v1/ -H "Host: $PARTNER_HOST" -o /dev/null -w '%{http_code}')"
 limited=$(partner acme "-o /dev/null -D - https://$PARTNER_HOST:8443/partner/v1/ & \
-  $(printf 'curl -s --cacert /ca.pem --cert /p/acme.crt --key /p/acme.key --resolve %s:8443:$(getent hosts edge-lb | cut -d" " -f1) -o /dev/null -D - https://%s:8443/partner/v1/ & ' \
+  $(printf 'curl -s --cacert /ca.pem --cert /p/acme.crt --key /p/acme.key -H "Authorization: Bearer $TOKEN" --resolve %s:8443:$(getent hosts edge-lb | cut -d" " -f1) -o /dev/null -D - https://%s:8443/partner/v1/ & ' \
      $(for i in $(seq 29); do echo "$PARTNER_HOST $PARTNER_HOST"; done)) wait" | grep -ci '^x-ratelimit-scope: partner')
 check "Partner: kanal kotası aşılınca 429 (gateway, x-ratelimit-scope: partner)" "yes" \
   "$([[ ${limited:-0} -gt 0 ]] && echo yes || echo "no (429 sayısı: ${limited:-0})")"
 
 log "Şube kanalı (şube WAN'ı -> iç firewall -> branch-gateway)"
+refresh_tokens
 branch() {  # branch <sertifika: device|partner|-> <curl argümanları>; şube ağındaki bir container'dan
   local cert=""
   case $1 in
@@ -157,9 +207,11 @@ branch() {  # branch <sertifika: device|partner|-> <curl argümanları>; şube a
     partner) cert="--cert /p/acme.crt --key /p/acme.key" ;;
   esac
   shift
-  MSYS_NO_PATHCONV=1 docker run --rm --network "$BRANCH_NETWORK" -v "$ROOT_DIR/certs/branch:/b:ro" \
+  local token=${BTOKEN:-$TS} auth=""
+  [[ $token != - ]] && auth='-H "Authorization: Bearer $TOKEN"'
+  MSYS_NO_PATHCONV=1 docker run --rm --network "$BRANCH_NETWORK" -e TOKEN="$token" -v "$ROOT_DIR/certs/branch:/b:ro" \
     -v "$ROOT_DIR/certs/partner:/p:ro" "$LOADGEN_IMAGE" sh -c \
-    "curl -s --max-time 8 --cacert /b/ca.pem $cert --resolve $BRANCH_HOST:443:\$(getent hosts branch-fw | cut -d' ' -f1) $*" \
+    "curl -s --max-time 8 --cacert /b/ca.pem $cert $auth --resolve $BRANCH_HOST:443:\$(getent hosts branch-fw | cut -d' ' -f1) $*" \
     2>/dev/null || true
 }
 bh=$(branch device "https://$BRANCH_HOST/branch/v1/headers -H 'x-channel: web' -H 'x-branch-device: sahte'")
@@ -212,9 +264,9 @@ log "Pod Security: gateway ve DMZ kanal namespace'leri restricted"
 for c in $CLUSTERS; do
   nss="istio-ingress istio-egress"
   [[ $c == dmz ]] && nss="$nss istio-mobile istio-partner istio-branch web-bff"
-  [[ $c == dmz ]] && nss="$nss ratelimit"
+  [[ $c == dmz ]] && nss="$nss ratelimit auth"
   [[ $c == cluster-a ]] && nss="$nss account-api"
-  [[ $c == mgmt ]] && nss="$nss data"
+  [[ $c == mgmt ]] && nss="$nss data iam"
   for ns in $nss; do
     warn=$(kubectl --context "$(ctx "$c")" label ns "$ns" pod-security.kubernetes.io/enforce=restricted \
       --overwrite --dry-run=server 2>&1 | grep -c Warning || true)
@@ -256,6 +308,7 @@ check "mgmt girişine mesh sertifikası olmadan erişilemiyor" "000" \
      --resolve "$METRICS_HOST:443:$(detect_net_prefix).$(lb_octet mgmt).10" "https://$METRICS_HOST/api/v1/write" 2>/dev/null || true)"
 
 log "8) Veri katmanı (mgmt: PostgreSQL, Valkey; mesh üzerinden)"
+refresh_tokens
 pg() {  # pg <kullanıcı> <parola dosyası> <sql>: mgmt'teki postgres pod'unda, verilen kullanıcıyla
   kubectl --context "$(ctx mgmt)" -n data exec postgres-0 -- env PGPASSWORD="$(cat "$ROOT_DIR/certs/data/$2.pw")" \
     psql -h 127.0.0.1 -U "$1" -d "$POSTGRES_DB" -tAc "$3" 2>&1 || true
@@ -291,8 +344,8 @@ check "Valkey: ratelimit kullanıcısı api-a anahtarlarını okuyamıyor (ACL)"
   "$(vk ratelimit valkey-ratelimit GET cache:api-a:verify)"
 check "Valkey: kimliksiz (default) kullanıcı kapalı" "NOAUTH" "$(vk - - PING)"
 
-limited=$(partner initech "-o /dev/null -D - https://$PARTNER_HOST:8443/partner/v1/accounts & \
-  $(printf 'curl -s --cacert /ca.pem --cert /p/initech.crt --key /p/initech.key --resolve %s:8443:$(getent hosts edge-lb | cut -d" " -f1) -o /dev/null -D - https://%s:8443/partner/v1/accounts & ' \
+limited=$(PTOKEN=$TPI partner initech "-o /dev/null -D - https://$PARTNER_HOST:8443/partner/v1/accounts & \
+  $(printf 'curl -s --cacert /ca.pem --cert /p/initech.crt --key /p/initech.key -H "Authorization: Bearer $TOKEN" --resolve %s:8443:$(getent hosts edge-lb | cut -d" " -f1) -o /dev/null -D - https://%s:8443/partner/v1/accounts & ' \
      $(for i in $(seq 9); do echo "$PARTNER_HOST $PARTNER_HOST"; done)) wait" | grep -ci '^x-envoy-ratelimited: true')
 check "Global kota: initech (5/dk) aşınca 429 (ratelimit servisi, sayaç mgmt Valkey'de)" "yes" \
   "$([[ ${limited:-0} -gt 0 ]] && echo yes || echo "no (429 sayısı: ${limited:-0})")"
@@ -310,6 +363,51 @@ check "DMZ egress'te PostgreSQL çıkışı tanımlı değil (yalnızca Valkey 1
 check "PostgreSQL ve Valkey imzalı image'larla (digest)" "2" \
   "$(kubectl --context "$(ctx mgmt)" -n data get pods -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}' \
      | grep -c "^$LAB_REGISTRY/lab/.*@sha256:" || true)"
+
+log "9) Kimlik: token doğrulama ve iç JWT (token exchange)"
+refresh_tokens
+check "Token'sız istek reddediliyor: web (401)" "401" "$(NOAUTH=1 edge www / -o /dev/null -w '%{http_code}')"
+check "Token'sız istek reddediliyor: mobil (401)" "401" "$(NOAUTH=1 mobile /mobile/v1/accounts -o /dev/null -w '%{http_code}')"
+check "Token'sız istek reddediliyor: partner (401)" "401" \
+  "$(PTOKEN=- partner acme "-o /dev/null -w '%{http_code}' https://$PARTNER_HOST:8443/partner/v1/")"
+check "Token'sız istek reddediliyor: şube (401)" "401" \
+  "$(BTOKEN=- branch device "-o /dev/null -w '%{http_code}' https://$BRANCH_HOST/branch/v1/")"
+# Gerçek token'ın gövdesinde yalnızca sub değiştirilir (iss, azp, exp aynı); imza artık tutmaz
+tampered="$(echo "$TM" | cut -d. -f1).$(jwt_payload "$TM" | sed 's/"sub":"[^"]*"/"sub":"saldirgan"/' | base64 -w0 | tr '+/' '-_' | tr -d '=').$(echo "$TM" | cut -d. -f3)"
+check "Değiştirilmiş token (imza tutmuyor) reddediliyor (401)" "401" \
+  "$(NOAUTH=1 mobile /mobile/v1/accounts -H "Authorization: Bearer $tampered" -o /dev/null -w '%{http_code}')"
+check "Başka client'ın token'ı (mobil token'ı web kanalında) reddediliyor (403)" "403" \
+  "$(NOAUTH=1 edge www / -H "Authorization: Bearer $TM" -o /dev/null -w '%{http_code}')"
+check "Müşteri token'ı şube kanalında reddediliyor (403)" "403" \
+  "$(BTOKEN=$TM branch device "-o /dev/null -w '%{http_code}' https://$BRANCH_HOST/branch/v1/accounts")"
+check "Partner token'ı başka partner'ın sertifikasıyla reddediliyor (acme token + initech sertifikası, 403)" "403" \
+  "$(partner initech "-o /dev/null -w '%{http_code}' https://$PARTNER_HOST:8443/partner/v1/accounts")"
+check "Personel token'ı + cihaz sertifikası: hesaplar (200)" "200" \
+  "$(branch device "-o /dev/null -w '%{http_code}' https://$BRANCH_HOST/branch/v1/accounts")"
+
+hdrs=$(edge www /headers)
+check "İç servise x-user-jwt ulaşıyor" '"X-User-Jwt"' "$hdrs"
+check "Dış access token (Authorization) içeri girmiyor" "yok" "$(echo "$hdrs" | grep -qi '"Authorization"' && echo var || echo yok)"
+ij=$(echo "$hdrs" | grep -A1 '"X-User-Jwt"' | tail -1 | tr -d ' "')
+claims=$(jwt_payload "$ij")
+check "İç JWT: issuer DMZ'nin (auth.dmz.corp.mesh)" '"iss":"auth.dmz.corp.mesh"' "$claims"
+check "İç JWT: audience internal-apis, kanal web, rol customer" '"aud":"internal-apis"' "$claims"
+check "İç JWT: kanal ve rol taşınıyor" '"channel":"web"' "$claims"
+ttl=$(echo "$claims" | sed -n 's/.*"exp":\([0-9]*\).*/\1/p'); iat=$(echo "$claims" | sed -n 's/.*"iat":\([0-9]*\).*/\1/p')
+check "İç JWT: ömür en fazla 5 dk" "yes" "$([[ -n $ttl && -n $iat && $((ttl - iat)) -le 300 ]] && echo yes || echo "no (${ttl:-?}-${iat:-?})")"
+pclaims=$(jwt_payload "$(partner acme "https://$PARTNER_HOST:8443/partner/v1/headers" | grep -A1 '"X-User-Jwt"' | tail -1 | tr -d ' "')")
+check "İç JWT (partner): partner_id sertifikadan" '"partner_id":"acme"' "$pclaims"
+bclaims=$(jwt_payload "$(branch device "https://$BRANCH_HOST/branch/v1/headers" | grep -A1 '"X-User-Jwt"' | tail -1 | tr -d ' "')")
+check "İç JWT (şube): cihaz ve rol" '"branch_device":"sube-0001"' "$bclaims"
+check "account-api isteği kullanıcıyla logluyor (sub, kanal)" 'channel="mobile"' \
+  "$(mobile /mobile/v1/accounts -o /dev/null; kubectl --context "$(ctx cluster-a)" -n account-api logs deploy/account-api --tail=20 2>/dev/null)"
+
+check "Keycloak yönetim konsolu internetten kapalı (/admin, 403)" "403" \
+  "$(NOAUTH=1 edge sso /admin/ -o /dev/null -w '%{http_code}')"
+check "Keycloak master realm'i internetten kapalı (403)" "403" \
+  "$(NOAUTH=1 edge sso /realms/master/protocol/openid-connect/certs -o /dev/null -w '%{http_code}')"
+check "İç JWT imza anahtarı yalnızca DMZ'de" "dmz" \
+  "$(for c in $CLUSTERS; do kubectl --context "$(ctx "$c")" get secret -A --field-selector metadata.name=auth-signing-key -o name 2>/dev/null | grep -q . && echo -n "$c "; done | xargs)"
 
 log "7) Politika (Kyverno, admission)"
 for c in $CLUSTERS; do

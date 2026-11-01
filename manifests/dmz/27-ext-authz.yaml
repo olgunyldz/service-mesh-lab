@@ -1,0 +1,90 @@
+# Kanal gateway'lerinde harici yetkilendirme (08 · token-exchange). Her istek önce auth-service'e sorulur
+# (sağlayıcılar: istio/values/istiod-dmz.yaml). İzin verilirse x-user-jwt eklenir; Authorization VirtualService'te silinir.
+# CUSTOM politikalar ALLOW/DENY'den önce değerlendirilir; kanal AuthZ'leri (yol, izin listesi) ayrıca uygulanır.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: ext-authz
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: dmz-ingressgateway
+  action: CUSTOM
+  provider:
+    name: auth-web
+  rules:
+    - to:
+        - operation:
+            hosts: ["www.apps.example.local", "www.apps.example.local:*"]
+            notPaths: ["/healthz"]   # edge'in hazırlık kontrolü (BFF'in kendi sağlık ucu, internal'a gitmez)
+            notMethods: ["OPTIONS"]  # CORS preflight token taşımaz; CORS filtresi yanıtlar, internal'a giderse JWT'siz reddedilir
+---
+# SSO host'unda yönetim uçları DMZ'de de kapalı (mgmt'te ayrıca kapalı: derinlemesine savunma)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: sso-deny-admin
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: dmz-ingressgateway
+  action: DENY
+  rules:
+    - to:
+        - operation:
+            hosts: ["sso.apps.example.local", "sso.apps.example.local:*"]
+            paths: ["/admin", "/admin/*", "/realms/master", "/realms/master/*"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: ext-authz
+  namespace: istio-mobile
+spec:
+  selector:
+    matchLabels:
+      istio: mobile-gateway
+  action: CUSTOM
+  provider:
+    name: auth-mobile
+  rules:
+    - to:
+        - operation:
+            hosts: ["mobile-api.apps.example.local", "mobile-api.apps.example.local:*"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: ext-authz
+  namespace: istio-partner
+spec:
+  selector:
+    matchLabels:
+      istio: partner-gateway
+  action: CUSTOM
+  provider:
+    name: auth-partner
+  rules:
+    - to:
+        - operation:
+            hosts: ["partner-api.apps.example.local", "partner-api.apps.example.local:*"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: ext-authz
+  namespace: istio-branch
+spec:
+  selector:
+    matchLabels:
+      istio: branch-gateway
+  action: CUSTOM
+  provider:
+    name: auth-branch
+  rules:
+    - to:
+        - operation:
+            hosts: ["branch-api.corp.internal", "branch-api.corp.internal:*"]
+            notPaths: ["/sso/*"]   # personel login'i (token henüz yok)
