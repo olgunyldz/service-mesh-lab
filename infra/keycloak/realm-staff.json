@@ -20,25 +20,48 @@
         "providerId": "rsa",
         "subComponents": {},
         "config": {
-          "priority": ["200"],
-          "enabled": ["true"],
-          "active": ["true"],
-          "algorithm": ["RS256"],
-          "privateKey": ["__IDP_PRIVATE_KEY__"],
-          "certificate": ["__IDP_CERTIFICATE__"]
+          "priority": [
+            "200"
+          ],
+          "enabled": [
+            "true"
+          ],
+          "active": [
+            "true"
+          ],
+          "algorithm": [
+            "RS256"
+          ],
+          "privateKey": [
+            "__IDP_PRIVATE_KEY__"
+          ],
+          "certificate": [
+            "__IDP_CERTIFICATE__"
+          ]
         }
       },
       {
         "name": "hmac-generated-hs512",
         "providerId": "hmac-generated",
         "subComponents": {},
-        "config": { "priority": ["100"], "algorithm": ["HS512"] }
+        "config": {
+          "priority": [
+            "100"
+          ],
+          "algorithm": [
+            "HS512"
+          ]
+        }
       },
       {
         "name": "aes-generated",
         "providerId": "aes-generated",
         "subComponents": {},
-        "config": { "priority": ["100"] }
+        "config": {
+          "priority": [
+            "100"
+          ]
+        }
       }
     ]
   },
@@ -65,7 +88,14 @@
     ]
   },
   "groups": [
-    { "name": "sube-0001", "attributes": { "branch_id": ["sube-0001"] } }
+    {
+      "name": "sube-0001",
+      "attributes": {
+        "branch_id": [
+          "sube-0001"
+        ]
+      }
+    }
   ],
   "clients": [
     {
@@ -88,9 +118,23 @@
           "name": "aud-auth-branch",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-audience-mapper",
-          "config": { "included.client.audience": "auth-branch", "access.token.claim": "true", "id.token.claim": "false", "lightweight.claim": "true" }
+          "config": {
+            "included.client.audience": "auth-branch",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "lightweight.claim": "true"
+          }
         }
-      ]
+      ],
+      "defaultClientScopes": [
+        "basic",
+        "acr",
+        "roles",
+        "info:read",
+        "accounts:read",
+        "transfers:write"
+      ],
+      "optionalClientScopes": []
     },
     {
       "clientId": "auth-branch",
@@ -100,8 +144,15 @@
       "secret": "__AUTH_BRANCH_SECRET__",
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "defaultClientScopes": ["basic", "acr", "roles"],
-      "optionalClientScopes": [],
+      "defaultClientScopes": [
+        "basic",
+        "roles"
+      ],
+      "optionalClientScopes": [
+        "info:read",
+        "accounts:read",
+        "transfers:write"
+      ],
       "attributes": {
         "standard.token.exchange.enabled": "true",
         "access.token.lifespan": "120"
@@ -111,25 +162,47 @@
           "name": "aud-internal-apis",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-audience-mapper",
-          "config": { "included.client.audience": "internal-apis", "access.token.claim": "true", "id.token.claim": "false" }
+          "config": {
+            "included.client.audience": "internal-apis",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
         },
         {
           "name": "channel",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-hardcoded-claim-mapper",
-          "config": { "claim.name": "channel", "claim.value": "branch", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+          "config": {
+            "claim.name": "channel",
+            "claim.value": "branch",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
         },
         {
           "name": "roles",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-usermodel-realm-role-mapper",
-          "config": { "claim.name": "roles", "multivalued": "true", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+          "config": {
+            "claim.name": "roles",
+            "multivalued": "true",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
         },
         {
           "name": "branch_id",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-usermodel-attribute-mapper",
-          "config": { "user.attribute": "branch_id", "claim.name": "branch_id", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+          "config": {
+            "user.attribute": "branch_id",
+            "claim.name": "branch_id",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
         }
       ]
     },
@@ -139,7 +212,9 @@
       "publicClient": false,
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": false
+      "serviceAccountsEnabled": false,
+      "defaultClientScopes": [],
+      "optionalClientScopes": []
     }
   ],
   "users": [
@@ -159,11 +234,126 @@
       "realmRoles": [
         "teller"
       ],
-      "groups": ["/sube-0001"]
+      "groups": [
+        "/sube-0001"
+      ]
     }
   ],
   "scopeMappings": [
-    { "client": "branch-teller", "roles": ["teller", "operations"] },
-    { "client": "auth-branch", "roles": ["teller", "operations"] }
-  ]
+    {
+      "client": "branch-teller",
+      "roles": [
+        "teller",
+        "operations"
+      ]
+    },
+    {
+      "client": "auth-branch",
+      "roles": [
+        "teller",
+        "operations"
+      ]
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "basic",
+      "description": "sub (her token'da)",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "acr",
+      "description": "Doğrulama seviyesi (acr)",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "acr",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-acr-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "roles",
+      "description": "Realm rolleri (realm_access.roles)",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true",
+            "claim.name": "realm_access.roles",
+            "multivalued": "true",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "info:read",
+      "description": "Genel bilgi uçları (api-a)",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    },
+    {
+      "name": "accounts:read",
+      "description": "Hesap okuma",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    },
+    {
+      "name": "transfers:write",
+      "description": "Para transferi",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    }
+  ],
+  "defaultDefaultClientScopes": [
+    "basic",
+    "acr",
+    "roles"
+  ],
+  "defaultOptionalClientScopes": []
 }

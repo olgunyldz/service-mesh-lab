@@ -11,25 +11,48 @@
         "providerId": "rsa",
         "subComponents": {},
         "config": {
-          "priority": ["200"],
-          "enabled": ["true"],
-          "active": ["true"],
-          "algorithm": ["RS256"],
-          "privateKey": ["__IDP_PRIVATE_KEY__"],
-          "certificate": ["__IDP_CERTIFICATE__"]
+          "priority": [
+            "200"
+          ],
+          "enabled": [
+            "true"
+          ],
+          "active": [
+            "true"
+          ],
+          "algorithm": [
+            "RS256"
+          ],
+          "privateKey": [
+            "__IDP_PRIVATE_KEY__"
+          ],
+          "certificate": [
+            "__IDP_CERTIFICATE__"
+          ]
         }
       },
       {
         "name": "hmac-generated-hs512",
         "providerId": "hmac-generated",
         "subComponents": {},
-        "config": { "priority": ["100"], "algorithm": ["HS512"] }
+        "config": {
+          "priority": [
+            "100"
+          ],
+          "algorithm": [
+            "HS512"
+          ]
+        }
       },
       {
         "name": "aes-generated",
         "providerId": "aes-generated",
         "subComponents": {},
-        "config": { "priority": ["100"] }
+        "config": {
+          "priority": [
+            "100"
+          ]
+        }
       }
     ]
   },
@@ -42,8 +65,22 @@
     ]
   },
   "groups": [
-    { "name": "partner-acme", "attributes": { "partner_id": ["acme"] } },
-    { "name": "partner-initech", "attributes": { "partner_id": ["initech"] } }
+    {
+      "name": "partner-acme",
+      "attributes": {
+        "partner_id": [
+          "acme"
+        ]
+      }
+    },
+    {
+      "name": "partner-initech",
+      "attributes": {
+        "partner_id": [
+          "initech"
+        ]
+      }
+    }
   ],
   "clients": [
     {
@@ -56,15 +93,30 @@
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "consentRequired": false,
-      "attributes": { "client.use.lightweight.access.token.enabled": "true" },
+      "attributes": {
+        "client.use.lightweight.access.token.enabled": "true"
+      },
       "protocolMappers": [
         {
           "name": "aud-auth-partner",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-audience-mapper",
-          "config": { "included.client.audience": "auth-partner", "access.token.claim": "true", "id.token.claim": "false", "lightweight.claim": "true" }
+          "config": {
+            "included.client.audience": "auth-partner",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "lightweight.claim": "true"
+          }
         }
-      ]
+      ],
+      "defaultClientScopes": [
+        "basic",
+        "acr",
+        "roles",
+        "info:read",
+        "accounts:read"
+      ],
+      "optionalClientScopes": []
     },
     {
       "clientId": "initech",
@@ -76,15 +128,30 @@
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "consentRequired": false,
-      "attributes": { "client.use.lightweight.access.token.enabled": "true" },
+      "attributes": {
+        "client.use.lightweight.access.token.enabled": "true"
+      },
       "protocolMappers": [
         {
           "name": "aud-auth-partner",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-audience-mapper",
-          "config": { "included.client.audience": "auth-partner", "access.token.claim": "true", "id.token.claim": "false", "lightweight.claim": "true" }
+          "config": {
+            "included.client.audience": "auth-partner",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "lightweight.claim": "true"
+          }
         }
-      ]
+      ],
+      "defaultClientScopes": [
+        "basic",
+        "acr",
+        "roles",
+        "info:read",
+        "products:read"
+      ],
+      "optionalClientScopes": []
     },
     {
       "clientId": "auth-partner",
@@ -94,8 +161,15 @@
       "secret": "__AUTH_PARTNER_SECRET__",
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "defaultClientScopes": ["basic", "acr", "roles"],
-      "optionalClientScopes": [],
+      "defaultClientScopes": [
+        "basic",
+        "roles"
+      ],
+      "optionalClientScopes": [
+        "info:read",
+        "accounts:read",
+        "products:read"
+      ],
       "attributes": {
         "standard.token.exchange.enabled": "true",
         "access.token.lifespan": "120"
@@ -105,25 +179,47 @@
           "name": "aud-internal-apis",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-audience-mapper",
-          "config": { "included.client.audience": "internal-apis", "access.token.claim": "true", "id.token.claim": "false" }
+          "config": {
+            "included.client.audience": "internal-apis",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
         },
         {
           "name": "channel",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-hardcoded-claim-mapper",
-          "config": { "claim.name": "channel", "claim.value": "partner", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+          "config": {
+            "claim.name": "channel",
+            "claim.value": "partner",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
         },
         {
           "name": "roles",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-usermodel-realm-role-mapper",
-          "config": { "claim.name": "roles", "multivalued": "true", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+          "config": {
+            "claim.name": "roles",
+            "multivalued": "true",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
         },
         {
           "name": "partner_id",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-usermodel-attribute-mapper",
-          "config": { "user.attribute": "partner_id", "claim.name": "partner_id", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+          "config": {
+            "user.attribute": "partner_id",
+            "claim.name": "partner_id",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
         }
       ]
     },
@@ -133,7 +229,9 @@
       "publicClient": false,
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": false
+      "serviceAccountsEnabled": false,
+      "defaultClientScopes": [],
+      "optionalClientScopes": []
     }
   ],
   "users": [
@@ -141,20 +239,144 @@
       "username": "service-account-acme",
       "enabled": true,
       "serviceAccountClientId": "acme",
-      "realmRoles": ["partner"],
-      "groups": ["/partner-acme"]
+      "realmRoles": [
+        "partner"
+      ],
+      "groups": [
+        "/partner-acme"
+      ]
     },
     {
       "username": "service-account-initech",
       "enabled": true,
       "serviceAccountClientId": "initech",
-      "realmRoles": ["partner"],
-      "groups": ["/partner-initech"]
+      "realmRoles": [
+        "partner"
+      ],
+      "groups": [
+        "/partner-initech"
+      ]
     }
   ],
   "scopeMappings": [
-    { "client": "acme", "roles": ["partner"] },
-    { "client": "initech", "roles": ["partner"] },
-    { "client": "auth-partner", "roles": ["partner"] }
-  ]
+    {
+      "client": "acme",
+      "roles": [
+        "partner"
+      ]
+    },
+    {
+      "client": "initech",
+      "roles": [
+        "partner"
+      ]
+    },
+    {
+      "client": "auth-partner",
+      "roles": [
+        "partner"
+      ]
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "basic",
+      "description": "sub (her token'da)",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "acr",
+      "description": "Doğrulama seviyesi (acr)",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "acr",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-acr-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "roles",
+      "description": "Realm rolleri (realm_access.roles)",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true",
+            "claim.name": "realm_access.roles",
+            "multivalued": "true",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "info:read",
+      "description": "Genel bilgi uçları (api-a)",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    },
+    {
+      "name": "accounts:read",
+      "description": "Hesap okuma",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    },
+    {
+      "name": "products:read",
+      "description": "Ürün kataloğu",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    }
+  ],
+  "defaultDefaultClientScopes": [
+    "basic",
+    "acr",
+    "roles"
+  ],
+  "defaultOptionalClientScopes": []
 }

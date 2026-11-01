@@ -64,6 +64,7 @@ for f in "$ROOT_DIR"/infra/keycloak/realm-*.json; do
       -e "s|__AUTH_PARTNER_SECRET__|$(pw kc-auth-partner)|g" \
       -e "s|__AUTH_BRANCH_SECRET__|$(pw kc-auth-branch)|g" \
       -e "s|__CUSTOMER_PASSWORD__|$(pw kc-customer-ayse)|g" \
+      -e "s|__CUSTOMER_OTP_SECRET__|$(pw kc-customer-ayse-otp)|g" \
       -e "s|__STAFF_PASSWORD__|$(pw kc-staff-teller01)|g" \
       -e "s|__PARTNER_ACME_SECRET__|$(pw kc-partner-acme)|g" \
       -e "s|__PARTNER_INITECH_SECRET__|$(pw kc-partner-initech)|g" \

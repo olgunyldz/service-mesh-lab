@@ -2,7 +2,7 @@
 //
 //	/healthz          -> kendi sağlık kontrolü
 //	/bff/v1/dashboard -> api-a'nın birkaç ucunu paralel çağırıp web'e uygun tek yanıt üretir
-//	/accounts*        -> account-api'ye iletilir
+//	/accounts*        -> account-api'ye iletilir; transfer öncesi seviye 2 kontrolü (step-up ipucu, 09b)
 //	diğer her yol     -> api-a'ya iletilir (ters proxy)
 //
 // Önündeki zincir: tarayıcı -> edge -> DMZ web-token-handler (cookie -> iç JWT) -> DMZ egress -> int-ingressgw -> web-bff.
@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log"
@@ -19,6 +20,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -41,8 +43,10 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /bff/v1/dashboard", dashboard(client, upstream))
-	mux.Handle("/accounts", reverseProxy(accounts))
-	mux.Handle("/accounts/", reverseProxy(accounts))
+	accountsProxy := reverseProxy(accounts)
+	mux.Handle("POST /accounts/{id}/transfers", requireLevel("2", 5*time.Minute, accountsProxy))
+	mux.Handle("/accounts", accountsProxy)
+	mux.Handle("/accounts/", accountsProxy)
 	mux.Handle("/", reverseProxy(upstream))
 
 	srv := &http.Server{
@@ -55,6 +59,31 @@ func main() {
 	}
 	log.Printf("web-bff %s dinliyor: %s (api %s, hesaplar %s)", version, srv.Addr, upstream, accounts)
 	log.Fatal(srv.ListenAndServe())
+}
+
+// requireLevel: işlem için gereken doğrulama seviyesi (son maxAge içinde) yoksa istemciye step-up ipucu döner
+// (RFC 9470). Seviye, iç JWT'deki IdP imzalı loa_map claim'inden okunur (exchange acr'yi taşımıyor). Asıl karar
+// domain servisinde; burada yalnızca tarayıcının neyi yapacağını bilmesi için.
+func requireLevel(level string, maxAge time.Duration, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var c struct {
+			LoaMap string `json:"loa_map"`
+		}
+		if parts := strings.Split(r.Header.Get("x-user-jwt"), "."); len(parts) == 3 {
+			if b, err := base64.RawURLEncoding.DecodeString(parts[1]); err == nil {
+				json.Unmarshal(b, &c)
+			}
+		}
+		var m map[string]int64
+		json.Unmarshal([]byte(c.LoaMap), &m)
+		if t, ok := m[level]; !ok || time.Since(time.Unix(t, 0)) > maxAge {
+			w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_user_authentication", acr_values="`+level+`"`)
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "insufficient_user_authentication",
+				"acr_values": level, "step_up": "/auth/login?acr=" + level})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func reverseProxy(target *url.URL) *httputil.ReverseProxy {

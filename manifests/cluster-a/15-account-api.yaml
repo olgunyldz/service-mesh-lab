@@ -32,7 +32,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: api
-          image: lab-registry:5000/lab/account-api:0.3.0   # build + imza: 03b-publish-images.sh
+          image: lab-registry:5000/lab/account-api:0.4.0   # build + imza: 03b-publish-images.sh
           env:
             - name: PGHOST
               value: postgres.account-api.svc.cluster.local   # seçicisiz Service (55-data-exit.yaml)
@@ -156,8 +156,15 @@ spec:
             principals:
               - corp.mesh/ns/account-api/sa/account-api
 ---
-# L7 (waypoint'te): account-api servisine yalnızca internal ingress gateway ve web-bff, yalnızca okuma (GET), geçerli iç JWT ve
-# hesap okuyabilen bir rolle (müşteri, partner, gişe, operasyon). Ayrıntılı claim kuralları: 09 · l7-policies
+# L7 (waypoint'te, 09b · l7-policies): account-api'ye yalnızca internal ingress gateway ve web-bff, geçerli iç JWT ile.
+# Her kural ayrı bir izin (OR); her kuralda kimlik + JWT + işlem + claim koşulları birlikte (AND):
+#   1. hesap okuma        GET /accounts*                 scope accounts:read
+#   2. ürün kataloğu      GET /products                  scope products:read (partner yetkisi örneği)
+#   3. müşteri transferi  POST /accounts/{id}/transfers  scope transfers:write, kanal web/mobil; doğrulama seviyesi 2
+#                                                        (step-up) uygulamada: Keycloak exchange acr'yi taşımıyor, seviye
+#                                                        IdP imzalı loa_map claim'inde (JSON) ve waypoint onu okuyamıyor
+#   4. şube transferi     POST /accounts/{id}/transfers  scope transfers:write, kanal branch, rol gişe/operasyon
+# Partner için yazma kuralı yok. Hesabın kime ait olduğu (BOLA) uygulamada kontrol edilir.
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -183,5 +190,56 @@ spec:
             methods: ["GET"]
             paths: ["/accounts", "/accounts/*"]
       when:
+        - key: request.auth.claims[scope]
+          values: ["accounts:read"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
+              - corp.mesh/ns/channel-bff/sa/web-bff
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
+                                "https://sso.apps.example.local:8443/realms/partners/*",
+                                "https://sso.apps.example.local:8443/realms/staff/*"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/products"]
+      when:
+        - key: request.auth.claims[scope]
+          values: ["products:read"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
+              - corp.mesh/ns/channel-bff/sa/web-bff
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
+                                "https://sso.apps.example.local:8443/realms/partners/*",
+                                "https://sso.apps.example.local:8443/realms/staff/*"]
+      to:
+        - operation:
+            methods: ["POST"]
+            paths: ["/accounts/{*}/transfers"]
+      when:
+        - key: request.auth.claims[scope]
+          values: ["transfers:write"]
+        - key: request.auth.claims[channel]
+          values: ["web", "mobile"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
+              - corp.mesh/ns/channel-bff/sa/web-bff
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
+                                "https://sso.apps.example.local:8443/realms/partners/*",
+                                "https://sso.apps.example.local:8443/realms/staff/*"]
+      to:
+        - operation:
+            methods: ["POST"]
+            paths: ["/accounts/{*}/transfers"]
+      when:
+        - key: request.auth.claims[scope]
+          values: ["transfers:write"]
+        - key: request.auth.claims[channel]
+          values: ["branch"]
         - key: request.auth.claims[roles]
-          values: ["customer", "partner", "teller", "operations"]
+          values: ["teller", "operations"]

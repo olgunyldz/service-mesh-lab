@@ -39,6 +39,15 @@ type channelRule struct {
 	roles    []string // en az biri gerekli
 }
 
+// Partner kanalında yol + metot -> gereken scope (09b). Partner yalnızca sözleşmesindeki işlemleri yapabilir: scope'lar
+// Keycloak'ta client'ına atanır (acme: accounts:read, initech: products:read). Listede olmayan her şey reddedilir.
+// İlk eşleşen kural geçerli (daha özel önekler önce). Asıl karar internal waypoint'te de verilir.
+var partnerPaths = []struct{ method, prefix, scope string }{
+	{"GET", "/partner/v1/accounts", "accounts:read"},
+	{"GET", "/partner/v1/products", "products:read"},
+	{"GET", "/partner/v1/", "info:read"},
+}
+
 var rules = map[string]channelRule{
 	"web":     {realm: "customers", exchange: "auth-web", clients: []string{"web-app"}, roles: []string{"customer"}},
 	"mobile":  {realm: "customers", exchange: "auth-mobile", clients: []string{"mobile-app"}, roles: []string{"customer"}},
@@ -161,7 +170,7 @@ func (a *authz) authorize(r *http.Request, channel string) (string, string, erro
 	partnerID := r.Header.Get("x-partner-id")                    // edge, sertifika CN'inden yazar
 	device := subjectCN(r.Header.Get("x-forwarded-client-cert")) // branch-gateway, cihaz sertifikasından
 
-	ck := cacheKey(token, channel, partnerID, device)
+	ck := cacheKey(token, channel, partnerID, device, r.Method, partnerScope(r.Method, r.URL.Path))
 	a.mu.Lock()
 	if c, hit := a.cache[ck]; hit && time.Now().Before(c.exp) {
 		a.mu.Unlock()
@@ -177,7 +186,7 @@ func (a *authz) authorize(r *http.Request, channel string) (string, string, erro
 	a.inflight[ck] = f
 	a.mu.Unlock()
 
-	f.jwt, f.sub, f.err = a.resolve(rule, channel, token, partnerID, device, ck)
+	f.jwt, f.sub, f.err = a.resolve(rule, channel, token, partnerID, device, r.Method, r.URL.Path, ck)
 	a.mu.Lock()
 	delete(a.inflight, ck)
 	a.mu.Unlock()
@@ -186,7 +195,7 @@ func (a *authz) authorize(r *http.Request, channel string) (string, string, erro
 }
 
 // resolve: önbellekte olmayan token için introspection, kanal kuralları ve token exchange
-func (a *authz) resolve(rule channelRule, channel, token, partnerID, device, ck string) (string, string, error) {
+func (a *authz) resolve(rule channelRule, channel, token, partnerID, device, method, path, ck string) (string, string, error) {
 	// Ön kontrol (imzasız okuma, yalnızca reddetmek için): başka realm'in token'ı IdP'ye hiç gönderilmez
 	var unverified map[string]any
 	if decodeSegment(segment(token, 1), &unverified) != nil {
@@ -228,9 +237,16 @@ func (a *authz) resolve(rule channelRule, channel, token, partnerID, device, ck 
 	if len(intersect(realmRoles(claims), rule.roles)) == 0 {
 		return "", "", deny(http.StatusForbidden, "insufficient_role", fmt.Sprint(realmRoles(claims)))
 	}
+	scope, _ := claims["scope"].(string)
+	if channel == "partner" {
+		if need := partnerScope(method, path); need == "" || !slices.Contains(strings.Fields(scope), need) {
+			return "", "", deny(http.StatusForbidden, "insufficient_scope", fmt.Sprintf("%s %s gerekli=%q token=%q", method, path, need, scope))
+		}
+	}
 
-	// 3. Token exchange: iç JWT'yi Keycloak üretir ve imzalar
-	jwt, err := a.exchange(rule, token)
+	// 3. Token exchange: iç JWT'yi Keycloak üretir ve imzalar. Scope tam olarak dış token'ınki istenir:
+	// Keycloak exchange client'ının opsiyonel scope'larını, dış token'da olmasa da verebiliyor (09b bulgusu).
+	jwt, err := a.exchange(rule, token, scope)
 	if err != nil {
 		return "", "", err
 	}
@@ -240,6 +256,13 @@ func (a *authz) resolve(rule channelRule, channel, token, partnerID, device, ck 
 	}
 	if ch, _ := internal["channel"].(string); ch != channel {
 		return "", "", fmt.Errorf("iç JWT kanalı %q, beklenen %q", ch, channel)
+	}
+	// Derinlemesine savunma: iç JWT'nin scope'u dış token'ınkinin alt kümesi olmalı (yetki yükseltme yok)
+	is, _ := internal["scope"].(string)
+	for _, sc := range strings.Fields(is) {
+		if !slices.Contains(strings.Fields(scope), sc) {
+			return "", "", deny(http.StatusForbidden, "scope_escalation", fmt.Sprintf("iç=%q dış=%q", is, scope))
+		}
 	}
 	// Şube: cihaz sertifikası personelin şubesine ait olmalı (branch_id, IdP'deki grup attribute'u)
 	if channel == "branch" {
@@ -275,19 +298,23 @@ func (a *authz) introspect(rule channelRule, token string) (map[string]any, erro
 }
 
 // exchange: RFC 8693; dış access token -> iç JWT (aud=internal-apis)
-func (a *authz) exchange(rule channelRule, token string) (string, error) {
+func (a *authz) exchange(rule channelRule, token, scope string) (string, error) {
 	var out struct {
 		AccessToken string `json:"access_token"`
 		Error       string `json:"error"`
 		Description string `json:"error_description"`
 	}
-	status, err := a.post(rule, "/protocol/openid-connect/token", url.Values{
+	form := url.Values{
 		"grant_type":           {grantTokenExchange},
 		"subject_token":        {token},
 		"subject_token_type":   {tokenTypeAccess},
 		"requested_token_type": {tokenTypeAccess},
 		"audience":             {a.cfg.internalAud},
-	}, &out)
+	}
+	if scope != "" {
+		form.Set("scope", scope)
+	}
+	status, err := a.post(rule, "/protocol/openid-connect/token", form, &out)
 	switch {
 	case err != nil:
 		return "", err
@@ -331,6 +358,16 @@ func (a *authz) evictLoop() {
 }
 
 // --- yardımcılar ---
+
+// partnerScope: partner isteği için gereken scope; "" = izin yok
+func partnerScope(method, path string) string {
+	for _, p := range partnerPaths {
+		if method == p.method && strings.HasPrefix(path, p.prefix) {
+			return p.scope
+		}
+	}
+	return ""
+}
 
 func segment(jwt string, i int) string {
 	parts := strings.Split(jwt, ".")

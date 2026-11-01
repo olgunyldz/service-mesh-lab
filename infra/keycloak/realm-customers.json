@@ -20,25 +20,48 @@
         "providerId": "rsa",
         "subComponents": {},
         "config": {
-          "priority": ["200"],
-          "enabled": ["true"],
-          "active": ["true"],
-          "algorithm": ["RS256"],
-          "privateKey": ["__IDP_PRIVATE_KEY__"],
-          "certificate": ["__IDP_CERTIFICATE__"]
+          "priority": [
+            "200"
+          ],
+          "enabled": [
+            "true"
+          ],
+          "active": [
+            "true"
+          ],
+          "algorithm": [
+            "RS256"
+          ],
+          "privateKey": [
+            "__IDP_PRIVATE_KEY__"
+          ],
+          "certificate": [
+            "__IDP_CERTIFICATE__"
+          ]
         }
       },
       {
         "name": "hmac-generated-hs512",
         "providerId": "hmac-generated",
         "subComponents": {},
-        "config": { "priority": ["100"], "algorithm": ["HS512"] }
+        "config": {
+          "priority": [
+            "100"
+          ],
+          "algorithm": [
+            "HS512"
+          ]
+        }
       },
       {
         "name": "aes-generated",
         "providerId": "aes-generated",
         "subComponents": {},
-        "config": { "priority": ["100"] }
+        "config": {
+          "priority": [
+            "100"
+          ]
+        }
       }
     ]
   },
@@ -75,9 +98,23 @@
           "name": "aud-auth-web",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-audience-mapper",
-          "config": { "included.client.audience": "auth-web", "access.token.claim": "true", "id.token.claim": "false", "lightweight.claim": "true" }
+          "config": {
+            "included.client.audience": "auth-web",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "lightweight.claim": "true"
+          }
         }
-      ]
+      ],
+      "defaultClientScopes": [
+        "basic",
+        "acr",
+        "roles",
+        "info:read",
+        "accounts:read",
+        "transfers:write"
+      ],
+      "optionalClientScopes": []
     },
     {
       "clientId": "mobile-app",
@@ -99,9 +136,23 @@
           "name": "aud-auth-mobile",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-audience-mapper",
-          "config": { "included.client.audience": "auth-mobile", "access.token.claim": "true", "id.token.claim": "false", "lightweight.claim": "true" }
+          "config": {
+            "included.client.audience": "auth-mobile",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "lightweight.claim": "true"
+          }
         }
-      ]
+      ],
+      "defaultClientScopes": [
+        "basic",
+        "acr",
+        "roles",
+        "info:read",
+        "accounts:read",
+        "transfers:write"
+      ],
+      "optionalClientScopes": []
     },
     {
       "clientId": "auth-web",
@@ -111,8 +162,15 @@
       "secret": "__AUTH_WEB_SECRET__",
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "defaultClientScopes": ["basic", "acr", "roles"],
-      "optionalClientScopes": [],
+      "defaultClientScopes": [
+        "basic",
+        "roles"
+      ],
+      "optionalClientScopes": [
+        "info:read",
+        "accounts:read",
+        "transfers:write"
+      ],
       "attributes": {
         "standard.token.exchange.enabled": "true",
         "access.token.lifespan": "120"
@@ -122,19 +180,48 @@
           "name": "aud-internal-apis",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-audience-mapper",
-          "config": { "included.client.audience": "internal-apis", "access.token.claim": "true", "id.token.claim": "false" }
+          "config": {
+            "included.client.audience": "internal-apis",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
         },
         {
           "name": "channel",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-hardcoded-claim-mapper",
-          "config": { "claim.name": "channel", "claim.value": "web", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+          "config": {
+            "claim.name": "channel",
+            "claim.value": "web",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
         },
         {
           "name": "roles",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-usermodel-realm-role-mapper",
-          "config": { "claim.name": "roles", "multivalued": "true", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+          "config": {
+            "claim.name": "roles",
+            "multivalued": "true",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "loa_map",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "config": {
+            "user.session.note": "loa-map",
+            "claim.name": "loa_map",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
         }
       ]
     },
@@ -146,8 +233,15 @@
       "secret": "__AUTH_MOBILE_SECRET__",
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "defaultClientScopes": ["basic", "acr", "roles"],
-      "optionalClientScopes": [],
+      "defaultClientScopes": [
+        "basic",
+        "roles"
+      ],
+      "optionalClientScopes": [
+        "info:read",
+        "accounts:read",
+        "transfers:write"
+      ],
       "attributes": {
         "standard.token.exchange.enabled": "true",
         "access.token.lifespan": "120"
@@ -157,19 +251,48 @@
           "name": "aud-internal-apis",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-audience-mapper",
-          "config": { "included.client.audience": "internal-apis", "access.token.claim": "true", "id.token.claim": "false" }
+          "config": {
+            "included.client.audience": "internal-apis",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
         },
         {
           "name": "channel",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-hardcoded-claim-mapper",
-          "config": { "claim.name": "channel", "claim.value": "mobile", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+          "config": {
+            "claim.name": "channel",
+            "claim.value": "mobile",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
         },
         {
           "name": "roles",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-usermodel-realm-role-mapper",
-          "config": { "claim.name": "roles", "multivalued": "true", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+          "config": {
+            "claim.name": "roles",
+            "multivalued": "true",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "loa_map",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "config": {
+            "user.session.note": "loa-map",
+            "claim.name": "loa_map",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
         }
       ]
     },
@@ -180,7 +303,9 @@
       "publicClient": false,
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": false
+      "serviceAccountsEnabled": false,
+      "defaultClientScopes": [],
+      "optionalClientScopes": []
     }
   ],
   "users": [
@@ -196,17 +321,290 @@
           "type": "password",
           "value": "__CUSTOMER_PASSWORD__",
           "temporary": false
+        },
+        {
+          "type": "otp",
+          "userLabel": "lab",
+          "secretData": "{\"value\": \"__CUSTOMER_OTP_SECRET__\"}",
+          "credentialData": "{\"subType\": \"totp\", \"digits\": 6, \"counter\": 0, \"period\": 30, \"algorithm\": \"HmacSHA1\"}"
         }
       ],
       "realmRoles": [
         "customer"
-      ]
+      ],
+      "id": "a75e0000-0000-4000-8000-000000000001"
     }
   ],
   "scopeMappings": [
-    { "client": "web-app", "roles": ["customer"] },
-    { "client": "mobile-app", "roles": ["customer"] },
-    { "client": "auth-web", "roles": ["customer"] },
-    { "client": "auth-mobile", "roles": ["customer"] }
+    {
+      "client": "web-app",
+      "roles": [
+        "customer"
+      ]
+    },
+    {
+      "client": "mobile-app",
+      "roles": [
+        "customer"
+      ]
+    },
+    {
+      "client": "auth-web",
+      "roles": [
+        "customer"
+      ]
+    },
+    {
+      "client": "auth-mobile",
+      "roles": [
+        "customer"
+      ]
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "basic",
+      "description": "sub (her token'da)",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "acr",
+      "description": "Doğrulama seviyesi (acr)",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "acr",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-acr-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "roles",
+      "description": "Realm rolleri (realm_access.roles)",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true",
+            "claim.name": "realm_access.roles",
+            "multivalued": "true",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "info:read",
+      "description": "Genel bilgi uçları (api-a)",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    },
+    {
+      "name": "accounts:read",
+      "description": "Hesap okuma",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    },
+    {
+      "name": "transfers:write",
+      "description": "Para transferi",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    }
+  ],
+  "defaultDefaultClientScopes": [
+    "basic",
+    "acr",
+    "roles"
+  ],
+  "defaultOptionalClientScopes": [],
+  "attributes": {
+    "acr.loa.map": "{\"1\": 1, \"2\": 2}"
+  },
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "otpPolicyLookAheadWindow": 1,
+  "browserFlow": "browser-loa",
+  "directGrantFlow": "direct-grant-lab",
+  "authenticationFlows": [
+    {
+      "alias": "browser-loa",
+      "description": "Tarayıcı girişi: seviye 1 parola, seviye 2 parola + OTP (acr_values ile step-up)",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-cookie",
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "authenticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "authenticatorFlow": true,
+          "flowAlias": "browser-loa-forms",
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "browser-loa-forms",
+      "description": "Seviye alt akışları",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "requirement": "CONDITIONAL",
+          "priority": 10,
+          "authenticatorFlow": true,
+          "flowAlias": "loa-1-password",
+          "userSetupAllowed": false
+        },
+        {
+          "requirement": "CONDITIONAL",
+          "priority": 20,
+          "authenticatorFlow": true,
+          "flowAlias": "loa-2-otp",
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "loa-1-password",
+      "description": "acr=1: kullanıcı adı + parola",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-level-of-authentication",
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "authenticatorFlow": false,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "loa-1"
+        },
+        {
+          "authenticator": "auth-username-password-form",
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "authenticatorFlow": false,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "loa-2-otp",
+      "description": "acr=2: OTP (en fazla 5 dk geçerli)",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-level-of-authentication",
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "authenticatorFlow": false,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "loa-2"
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "authenticatorFlow": false,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "direct-grant-lab",
+      "description": "Yalnızca lab testleri: OTP'siz direct grant (acr=1)",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "direct-grant-validate-username",
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "authenticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "direct-grant-validate-password",
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "authenticatorFlow": false,
+          "userSetupAllowed": false
+        }
+      ]
+    }
+  ],
+  "authenticatorConfig": [
+    {
+      "alias": "loa-1",
+      "config": {
+        "loa-condition-level": "1",
+        "loa-max-age": "36000"
+      }
+    },
+    {
+      "alias": "loa-2",
+      "config": {
+        "loa-condition-level": "2",
+        "loa-max-age": "300"
+      }
+    }
   ]
 }

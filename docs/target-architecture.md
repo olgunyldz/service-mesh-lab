@@ -940,13 +940,14 @@ Mimari, aşağıdaki testlerin hepsi pen-test ve DR tatbikatında geçtiğinde k
 
 ## Lab ile ilişki ve sapmalar
 
-Bu mimari, [service-mesh-lab](../README.md) deposunda kind üzerinde küçültülmüş olarak doğrulanır. Lab bilinçli olarak şu noktalarda hedeften sapar:
+Bu mimari, [service-mesh-lab](../README.md) deposunda kind üzerinde küçültülmüş olarak doğrulanır. Gereksinim bazında pilot durumu: [Pilot mimari](pilot-architecture.md). Lab bilinçli olarak şu noktalarda hedeften sapar:
 
 | Konu | Hedef | Lab'deki durum | Plan |
 | --- | --- | --- | --- |
 | Şube gateway yeri | Ayrı şube zone'u (`branch-gw-a/b`) | `branch-gateway` DMZ cluster'ında, ayrı namespace ve VIP ile (bellek bütçesi) | Sapma kalıcı; zone ayrımı firewall konteyneri (`branch-fw`) ve ayrı ağla temsil edilir |
 | Internal JWT'yi kim üretir | IdP (RFC 8693 token exchange, IAM-05) | ✅ Keycloak üretiyor (`09a`): auth-service introspection + token exchange yapıyor, DMZ'de imza anahtarı yok. Keycloak V2 exchange realm içinde çalıştığı için realm başına issuer (3 issuer) | – |
-| Internal JWT ömrü ve claim'ler | ≤ 2 dk; `acr`, `scope`, `device_id`, `sid` dahil | 2 dk; `sub`, `channel`, `acr`, `sid`, `roles`, `scope` (+ `partner_id`, `branch_id`); kişisel veri yok (`09a`). `scope` boş, `acr` tek seviye; `device_id` yok (istek anındaki cihazı IdP bilemiyor) | Scope'lar ve `acr` seviyeleri `09b`; `device_id` DPoP / cihaz bağlama adımında |
+| Internal JWT ömrü ve claim'ler | ≤ 2 dk; `acr`, `scope`, `device_id`, `sid` dahil | 2 dk; `sub`, `channel`, `sid`, `roles`, `scope` (client başına API scope'ları) (+ `partner_id`, `branch_id`); kişisel veri yok. **`acr` yerine `loa_map`** (IdP imzalı seviye → zaman): Keycloak token exchange `acr`'yi taşımıyor, bu yüzden seviye kontrolü waypoint'te değil serviste (`09b`). `device_id` yok (istek anındaki cihazı IdP bilemiyor) | `device_id` ve seviye 3 (işlem imzası) DPoP / cihaz bağlama adımında; IdP değişirse ya da Keycloak exchange `acr`'yi taşırsa kontrol waypoint'e alınır |
+| Partner kimlik doğrulaması | mTLS + `private_key_jwt` (FAPI 2.0, CH-10) | Client ID + client secret (kullanıcı kararı); token partner sertifikasına bağlı. Partner yetkisi client başına scope ile (sözleşmedeki işlemler) | Prod'da `private_key_jwt` |
 | BFF yeri | Internal `channel-bff` (INT-07, GW-09) | ✅ `web-bff` internal'da (`channel-bff`); DMZ'de `web-token-handler` (cookie oturumu, CSRF), tarayıcıda token yok (`09a`). Oturum deposu mgmt Valkey'de (hedefte kimlik zone'unda `redis-session`) | `mobile-bff`, `branch-bff` sonraki adımlarda |
 | Cluster sayısı ve node | Zone başına cluster, her DC'de, çok node | Tek node'lu kind cluster'ları: `dmz`, `cluster-a`, `mgmt`; `cluster-b` kapalı | `cluster-b` A/B adımında geri gelir; core, PCI ve veri ayrı cluster olarak temsil edilmez (veri `mgmt`'te) |
 | Edge | DDoS / CDN, GSLB, F5 + WAF | Docker konteynerinde HAProxy + ModSecurity (OWASP CRS) | Ürün davranışı temsil edilir, ürün değil |
@@ -956,6 +957,8 @@ Bu mimari, [service-mesh-lab](../README.md) deposunda kind üzerinde küçültü
 | Tarih | Değişiklik |
 | --- | --- |
 | Oct 31, 2026 | İlk sürüm |
+| Nov 1, 2026 (5) | Dosya adı standarda getirildi (`target-architecture.md`); gereksinim bazında pilot durumu ayrı dokümanda: [Pilot mimari](pilot-architecture.md) |
+| Nov 1, 2026 (4) | Lab sapmaları: iç JWT'de `acr` yerine `loa_map` (Keycloak exchange kısıtı, seviye kontrolü serviste); partner kimlik doğrulaması lab'de client secret, yetki client başına scope ile (`09b · l7-policies`) |
 | Nov 1, 2026 (3) | Yeni bölüm "Login ve servis akışları": mobil (cihaz bağlama, biyometrik giriş, step-up ve işlem imzalı transfer), web (sunucu tarafında OIDC + mobil push onayı, hesap hareketleri), şube (Kerberos/AD girişi, dört göz onayı), partner (FAPI 2.0 PAR + rıza, hesap sorgusu), ATM (nakit çekim, reversal, stand-in) ve POS (issuer yetkilendirme, on-us) için Mermaid sequence diyagramları |
 | Nov 1, 2026 (2) | Lab sapmaları güncellendi: iç JWT'yi IdP üretiyor (2 dk, `channel`/`acr`/`sid`), web-bff internal'da, web'de token handler (`09a · idp-token-exchange`) |
 | Nov 1, 2026 | Çizimlerle karşılaştırma sonrası güncelleme: core banking zone, dış çıkış zone ve ATM · POS ağı zone listesine eklendi; cluster listesi zone başına cluster olarak yazıldı (`ocp-dmz`, `ocp-apps`, `ocp-core`, `ocp-pci`, `ocp-data`, `ocp-mgmt`); topoloji tablosuna domain namespace'leri, core, veri (Oracle, MSSQL, RabbitMQ, nesne depolama) ve dış çıkış bileşenleri eklendi; görseller `zone-ozet.png` ve `topology-prod-full.png` ile değiştirildi; yeni CORE, DATA ve OUT bölümleri; INT-15, INT-16 ve NET-15..21 eklendi, NET-05, NET-11 ve yasak akışlar güncellendi; IAM-05'e internal JWT'yi IdP'nin ürettiği ve kanala özel claim'ler eklendi; varsayımlar ile lab sapmaları bölümleri eklendi |

@@ -34,7 +34,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: bff
-          image: lab-registry:5000/lab/web-bff:0.3.0   # build + imza: 03b-publish-images.sh
+          image: lab-registry:5000/lab/web-bff:0.4.0   # build + imza: 03b-publish-images.sh
           env:
             - name: API_URL
               value: http://api-a.api-a.svc.cluster.local

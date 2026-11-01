@@ -20,18 +20,22 @@ data:
       GRANT CONNECT ON DATABASE "$POSTGRES_DB" TO account_api;
 
       CREATE SCHEMA accounts;
+      -- Sahiplik (09b · l7-policies, nesne seviyesinde yetki / BOLA): owner_sub = müşterinin IdP sub'ı,
+      -- partner_id = hesabın bağlı olduğu partner (kurumsal hesap). account-api sorguları bunlarla süzer.
       CREATE TABLE accounts.accounts (
-        id       bigint PRIMARY KEY,
-        iban     text NOT NULL,
-        owner    text NOT NULL,
-        currency char(3) NOT NULL,
-        balance  numeric(18,2) NOT NULL
+        id         bigint PRIMARY KEY,
+        iban       text NOT NULL,
+        owner      text NOT NULL,
+        currency   char(3) NOT NULL,
+        balance    numeric(18,2) NOT NULL,
+        owner_sub  text,
+        partner_id text
       );
       INSERT INTO accounts.accounts VALUES
-        (1, 'TR330006100519786457841326', 'Ayşe Yılmaz',  'TRY', 125430.50),
-        (2, 'TR320010009999901234567890', 'Mehmet Demir', 'TRY',   8920.00),
-        (3, 'TR190006400000112345678901', 'Acme Ltd.',    'USD',  45000.75),
-        (4, 'TR560006200000000123456789', 'Zeynep Kaya',  'EUR',   3150.20);
+        (1, 'TR330006100519786457841326', 'Ayşe Yılmaz',  'TRY', 125430.50, 'a75e0000-0000-4000-8000-000000000001', NULL),
+        (2, 'TR320010009999901234567890', 'Mehmet Demir', 'TRY',   8920.00, 'e3e70000-0000-4000-8000-000000000002', NULL),
+        (3, 'TR190006400000112345678901', 'Acme Ltd.',    'USD',  45000.75, NULL, 'acme'),
+        (4, 'TR560006200000000123456789', 'Zeynep Kaya',  'EUR',   3150.20, 'f0e10000-0000-4000-8000-000000000004', NULL);
       GRANT USAGE ON SCHEMA accounts TO account_api;
       GRANT SELECT ON accounts.accounts TO account_api;
 

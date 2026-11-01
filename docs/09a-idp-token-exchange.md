@@ -7,7 +7,7 @@
 
 ## Amaç
 
-Kurumsal hedef mimari dokümanındaki üç kararı lab'e taşımak:
+[Kurumsal hedef mimari](target-architecture.md) dokümanındaki üç kararı lab'e taşımak:
 - **İç JWT'yi IdP üretir** (GW-03, IAM-05):
   - DMZ dış token'ı IdP'de introspect eder ve RFC 8693 token exchange ile iç JWT'yi Keycloak'tan alır.
   - DMZ'de imza anahtarı kalmaz.

@@ -48,9 +48,19 @@ staff_token() {  # personel: şube ağından, cihaz sertifikasıyla, şube gatew
        -d client_id=branch-teller -d username=teller01 --data-urlencode password=$(pwf kc-staff-teller01)" 2>/dev/null \
     | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
 }
+totp() {  # totp <gizli metin>: RFC 6238 (HMAC-SHA1, 30 sn, 6 hane). Keycloak'ın OTP gizi düz metin, anahtar baytları
+  local key c h o
+  key=$(printf %s "$1" | xxd -p | tr -d '\n')
+  c=$(printf '%016x' $(( $(date +%s) / 30 )))
+  h=$(printf %s "$c" | xxd -r -p | openssl dgst -sha1 -mac HMAC -macopt "hexkey:$key" | awk '{print $NF}')
+  o=$(( 0x${h:39:1} ))
+  printf '%06d' $(( (0x${h:$((o*2)):8} & 0x7fffffff) % 1000000 ))
+}
 web_login() {  # web: tarayıcı gibi giriş (Authorization Code + PKCE, tests/web-login.sh); WSID, WCSRF, WLOGIN
+  # STEPUP=1 web_login: ardından step-up (acr=2, OTP); oturum seviye 2 olur (09b)
   WLOGIN=$(MSYS_NO_PATHCONV=1 docker run --rm --network "$EDGE_NETWORK" -e WEB="$WEB_HOST" -e SSO="$SSO_HOST" \
-    -e PW="$(pwf kc-customer-ayse)" -v "$ROOT_DIR/certs/edge/ca.pem:/ca.pem:ro" -v "$ROOT_DIR/tests/web-login.sh:/w.sh:ro" \
+    -e PW="$(pwf kc-customer-ayse)" -e OTP="$(totp "$(pwf kc-customer-ayse-otp)")" -e STEPUP="${STEPUP:-}" \
+    -v "$ROOT_DIR/certs/edge/ca.pem:/ca.pem:ro" -v "$ROOT_DIR/tests/web-login.sh:/w.sh:ro" \
     --entrypoint sh "$LOADGEN_IMAGE" /w.sh 2>/dev/null || true)
   WSID=$(sed -n 's/^SID=//p' <<<"$WLOGIN"); WCSRF=$(sed -n 's/^CSRF=//p' <<<"$WLOGIN")
 }
@@ -62,6 +72,7 @@ refresh_tokens() {
   TPI=$(kc_token partners -d grant_type=client_credentials -d client_id=initech --data-urlencode "client_secret=$(pwf kc-partner-initech)")
   TS=$(staff_token)
 }
+build_ver() { echo "$LAB_BUILDS" | tr ' ' '\n' | sed -n "s/^$1://p"; }   # config.env'deki sürüm
 jwt_payload() {  # base64url JWT gövdesi -> JSON
   local p; p=$(echo "$1" | cut -d. -f2 | tr '_-' '/+')
   while (( ${#p} % 4 )); do p="$p="; done
@@ -186,9 +197,9 @@ check "Web: CORS izinli origin kabul" "access-control-allow-origin: https://www.
 check "Web: CORS yabancı origin'e izin yok" "yok" \
   "$(edge www /api/info -X OPTIONS -H 'Origin: https://evil.example.com' -H 'Access-Control-Request-Method: GET' -D - -o /dev/null \
      | grep -qi '^access-control-allow-origin' && echo var || echo yok)"
-check "Web: token handler (DMZ) imzalı image'ın digest'iyle çalışıyor" "$LAB_REGISTRY/lab/web-token-handler:0.1.0@sha256:" \
+check "Web: token handler (DMZ) imzalı image'ın digest'iyle çalışıyor" "$LAB_REGISTRY/lab/web-token-handler:$(build_ver web-token-handler)@sha256:" \
   "$(kubectl --context "$(ctx dmz)" -n edge-web get pod -l app=web-token-handler -o jsonpath='{.items[0].spec.containers[0].image}')"
-check "Web: web-bff internal'da (cluster-a/channel-bff), imzalı image" "$LAB_REGISTRY/lab/web-bff:0.3.0@sha256:" \
+check "Web: web-bff internal'da (cluster-a/channel-bff), imzalı image" "$LAB_REGISTRY/lab/web-bff:$(build_ver web-bff)@sha256:" \
   "$(kubectl --context "$(ctx cluster-a)" -n channel-bff get pod -l app=web-bff -o jsonpath='{.items[0].spec.containers[0].image}')"
 check "Web: DMZ'de BFF yok (web-bff namespace'i kaldırıldı)" "yok" \
   "$(kubectl --context "$(ctx dmz)" get ns web-bff >/dev/null 2>&1 && echo var || echo yok)"
@@ -344,12 +355,12 @@ vk() {  # vk <kullanıcı> <parola dosyası|-> <komut...>: mgmt'teki valkey pod'
 }
 
 check "Mobil: hesaplar PostgreSQL'den (account-api -> egress -> mgmt)" '"source":"postgresql"' "$(mobile /mobile/v1/accounts)"
-check "Web (token handler -> internal BFF): hesap sorgusu" '"owner":"Acme Ltd."' "$(edge www /api/accounts/3)"
+check "Web (token handler -> internal BFF): kendi hesabı" '"owner":"Ayşe Yılmaz"' "$(edge www /api/accounts/1)"
 check "Partner (acme): hesap sorgusu" '"owner":"Acme Ltd."' \
   "$(partner acme "https://$PARTNER_HOST:8443/partner/v1/accounts/3")"
 check "IBAN maskeli dönüyor (tam IBAN yanıtta yok)" "yok" \
-  "$(mobile /mobile/v1/accounts | grep -q TR190006400000112345678901 && echo var || echo yok)"
-check "account-api yalnızca okuma: POST reddediliyor (403, waypoint L7)" "403" \
+  "$(mobile /mobile/v1/accounts | grep -q TR330006100519786457841326 && echo var || echo yok)"
+check "account-api: tanımsız yazma (POST /accounts) reddediliyor (403, waypoint L7)" "403" \
   "$(mobile /mobile/v1/accounts -X POST -d '{}' -o /dev/null -w '%{http_code}')"
 
 check "PostgreSQL: account_api kendi tablosunu okuyabiliyor" "4" \
@@ -367,8 +378,9 @@ check "Valkey: ratelimit kullanıcısı api-a anahtarlarını okuyamıyor (ACL)"
   "$(vk ratelimit valkey-ratelimit GET cache:api-a:verify)"
 check "Valkey: kimliksiz (default) kullanıcı kapalı" "NOAUTH" "$(vk - - PING)"
 
-limited=$(PTOKEN=$TPI partner initech "-o /dev/null -D - https://$PARTNER_HOST:8443/partner/v1/accounts & \
-  $(printf 'curl -s --cacert /ca.pem --cert /p/initech.crt --key /p/initech.key -H "Authorization: Bearer $TOKEN" --resolve %s:8443:$(getent hosts edge-lb | cut -d" " -f1) -o /dev/null -D - https://%s:8443/partner/v1/accounts & ' \
+# initech'in yetkisi yalnızca ürün kataloğu (09b): kota testi /products üzerinden
+limited=$(PTOKEN=$TPI partner initech "-o /dev/null -D - https://$PARTNER_HOST:8443/partner/v1/products & \
+  $(printf 'curl -s --cacert /ca.pem --cert /p/initech.crt --key /p/initech.key -H "Authorization: Bearer $TOKEN" --resolve %s:8443:$(getent hosts edge-lb | cut -d" " -f1) -o /dev/null -D - https://%s:8443/partner/v1/products & ' \
      $(for i in $(seq 9); do echo "$PARTNER_HOST $PARTNER_HOST"; done)) wait" | grep -ci '^x-envoy-ratelimited: true' || true)
 check "Global kota: initech (5/dk) aşınca 429 (ratelimit servisi, sayaç mgmt Valkey'de)" "yes" \
   "$([[ ${limited:-0} -gt 0 ]] && echo yes || echo "no (429 sayısı: ${limited:-0})")"
@@ -424,7 +436,10 @@ claims=$(jwt_payload "$ij")
 check "İç JWT'yi Keycloak imzalıyor (iss = customers realm'i)" "\"iss\":\"$SSO_URL/realms/customers\"" "$claims"
 check "İç JWT: audience internal-apis" '"aud":"internal-apis"' "$claims"
 check "İç JWT: kanal web (exchange client'ının claim'i)" '"channel":"web"' "$claims"
-check "İç JWT: acr ve sid taşınıyor" "2" "$(grep -oE '"(acr|sid)":"[^"]+"' <<<"$claims" | wc -l | tr -d ' ')"
+check "İç JWT: sid ve doğrulama seviyeleri (loa_map, IdP imzalı) taşınıyor" "2" "$(grep -oE '"(loa_map|sid)":"' <<<"$claims" | wc -l | tr -d ' ')"
+check "İç JWT: acr yok (Keycloak exchange acr'yi taşımıyor; yanlış değer konmaz)" "yok" "$(grep -q '"acr"' <<<"$claims" && echo var || echo yok)"
+check "İç JWT: API scope'ları (accounts:read, transfers:write)" "yes" \
+  "$([[ $claims == *accounts:read* && $claims == *transfers:write* ]] && echo yes || echo "no: $claims")"
 ttl=$(echo "$claims" | sed -n 's/.*"exp":\([0-9]*\).*/\1/p'); iat=$(echo "$claims" | sed -n 's/.*"iat":\([0-9]*\).*/\1/p')
 check "İç JWT: ömür en fazla 2 dk" "yes" "$([[ -n $ttl && -n $iat && $((ttl - iat)) -le 120 ]] && echo yes || echo "no (${ttl:-?}-${iat:-?})")"
 check "İç JWT: kişisel veri yok (ad, e-posta)" "yok" \
@@ -470,6 +485,53 @@ check "Keycloak yönetim konsolu internetten kapalı (/admin, 403)" "403" \
   "$(NOAUTH=1 edge sso /admin/ -o /dev/null -w '%{http_code}')"
 check "Keycloak master realm'i internetten kapalı (403)" "403" \
   "$(NOAUTH=1 edge sso /realms/master/protocol/openid-connect/certs -o /dev/null -w '%{http_code}')"
+
+log "10) L7 yetki: scope, doğrulama seviyesi (step-up), nesne seviyesinde yetki, partner bazlı yetki"
+refresh_tokens
+TRX='{"to_iban":"TR320010009999901234567890","amount":"10.00"}'
+# Partner bazlı yetki: her partner yalnızca Keycloak'ta client'ına atanmış scope'larla (acme: accounts:read,
+# initech: products:read); kontrol DMZ'de (auth-service, yol <-> scope) ve internal'da (waypoint) tekrar
+pcode() { local t=$1 c=$2; shift 2; PTOKEN=$t partner "$c" "-o /dev/null -w '%{http_code}' $*"; }
+check "Partner (acme, accounts:read): kendi kurumsal hesabı (200)" "200" "$(pcode "$TPA" acme "https://$PARTNER_HOST:8443/partner/v1/accounts/3")"
+check "Partner (acme): başka müşterinin hesabı (404, BOLA)" "404" "$(pcode "$TPA" acme "https://$PARTNER_HOST:8443/partner/v1/accounts/1")"
+check "Partner (acme): yetkisi olmayan ürün kataloğu (403)" "403" "$(pcode "$TPA" acme "https://$PARTNER_HOST:8443/partner/v1/products")"
+check "Partner (acme): yazma (transfer) yok (403)" "403" \
+  "$(pcode "$TPA" acme "-X POST -H 'Content-Type: application/json' -d '{}' https://$PARTNER_HOST:8443/partner/v1/accounts/3/transfers")"
+check "Partner (initech, products:read): ürün kataloğu (200)" "200" "$(pcode "$TPI" initech "https://$PARTNER_HOST:8443/partner/v1/products")"
+check "Partner (initech): hesaplara yetkisi yok (403)" "403" "$(pcode "$TPI" initech "https://$PARTNER_HOST:8443/partner/v1/accounts")"
+check "Keycloak, partnere atanmamış scope'u vermiyor (initech -> accounts:read)" "invalid_scope" \
+  "$(kc_full partners -d grant_type=client_credentials -d client_id=initech -d scope=accounts:read --data-urlencode "client_secret=$(pwf kc-partner-initech)")"
+iclaims=$(jwt_payload "$(PTOKEN=$TPI partner initech "https://$PARTNER_HOST:8443/partner/v1/headers" | grep -A1 '"X-User-Jwt"' | tail -1 | tr -d ' "')")
+check "İç JWT (initech): yalnızca kendi scope'ları (accounts:read yok)" "yes" \
+  "$([[ $iclaims == *products:read* && $iclaims != *accounts:read* ]] && echo yes || echo "no: $iclaims")"
+check "Waypoint: scope'u olmayan çağrı reddediliyor (mobil token -> /products, 403)" "403" \
+  "$(mobile /mobile/v1/products -o /dev/null -w '%{http_code}')"
+
+# Nesne seviyesinde yetki (BOLA): müşteri yalnızca kendi hesapları (uygulamada, owner_sub = sub)
+check "BOLA: mobil hesap listesinde yalnızca kendi hesabı" "yok" \
+  "$(mobile /mobile/v1/accounts | grep -qE 'Mehmet|Acme|Zeynep' && echo var || echo yok)"
+check "BOLA: mobil, başka müşterinin hesabı (404)" "404" "$(mobile /mobile/v1/accounts/2 -o /dev/null -w '%{http_code}')"
+check "BOLA: web, başka müşterinin hesabı (404)" "404" "$(edge www /api/accounts/2 -o /dev/null -w '%{http_code}')"
+check "Şube personeli tüm hesapları görüyor (4 hesap, erişim loglanıyor)" "4" \
+  "$(branch device "https://$BRANCH_HOST/branch/v1/accounts" | grep -o '"id":[0-9]*' | wc -l | tr -d ' ')"
+
+# Doğrulama seviyesi ve step-up: transfer son 5 dk içinde seviye 2 (parola + OTP) ister
+check "Mobil (seviye 1) transfer: 401 insufficient_user_authentication" "insufficient_user_authentication" \
+  "$(mobile /mobile/v1/accounts/1/transfers -X POST -H 'Content-Type: application/json' -d "$TRX")"
+wresp=$(edge www /api/accounts/1/transfers -X POST -H 'Content-Type: application/json' -d "$TRX" -D -)
+check "Web (seviye 1) transfer: 401 + step-up ipucu (RFC 9470)" 'acr_values="2"' "$wresp"
+STEPUP=1 web_login
+check "Step-up: açık IdP oturumunda yalnızca OTP soruluyor" "otp " "$(sed -n 's/^STEPUP_STEPS=//p' <<<"$WLOGIN")"
+claims2=$(jwt_payload "$(edge www /api/headers | grep -A1 '"X-User-Jwt"' | tail -1 | tr -d ' "')")
+check "Step-up sonrası iç JWT'de seviye 2 (loa_map)" '\"2\":' "$claims2"
+check "Step-up sonrası web transfer kabul (202)" "202" \
+  "$(edge www /api/accounts/1/transfers -X POST -H 'Content-Type: application/json' -d "$TRX" -o /dev/null -w '%{http_code}')"
+check "Step-up sonrası bile başka müşterinin hesabından transfer (404, BOLA)" "404" \
+  "$(edge www /api/accounts/2/transfers -X POST -H 'Content-Type: application/json' -d "$TRX" -o /dev/null -w '%{http_code}')"
+check "Şube (gişe rolü) transfer kabul (202)" "202" \
+  "$(branch device "-o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '$TRX' https://$BRANCH_HOST/branch/v1/accounts/2/transfers")"
+check "account-api transferi kullanıcı ve seviyeyle logluyor" "TRANSFER kabul" \
+  "$(kubectl --context "$(ctx cluster-a)" -n account-api logs deploy/account-api --tail=30 2>/dev/null)"
 
 log "7) Politika (Kyverno, admission)"
 for c in $CLUSTERS; do

@@ -35,8 +35,8 @@ spec:
             principals:
               - corp.mesh/ns/api-a/sa/waypoint
 ---
-# L7 (waypoint'te): api-a servisine yalnızca internal ingress gateway ve web-bff (channel-bff), yalnızca GET/POST ile
-# ve geçerli iç JWT'yle
+# L7 (waypoint'te): api-a servisine yalnızca internal ingress gateway ve web-bff (channel-bff), GET/POST, geçerli iç JWT ile.
+# Kanal kuralı (09b): müşteri ve personel kanalları serbest; partner yalnızca info:read scope'u varsa (partner başına yetki).
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -60,6 +60,25 @@ spec:
       to:
         - operation:
             methods: ["GET", "POST"]
+      when:
+        - key: request.auth.claims[channel]
+          values: ["web", "mobile", "branch"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
+              - corp.mesh/ns/channel-bff/sa/web-bff
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
+                                "https://sso.apps.example.local:8443/realms/partners/*",
+                                "https://sso.apps.example.local:8443/realms/staff/*"]
+      to:
+        - operation:
+            methods: ["GET"]
+      when:
+        - key: request.auth.claims[channel]
+          values: ["partner"]
+        - key: request.auth.claims[scope]
+          values: ["info:read"]
 ---
 # Egress gateway'e yalnızca api-a'nın waypoint'i girebilir (dışarıya çıkış tek ve bilinen bir kimlikten),
 # yalnızca 443'ten. Veri portları ayrı politikada (55-data-exit.yaml)
