@@ -44,6 +44,8 @@ spec:
         request:
           set:
             x-channel: partner
+          remove:
+            - authorization   # dış access token DMZ'de kalır; içeri yalnızca x-user-jwt (08)
       route:
         - destination:
             host: dmz-egressgateway.istio-egress.svc.cluster.local

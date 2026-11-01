@@ -12,12 +12,14 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -129,16 +131,38 @@ func dbError(w http.ResponseWriter, r *http.Request, err error) {
 	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "db_unavailable"})
 }
 
-// Kanal bilgisi (x-channel) ve istek kimliği her istekte loglanır (denetim izi)
+// Her istekte kim (iç JWT: sub, roller, kanal), hangi istek kimliğiyle loglanır (denetim izi).
+// JWT'nin imzası mesh'te (RequestAuthentication, waypoint) doğrulandı; burada yalnızca okunur.
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		if r.URL.Path != "/healthz" && r.URL.Path != "/readyz" {
-			log.Printf("%s %s channel=%q request_id=%q %s", r.Method, r.URL.Path,
-				r.Header.Get("x-channel"), r.Header.Get("x-request-id"), time.Since(start).Round(time.Millisecond))
+			u := userFrom(r)
+			log.Printf("%s %s sub=%q roles=%v channel=%q partner=%q device=%q request_id=%q %s", r.Method, r.URL.Path,
+				u.Sub, u.Roles, u.Channel, u.PartnerID, u.Device, r.Header.Get("x-request-id"), time.Since(start).Round(time.Millisecond))
 		}
 	})
+}
+
+type user struct {
+	Sub       string   `json:"sub"`
+	Roles     []string `json:"roles"`
+	Channel   string   `json:"channel"`
+	PartnerID string   `json:"partner_id"`
+	Device    string   `json:"branch_device"`
+}
+
+// userFrom: x-user-jwt payload'unu okur (doğrulama mesh'te yapıldı)
+func userFrom(r *http.Request) user {
+	var u user
+	parts := strings.Split(r.Header.Get("x-user-jwt"), ".")
+	if len(parts) == 3 {
+		if b, err := base64.RawURLEncoding.DecodeString(parts[1]); err == nil {
+			json.Unmarshal(b, &u)
+		}
+	}
+	return u
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

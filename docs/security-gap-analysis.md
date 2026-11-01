@@ -4,7 +4,7 @@
 
 Bu doküman, bankacılık ortamı için tanımlanmış 13 katmanlı güvenlik gereksinimlerini lab ortamının **bugünkü haliyle** karşılaştırır. Her madde için üç şey belirtilir: şu anki durum, kanıt (dosya veya yapılandırma) ve lab'da nasıl karşılanacağı.
 
-Analiz tarihi: 2026-10-31 · Kapsam: `data` branch'i (00-setup → 07-data). ✅/⚠️ işaretli maddelerin yanında hangi adımda değiştiği yazar.
+Analiz tarihi: 2026-11-01 · Kapsam: `token-exchange` branch'i (00-setup → 08-token-exchange). ✅/⚠️ işaretli maddelerin yanında hangi adımda değiştiği yazar.
 
 ## Gösterim
 
@@ -27,7 +27,7 @@ Analiz tarihi: 2026-10-31 · Kapsam: `data` branch'i (00-setup → 07-data). ✅
 | 5 | Zone geçişi (DMZ → internal) | 3 | 2 | 1 | 0 | 0 | Tek kapı var (`02-zones`); yön kısıtı ağ seviyesinde eksik |
 | 6 | Internal cluster / service mesh | 2 | 0 | 2 | 1 | 2 | STRICT mTLS + varsayılan reddet (`03`); admission ve audit eksik; NetworkPolicy bu lab'da uygulanamıyor |
 | 7 | Uygulama (Spring Boot) | 0 | 0 | 0 | 0 | 6 | Örnek uygulama podinfo; gerçek servis yazılınca geçerli |
-| 8 | Kimlik ve oturum (IdP) | 0 | 0 | 0 | 5 | 1 | Keycloak mgmt'te planlı |
+| 8 | Kimlik ve oturum (IdP) | 3 | 2 | 0 | 0 | 1 | Keycloak mgmt'te (`08`): kanal başına client, en az yetki, 5 dk token, brute force; MFA yalnızca personel realm'inde, refresh rotasyonu yok |
 | 9 | Veri katmanı | 0 | 2 | 2 | 0 | 1 | PostgreSQL ve Valkey mgmt'te, mesh mTLS, servis başına kullanıcı (`07`); durağan şifreleme, yedek ve alan şifrelemesi eksik |
 | 10 | Kart zone (PCI) | 0 | 0 | 1 | 0 | 3 | Kapsam dışı; segment simülasyonu yapılabilir |
 | 11 | Tedarik zinciri (CI/CD) | 0 | 1 | 5 | 0 | 0 | **Hiç ele alınmadı** |
@@ -89,8 +89,8 @@ flowchart LR
 
 | Gereksinim | Durum | Mevcut hal | Lab'da nasıl |
 |------------|-------|------------|--------------|
-| Token doğrulama: imza, exp, aud, iss, DPoP | 📅 | Kullanıcı kimliği yok | `token-exchange`: `RequestAuthentication` (imza, iss, aud, exp). DPoP ❌: auth-service'te `DPoP` proof doğrulaması ayrıca yazılmalı |
-| Token exchange: dış token internal'a geçmesin | 📅 | Planlandı | `token-exchange` adımı ([README](../README.md#planlanan-kullanıcı-kimliği-yayılımı-token-exchange)) |
+| Token doğrulama: imza, exp, aud, iss, DPoP | ✅ `08` | auth-service (DMZ, ext_authz): RS256 imza (Keycloak JWKS), `iss` (realm), `azp` (kanal client'ı), `exp`/`nbf`, `typ`. Internal'da iç JWT: RequestAuthentication (imza, iss, aud, exp) + `requestPrincipals` zorunlu (test edildi). DPoP yok | DPoP: auth-service'te proof doğrulaması |
+| Token exchange: dış token internal'a geçmesin | ✅ `08` | Gateway `Authorization`'ı siler; içeri yalnızca DMZ'nin imzaladığı iç JWT (5 dk, `x-user-jwt`) girer; imza anahtarı yalnızca DMZ'de (test edildi) | – |
 | Kullanıcı, cihaz, IP, partner bazında rate limit ve kota | ⚠️ `07` | Edge'de IP başına; kanal gateway'lerinde kanal toplamı (local, `06`); **partner başına global kota** (Envoy ratelimit, sayaçlar mgmt Valkey'de, `07`; test edildi). Kullanıcı/cihaz bazlı kota yok (kimlik 08'de) | `08 · token-exchange` sonrası `sub`/cihaz tanımlayıcılarıyla |
 | Girdi doğrulama: şema, boyut, content-type; bilinmeyen alan reddi | ❌ | Yok | Coraza'da body/content-type kuralları; OpenAPI şema doğrulaması BFF'te veya gateway'de (Envoy ext_proc) |
 | Genel hata yanıtları; stack trace / iç IP sızmasın | ✅ `03` | Edge'de `Server`/`x-envoy-*` siliniyor, 5xx gövdeleri tek tip JSON (test edildi) | podinfo normal yanıtta hostname döndürüyor (örnek servis Go ile yazılınca) |
@@ -136,15 +136,15 @@ flowchart LR
 
 ## 8. Kimlik ve oturum (IdP)
 
-Keycloak `mgmt` cluster'ında planlandı (`token-exchange` adımı). Maddelerin çoğu Keycloak ayarıyla gösterilebilir.
+Keycloak 26.8 `mgmt` cluster'ında (`08 · token-exchange`): `customers`, `partners`, `staff` realm'leri.
 
 | Gereksinim | Durum | Lab'da nasıl (Keycloak) |
 |------------|-------|-------------------------|
-| MFA zorunlu, oltalamaya dayanıklı (passkey) | 📅 | Authentication flow'da OTP/WebAuthn zorunlu |
-| Kısa ömürlü access token; refresh rotasyonu ve tekrar kullanım tespiti | 📅 | Access token 5 dk; "Revoke Refresh Token" + reuse count 0 |
-| Kanal başına ayrı client, en az yetki scope | 📅 | `mobile-app`, `web-bff`, `partner-*` client'ları; client scope'lar |
-| Oturum idle/absolute timeout; merkezi iptal | 📅 | SSO Session Idle/Max; admin API ile logout-all |
-| Artan gecikme, hesap kilitleme, risk bazlı step-up | 📅 | Brute Force Detection; step-up için `acr` / LoA |
+| MFA zorunlu, oltalamaya dayanıklı (passkey) | ⚠️ `08` | `staff` realm'inde OTP politikası ve yeni kullanıcılar için zorunlu kurulum (test kullanıcısı muaf). Müşteri realm'inde MFA ve passkey yok |
+| Kısa ömürlü access token; refresh rotasyonu ve tekrar kullanım tespiti | ⚠️ `08` | Access token 5 dk, iç JWT en fazla 5 dk ve dış token'dan uzun yaşamaz. Refresh rotasyonu ayarlanmadı |
+| Kanal başına ayrı client, en az yetki scope | ✅ `08` | `web-bff`, `mobile-app`, `acme`/`initech`, `branch-teller`; `fullScopeAllowed: false` + scope eşlemeleri: token yalnızca client'ın rolünü taşır; auth-service kanal ↔ client eşleşmesini zorlar (test edildi) |
+| Oturum idle/absolute timeout; merkezi iptal | ✅ `08` | SSO Session Idle: müşteri 15 dk, personel 30 dk. Merkezi iptal Keycloak yönetim API'siyle (konsol yalnızca mgmt içinden) |
+| Artan gecikme, hesap kilitleme, risk bazlı step-up | ✅ `08` | Brute force koruması (müşteri 5, personel 3 deneme). Risk bazlı step-up (`acr`) yok: `09 · l7-policies` |
 | İmza anahtarları HSM'de; kesintisiz JWKS rotasyonu | ➖ | HSM fiziksel. Anahtar rotasyonu Keycloak'ta (birden çok aktif key) gösterilebilir |
 
 ## 9. Veri katmanı

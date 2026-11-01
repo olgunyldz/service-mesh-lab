@@ -40,6 +40,7 @@ spec:
             x-channel: web
           remove:
             - x-partner-id
+            - authorization   # dış access token DMZ'de kalır; içeri yalnızca x-user-jwt (08)
       # Tarayıcı kanalı: yalnızca kendi origin'imizden gelen çapraz istekler (lab'de 8443 portuyla da)
       corsPolicy:
         allowOrigins:
@@ -59,4 +60,36 @@ spec:
       retries:
         attempts: 2
         perTryTimeout: 4s
+---
+# SSO (08 · token-exchange): müşteri ve partner'ların login/token istekleri Keycloak'a (mgmt).
+# web gateway -> dmz-egressgateway -> mgmt; egress yalnızca bu host için web gateway'i kabul eder.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: sso
+  namespace: istio-ingress
+spec:
+  hosts:
+    - sso.apps.example.local
+  gateways:
+    - public-gateway
+  http:
+    - match:
+        - uri:
+            prefix: /realms/customers/
+        - uri:
+            prefix: /realms/partners/
+        - uri:
+            prefix: /resources/
+      headers:
+        request:
+          remove:
+            - x-partner-id
+            - x-user-jwt
+      route:
+        - destination:
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443
+      timeout: 10s
 # api-b rotası: cluster-b/21-api-b-route.yaml (yalnızca cluster-b aktifken uygulanır)

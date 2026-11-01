@@ -1,0 +1,77 @@
+{
+  "realm": "staff",
+  "displayName": "Şube personeli",
+  "enabled": true,
+  "sslRequired": "external",
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "bruteForceProtected": true,
+  "failureFactor": 3,
+  "maxFailureWaitSeconds": 1800,
+  "passwordPolicy": "length(14) and notUsername and passwordHistory(5)",
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA256",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "requiredActions": [
+    {
+      "alias": "CONFIGURE_TOTP",
+      "name": "Configure OTP",
+      "providerId": "CONFIGURE_TOTP",
+      "enabled": true,
+      "defaultAction": true,
+      "priority": 10
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "teller",
+        "description": "Gişe"
+      },
+      {
+        "name": "operations",
+        "description": "Operasyon"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "branch-teller",
+        "fullScopeAllowed": false,
+      "name": "Şube gişe uygulaması",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": __LAB_DIRECT_GRANT__,
+      "consentRequired": false,
+      "redirectUris": [
+        "https://branch-api.corp.internal/*"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "teller01",
+      "enabled": true,
+      "firstName": "Gişe",
+      "lastName": "Personeli",
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "__STAFF_PASSWORD__",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "teller"
+      ]
+    }
+  ],
+  "scopeMappings": [
+    { "client": "branch-teller", "roles": ["teller", "operations"] }
+  ]
+}

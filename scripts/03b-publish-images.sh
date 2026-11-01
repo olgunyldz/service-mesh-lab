@@ -34,13 +34,17 @@ for entry in $LAB_IMAGES; do
     | grep -v "^WARNING" || true
 done
 
-# Kendi servislerimiz: host'ta build -> lab registry (127.0.0.1:<port>) -> imza. Gerçekte CI yapar (15 · ci).
+# Kendi servislerimiz (services/<ad>) ve kendi build'imiz olan üçüncü taraf image'lar (images/<ad>, ör. optimize
+# Keycloak): host'ta build -> lab registry (127.0.0.1:<port>) -> imza. Gerçekte CI yapar (15 · ci).
 for entry in $LAB_BUILDS; do
   svc=${entry%%:*} ver=${entry#*:}
-  log "Build + imzala: services/$svc -> $LAB_REGISTRY/lab/$svc:$ver"
+  dir="$ROOT_DIR/services/$svc"
+  [[ -d "$dir" ]] || dir="$ROOT_DIR/images/$svc"
+  log "Build + imzala: ${dir#"$ROOT_DIR"/} -> $LAB_REGISTRY/lab/$svc:$ver"
   docker build -q -t "localhost:$LAB_REGISTRY_HOST_PORT/lab/$svc:$ver" \
     --build-arg GO_BUILD_IMAGE="$GO_BUILD_IMAGE" --build-arg GO_RUNTIME_IMAGE="$GO_RUNTIME_IMAGE" \
-    --build-arg VERSION="$ver" "$ROOT_DIR/services/$svc" >/dev/null
+    --build-arg KEYCLOAK_BASE_IMAGE="$KEYCLOAK_BASE_IMAGE" \
+    --build-arg VERSION="$ver" "$dir" >/dev/null
   docker push -q "localhost:$LAB_REGISTRY_HOST_PORT/lab/$svc:$ver" >/dev/null
   verify "lab/$svc:$ver" && { echo "  zaten imzalı (aynı digest)"; continue; }
   cosign sign --key /keys/cosign.key --allow-http-registry --tlog-upload=false --yes "$LAB_REGISTRY/lab/$svc:$ver" 2>&1 \

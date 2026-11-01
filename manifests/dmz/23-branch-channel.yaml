@@ -34,6 +34,19 @@ spec:
   gateways:
     - branch-gateway
   http:
+    # Personel login/token (08): /sso/realms/staff/... -> Keycloak (mgmt). Şube ağından yalnızca staff realm'i
+    - match:
+        - uri:
+            prefix: /sso/realms/staff/
+      rewrite:
+        uri: /realms/staff/
+        authority: sso.apps.example.local
+      route:
+        - destination:
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443
+      timeout: 10s
     - match:
         - uri:
             prefix: /branch/v1/
@@ -48,6 +61,7 @@ spec:
             x-branch-device: "%DOWNSTREAM_PEER_SUBJECT%"
           remove:
             - x-partner-id
+            - authorization   # dış access token DMZ'de kalır; içeri yalnızca x-user-jwt (08)
       route:
         - destination:
             host: dmz-egressgateway.istio-egress.svc.cluster.local
@@ -70,5 +84,5 @@ spec:
     - to:
         - operation:
             hosts: ["branch-api.corp.internal", "branch-api.corp.internal:*"]
-            paths: ["/branch/v1/*"]
+            paths: ["/branch/v1/*", "/sso/realms/staff/*"]
             methods: [GET, POST]

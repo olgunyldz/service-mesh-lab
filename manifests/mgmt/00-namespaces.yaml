@@ -24,3 +24,14 @@ metadata:
     istio.io/dataplane-mode: ambient
     policy.corp.mesh/image-source: lab-registry
     pod-security.kubernetes.io/enforce: restricted
+---
+# Kimlik (08 · token-exchange): Keycloak. Ambient mesh'te; yalnızca imzalı image'lar (Kyverno)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: iam
+  labels:
+    zone: mgmt
+    istio.io/dataplane-mode: ambient
+    policy.corp.mesh/image-source: lab-registry
+    pod-security.kubernetes.io/enforce: restricted

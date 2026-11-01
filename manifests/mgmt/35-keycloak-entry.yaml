@@ -1,0 +1,65 @@
+# mgmt girişi (kimlik): DMZ egress gateway'inden gelen Keycloak istekleri.
+#   dmz-egressgateway --mTLS :443 (SNI keycloak.mgmt.internal)--> mgmt istio-ingressgateway --> iam/keycloak:8080
+# Kullanıcıların login/token istekleri (edge -> web veya şube gateway'i -> dmz egress) ve auth-service'in JWKS çağrısı.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: keycloak-entry
+  namespace: istio-ingress
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 443
+        name: https-keycloak
+        protocol: HTTPS
+      tls:
+        mode: ISTIO_MUTUAL
+      hosts:
+        - keycloak.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: keycloak
+  namespace: istio-ingress
+spec:
+  hosts:
+    - keycloak.mgmt.internal
+  gateways:
+    - keycloak-entry
+  http:
+    - match:
+        - uri:
+            prefix: /realms/
+        - uri:
+            prefix: /resources/   # login sayfasının statik dosyaları
+      route:
+        - destination:
+            host: keycloak.iam.svc.cluster.local
+            port:
+              number: 8080
+---
+# Yalnızca DMZ egress kimliği, yalnızca uygulama realm'lerinin uçları. Yönetim konsolu (/admin) ve
+# master realm'i (yönetici hesabı) mgmt dışına kapalı; yönetim yalnızca mgmt içinden (kubectl port-forward).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-keycloak-from-dmz
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-egress/sa/dmz-egressgateway
+      to:
+        - operation:
+            hosts: ["keycloak.mgmt.internal"]
+            methods: ["GET", "POST"]
+            paths: ["/realms/customers/*", "/realms/partners/*", "/realms/staff/*", "/resources/*"]

@@ -1,0 +1,61 @@
+{
+  "realm": "partners",
+  "displayName": "Partner kurumlar",
+  "enabled": true,
+  "sslRequired": "external",
+  "accessTokenLifespan": 300,
+  "roles": {
+    "realm": [
+      {
+        "name": "partner",
+        "description": "Sözleşmeli partner kurum"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "acme",
+        "fullScopeAllowed": false,
+      "name": "Acme (partner)",
+      "publicClient": false,
+      "secret": "__PARTNER_ACME_SECRET__",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "consentRequired": false
+    },
+    {
+      "clientId": "initech",
+        "fullScopeAllowed": false,
+      "name": "Initech (partner)",
+      "publicClient": false,
+      "secret": "__PARTNER_INITECH_SECRET__",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "consentRequired": false
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-acme",
+      "enabled": true,
+      "serviceAccountClientId": "acme",
+      "realmRoles": [
+        "partner"
+      ]
+    },
+    {
+      "username": "service-account-initech",
+      "enabled": true,
+      "serviceAccountClientId": "initech",
+      "realmRoles": [
+        "partner"
+      ]
+    }
+  ],
+  "scopeMappings": [
+    { "client": "acme", "roles": ["partner"] },
+    { "client": "initech", "roles": ["partner"] }
+  ]
+}

@@ -66,6 +66,8 @@ flowchart LR
 
 ## Detaylı topoloji
 
+Gerçek banka ortamının (prod) ayrıntılı hedef topolojisi: [images/topology-prod-full.png](images/topology-prod-full.png) (üreteçler: [images/src/](images/src/)).
+
 Adım sonunda ortamın tamamı: Docker ağları, container'lar, cluster'lar, namespace'ler, VIP'ler ve dört kanalın yolu.
 
 ```mermaid

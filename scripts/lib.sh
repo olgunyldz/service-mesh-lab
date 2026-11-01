@@ -103,8 +103,11 @@ EOF
   done
 }
 
-# Manifest içindeki __NET_PREFIX__ yer tutucusunu doldurup uygular
+# Manifest içindeki yer tutucuları doldurup uygular:
+#   __NET_PREFIX__   -> kind ağının ilk iki okteti
+#   __INTERNAL_JWKS__ -> iç JWT'yi doğrulayan açık anahtar (certs/auth/jwks.json; 08 · token-exchange)
 apply_rendered() {
-  local context=$1 path=$2
-  sed "s/__NET_PREFIX__/$(detect_net_prefix)/g" "$path" | kubectl --context "$context" apply -f -
+  local context=$1 path=$2 jwks=""
+  [[ -f "$ROOT_DIR/certs/auth/jwks.json" ]] && jwks=$(cat "$ROOT_DIR/certs/auth/jwks.json")
+  sed -e "s/__NET_PREFIX__/$(detect_net_prefix)/g" -e "s|__INTERNAL_JWKS__|$jwks|g" "$path"     | kubectl --context "$context" apply -f -
 }

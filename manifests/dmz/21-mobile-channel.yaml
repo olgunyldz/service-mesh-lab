@@ -44,6 +44,7 @@ spec:
             x-channel: mobile
           remove:
             - x-partner-id
+            - authorization   # dış access token DMZ'de kalır; içeri yalnızca x-user-jwt (08)
       route:
         - destination:
             host: dmz-egressgateway.istio-egress.svc.cluster.local

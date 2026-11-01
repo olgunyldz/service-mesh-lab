@@ -30,6 +30,7 @@ Giriş noktaları (host'ta `--resolve ...:8443:127.0.0.1` ve `certs/edge/ca.pem`
 | – | Kanallar: web (BFF, CORS, güvenlik header'ları), mobil (yalnızca `/mobile/v1/*`), partner (istemci sertifikası, izin listesi, kota 429); sahte `x-channel`/`x-partner-id` eziliyor; web gateway BFF'i atlayıp internal'a çıkamıyor | ✅ |
 | – | Şube kanalı: şube WAN'ı → iç firewall → branch-gateway (cihaz sertifikası, kimlik `x-branch-device` ile arka uca); sertifikasız/yabancı CA reddi; şube ağından diğer kapılara ve internetten şube kanalına yol yok | ✅ |
 | 5 | Veri: account-api → PostgreSQL ve api-a → Valkey (mgmt), mesh üzerinden; servis başına kullanıcı (başka şema/yazma reddi, Valkey ACL); DMZ'den PostgreSQL'e yol yok; partner başına global kota (429) | ✅ |
+| – | Kimlik (token exchange): her kanalda token zorunlu (401); sahte/değiştirilmiş token, yanlış client/realm, başka partner'ın sertifikası reddediliyor; içeri yalnızca iç JWT giriyor (Authorization girmiyor); Keycloak yönetim konsolu internetten kapalı | ✅ |
 | – | Edge: HTTP → HTTPS (301), HSTS, TLS 1.1 reddi, TLS 1.2/1.3 kabulü | ✅ |
 | – | Edge: WAF XSS ve SQL injection denemelerini engelliyor (403) | ✅ |
 | – | Edge: sahte `X-Forwarded-For` ve `x-user-jwt` içeri geçmiyor | ✅ |
@@ -47,7 +48,7 @@ Giriş noktaları (host'ta `--resolve ...:8443:127.0.0.1` ve `certs/edge/ca.pem`
 | – | Merkezi gözlemlenebilirlik: tek Kiali ve tek Grafana (mgmt), merkezi Prometheus'ta dmz ve cluster-a metrikleri, Kiali üç cluster'ı görüyor, mgmt girişi mesh dışına kapalı | ✅ |
 | – | Politika (Kyverno, Deny): `latest`/tag'siz image, privileged, hostNetwork, hostPath ve izinsiz registry reddediliyor; api-a'da lab registry dışı ve imzasız image reddediliyor, imzalı image digest'e sabitlenerek kabul ediliyor | ✅ |
 
-Adım adım doğrulama sonuçları: [docs/](docs/README.md).
+Adım adım doğrulama sonuçları: [docs/](docs/README.md). Araçların amacı ve muadilleri: [docs/tools.md](docs/tools.md).
 
 Kullanılan sürümler:
 
@@ -142,6 +143,17 @@ flowchart LR
     istiod -->|"workload sertifikaları"| zt
     cni -->|"pod trafiğini yönlendirir"| zt
 ```
+
+### Topoloji görselleri
+
+**Özet zone mimarisi:** güven kademeleri ve her kanalın giriş yolu (tek bakışta).
+
+[![Zone özeti](docs/images/zone-ozet.png)](docs/images/zone-ozet.svg)
+
+
+**Ayrıntılı prod topolojisi (hedef):** [docs/images/topology-prod-full.png](docs/images/topology-prod-full.png) ([SVG](docs/images/topology-prod-full.svg)). Kanal → zone → cluster → domain namespace → veri: internet kanalları ortak edge ve ortak DMZ'den (kanal başına namespace), şube kendi zone'undan, ATM/POS özel ağdan PCI cluster'ına; modern mikroservisler (`ocp-apps`, domain bazlı namespace) ve legacy core banking (`ocp-core`) ayrı cluster'larda; Oracle, MSSQL, PostgreSQL, Kafka, RabbitMQ, Valkey; ELK, Prometheus/Thanos, Grafana, Tempo, SIEM, CI/CD, Vault; dışarıya yalnızca dış çıkış zone'undan. Renkler güven seviyesini, kalın kesikli çizgiler güven sınırlarını (internet, kurum WAN'ı, banka perimetresi, private zone, PCI) gösterir.
+
+[![Ayrıntılı prod topolojisi](docs/images/topology-prod-full.png)](docs/images/topology-prod-full.svg)
 
 ### Mantıksal yapı
 
@@ -531,7 +543,7 @@ Gözlemlenebilirlik **mgmt cluster'ında merkezi**dir (`04 · mgmt`). Her cluste
 ```mermaid
 flowchart LR
     subgraph D["dmz / cluster-a · ns istio-system"]
-        zt["ztunnel · gateway'ler · waypoint'ler"] -->|scrape :15020| p["Prometheus<br/>(2 saat yerel)"]
+        zt["ztunnel · gateway'ler · waypoint'ler"] -->|scrape :15020| p["Prometheus (agent)<br/>yerel veri yok"]
         p -->|"remote_write · HTTP :80"| eg["egress gateway"]
     end
     subgraph M["mgmt"]
@@ -729,6 +741,7 @@ Bu yüzden:
 - `policy` adımında Kyverno üç cluster'a kuruldu: kullanılabilir bellek ~5,2 GB'tan ~3,6 GB'a indi. Kyverno pod'ları cluster başına ~160 MB; asıl maliyet, Kyverno'nun CRD şemalarını tutan kube-apiserver (`05-policy` ölçümü).
 - `dmz-channels` adımında 3 yeni gateway, Web BFF ve waypoint eklendi: kullanılabilir bellek ~3,6 GB'tan ~3,2 GB'a indi (`06-dmz-channels` ölçümü).
 - `data` adımında PostgreSQL, Valkey, account-api, ratelimit ve iki waypoint eklendi: kullanılabilir bellek ~3,2 GB'tan ~3,0 GB'a indi (`07-data` ölçümü).
+- `token-exchange` adımında Keycloak (~650 MB) eklendi; aynı adımda bellek düzeltmeleri yapıldı (Prometheus agent modu, merkezde yalnızca Istio metrikleri ve 6 saat saklama, apiserver `GOMEMLIMIT`, optimize Keycloak image'ı): kullanılabilir bellek ~3,25 GB, yani Keycloak'tan önceki seviyede (`08-token-exchange` ölçümü).
 - Ek tasarruf gerekirse: loadgen yalnızca izlerken açık tutulur (`kubectl --context kind-dmz -n loadgen scale deploy/loadgen --replicas=0`), uygulama kopyaları 1'e indirilir.
 
 ## Kurulum
@@ -828,105 +841,51 @@ Kurulum, Docker'da cluster'lardan bağımsız üç kalıcı registry container'�
 | LoadBalancer | MetalLB (L2) | MetalLB operator veya bulut LB |
 | Güvenlik | Pod Security `restricted` + elle seccomp | SCC (`restricted-v2`, seccomp otomatik) |
 
-## Planlanan: Kullanıcı kimliği yayılımı (token exchange)
+## Kullanıcı kimliği yayılımı (token exchange)
 
-> Henüz uygulanmadı; hedef tasarım.
+> `08 · token-exchange` ile uygulandı. Ayrıntılar: [docs/08-token-exchange.md](docs/08-token-exchange.md).
 
-Dışarıdan gelen access token DMZ'de bırakılır. İçeriye yalnızca kullanıcı bilgisini taşıyan, DMZ'nin imzaladığı kısa ömürlü bir JWT girer. Tüm internal servisler kullanıcıyı bu JWT'den tanır.
-
-### Bileşenler
-
-| Bileşen | Yer | Görev |
-|---------|-----|-------|
-| **auth-service** | dmz, ns `auth` (yeni) | Envoy ext_authz HTTP servisi. Access token'ı doğrular (IdP introspection veya imza kontrolü), kullanıcı bilgisini alır ve **RS256 ile imzalı iç JWT** üretir. Token → JWT eşlemesini token ömrü boyunca önbellekler. JWKS (public key) yayınlar |
-| dmz-ingressgateway | dmz | `CUSTOM` AuthorizationPolicy ile her isteği önce auth-service'e sorar. İzin verilirse `x-user-jwt` header'ını ekler, `Authorization` header'ını siler |
-| Internal gateway + waypoint | cluster-a, cluster-b | `RequestAuthentication` ile JWT'nin imzasını, issuer'ını ve süresini doğrular. `AuthorizationPolicy` ile JWT'yi zorunlu kılar ve claim'lere göre yetki verir |
-| Mikroservisler | cluster-a, cluster-b | JWT'deki claim'leri okur (doğrulama mesh'te yapıldığı için yeniden doğrulaması gerekmez). Başka servisi çağırırken `x-user-jwt`'yi aynen iletir |
-
-### İç JWT örneği
-
-```json
-{
-  "iss": "auth.dmz.corp.mesh",
-  "aud": "internal-apis",
-  "sub": "u-12345",
-  "name": "Ayşe Yılmaz",
-  "roles": ["customer", "premium"],
-  "tenant": "corp",
-  "iat": 1793448000,
-  "exp": 1793448300
-}
-```
-
-### Akış
+Dışarıdan gelen access token DMZ'de doğrulanır ve orada bırakılır. İçeriye yalnızca DMZ'nin imzaladığı, kısa ömürlü bir **iç JWT** girer; internal servisler kullanıcıyı bu JWT'den tanır.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor U as İstemci
-    box rgb(254,243,199) Dış DMZ
-        participant H as edge-lb + edge-waf
-    end
-    box rgb(255,237,213) İç DMZ · dmz cluster
-        participant D as dmz-ingressgateway
-        participant AS as auth-service<br/>ns auth
-    end
-    participant IDP as Keycloak<br/>mgmt
-    box rgb(219,234,254) cluster-a
-        participant GA as istio-ingressgateway
-        participant WA as waypoint
-        participant A as api-a
-        participant E as egressgateway
-    end
-    box rgb(220,252,231) cluster-b
-        participant GB as istio-ingressgateway
-        participant WB as waypoint
-        participant B as api-b
-    end
+    participant KC as Keycloak (mgmt)
+    participant G as kanal gateway'i (DMZ)
+    participant AS as auth-service (DMZ)
+    participant E as dmz-egressgateway
+    participant GA as cluster-a ingress
+    participant WA as waypoint
+    participant A as servis
 
-    U->>H: GET /orders · TLS · Authorization Bearer access_token
-    Note over H: dışarıdan gelen x-user-jwt silinir
-    H->>D: HTTP :80
-    Note over D: AuthorizationPolicy CUSTOM<br/>provider auth-service
-    D->>AS: ext_authz check · Authorization header
-
-    opt önbellekte yok
-        AS->>IDP: token introspection
-        IDP-->>AS: active · sub, roles, tenant
-    end
-
-    alt token geçersiz veya süresi dolmuş
-        AS-->>D: 401
-        D-->>U: 401 Unauthorized
-    else token geçerli
-        Note over AS: iç JWT üret<br/>iss auth.dmz.corp.mesh · exp 5 dk<br/>RS256 private key ile imzala
-        AS-->>D: 200 · x-user-jwt eklendi
-        Note over D: Authorization header silindi<br/>x-user-jwt eklendi
-        D->>GA: mTLS · DMZ egress üzerinden · x-user-jwt
-        Note over GA: RequestAuthentication<br/>imza, iss, aud, exp kontrolü
-        GA->>WA: HBONE · x-user-jwt
-        Note over WA: AuthorizationPolicy<br/>requestPrincipals + claim kontrolü
-        WA->>A: x-user-jwt
-        Note over A: kullanıcı = sub, roles<br/>JWT payload'undan okunur
-
-        A->>E: api-b çağrısı · x-user-jwt aynen iletilir
-        E->>GB: mTLS :443 · x-user-jwt
-        Note over GB: aynı issuer'a güvenir<br/>JWT tekrar doğrulanır
-        GB->>WB: HBONE · x-user-jwt
-        WB->>B: x-user-jwt
-        Note over B: aynı kullanıcıyı tanır
-        B-->>A: 200
-        A-->>U: 200 · kullanıcıya özel yanıt
-    end
+    U->>KC: login / token (sso host'u, edge → web gateway → egress → mgmt)
+    KC-->>U: access token (RS256, 5 dk, yalnızca client'ın rolü)
+    U->>G: istek · Authorization: Bearer
+    G->>AS: ext_authz (x-auth-channel gateway'den, x-partner-id / XFCC)
+    Note over AS: imza (Keycloak JWKS) · iss = kanalın realm'i<br/>azp = kanalın client'ı (partner: = sertifika CN)<br/>rol · exp · typ
+    AS-->>G: 200 + x-user-jwt (iss auth.dmz.corp.mesh, aud internal-apis, ≤ 5 dk)
+    Note over G: Authorization silinir
+    G->>E: mTLS · x-user-jwt
+    E->>GA: mTLS · x-user-jwt
+    Note over GA: RequestAuthentication (inline JWKS)<br/>requestPrincipals zorunlu
+    GA->>WA: HBONE
+    Note over WA: iç JWT tekrar doğrulanır · rol kontrolü
+    WA->>A: x-user-jwt (servis claim'leri okur)
 ```
 
-### Uygulama notları
+| Kanal | Realm | Kabul edilen client (`azp`) | Ek koşul | İç JWT'ye eklenen |
+|-------|-------|-----------------------------|----------|-------------------|
+| web | `customers` | `web-bff` | rol `customer` | `channel=web` |
+| mobile | `customers` | `mobile-app` | rol `customer` | `channel=mobile` |
+| partner | `partners` | sertifika CN'i (`x-partner-id`) | client credentials, rol `partner` (token sertifikaya bağlı) | `partner_id` |
+| branch | `staff` | `branch-teller` | rol `teller`/`operations` + cihaz sertifikası (XFCC) | `branch_device` |
 
-- **İmza anahtarı yalnızca DMZ'de durur.** Internal cluster'lar sadece public key'i (JWKS) bilir. JWKS, `RequestAuthentication` içine **inline** yazılır; böylece internal zone'dan DMZ'ye doğru bir ağ çağrısı açmak gerekmez. Anahtar değiştirilirken eski ve yeni key bir süre birlikte yayınlanır.
-- **Dış token içeri sızmaz.** `Authorization` header'ı DMZ gateway'de silinir (VirtualService `headers.request.remove`). Internal tarafta `x-user-jwt` dışında bir kimlik header'ı kabul edilmez.
-- **Sahte header'a karşı koruma:** İstemci kendisi `x-user-jwt` gönderirse edge-lb (HAProxy) bu header'ı daha DMZ'ye girmeden siler (`zones` adımında uygulandı). İçeride ise imza doğrulaması, DMZ dışında üretilmiş JWT'leri zaten reddeder.
-- **Kısa ömür:** JWT 5 dakika gibi kısa süreli olmalı; uzun süren iş akışları için yenilemeyi auth-service yapar.
-- **Header aktarımı uygulamanın işi:** Mesh gelen header'ı giden çağrıya otomatik kopyalamaz. Her mikroservis, aldığı `x-user-jwt`'yi yaptığı çağrılara eklemeli (ör. HTTP client interceptor / middleware).
+- **İmza anahtarı yalnızca DMZ'de durur.** Internal cluster'lar açık anahtarı `RequestAuthentication` içinde **inline JWKS** olarak bilir; internal'dan DMZ'ye ağ çağrısı yok.
+- **Dış token içeri girmez.** Kanal gateway'leri `Authorization` header'ını siler. İstemcinin gönderdiği `x-user-jwt`'yi edge zaten siler; içeride imza doğrulaması DMZ dışında üretilmiş JWT'yi reddeder.
+- **Kısa ömür.** İç JWT en fazla 5 dakika yaşar ve dış token'dan uzun yaşamaz.
+- **Header aktarımı uygulamanın işi.** Mesh header'ları kendiliğinden kopyalamaz; web-bff `x-user-jwt`'yi upstream çağrılarına taşır.
+- **Consent:** first-party (web, mobil, şube) ve partner client credentials akışlarında yok. Üçüncü taraf açık bankacılık rızası: `09b · consent`.
 
 ## Hedef katman modeli (planlanan)
 
@@ -997,8 +956,9 @@ Her adım ayrı bir branch'te yapılır; her branch bir önceki biten branch'ten
 | 05 | `policy` | Kyverno: `latest` tag, privileged pod, hostPath reddi; cosign ile imzalı image zorunluluğu | ✅ |
 | 06 | `dmz-channels` | Mobile GW, Partner GW ve şube kanalı (ayrı Istio gateway'ler), Web BFF; ingress host bazlı yönlendirme, internal'a egress üzerinden; kanal bazlı rate limit, CORS, güvenlik header'ları | ✅ |
 | 07 | `data` | mgmt'te PostgreSQL ve Valkey (Redis uyumlu); internal servislerden mgmt gateway üzerinden mTLS (TCP) erişim; servis başına DB kullanıcısı; partner başına global rate limit | ✅ |
-| 08 | `token-exchange` | DMZ'de auth-service (access token → iç JWT), Keycloak mgmt'te (MFA, kısa ömürlü token, kanal client'ları); header'ları aktaran örnek mikroservis; ayrıntılar: [Planlanan: Kullanıcı kimliği yayılımı](#planlanan-kullanıcı-kimliği-yayılımı-token-exchange) | ⏳ |
+| 08 | `token-exchange` | DMZ'de auth-service (access token → iç JWT), Keycloak mgmt'te (kanal client'ları, kısa ömürlü token, brute force, personel OTP); internal'da iç JWT zorunlu; ayrıntılar: [Kullanıcı kimliği yayılımı](#kullanıcı-kimliği-yayılımı-token-exchange) | ✅ |
 | 09 | `l7-policies` | Waypoint'te claim bazlı yetkilendirme (rol, kanal, `acr`) ve header kuralları; Redis ile kullanıcı ve partner bazlı global rate limit ve kota | ⏳ |
+| 09b | `consent` | Açık bankacılık rızası: üçüncü taraf client (ör. `fintech-x`) için authorization code akışında müşteri rızası; rızaları tutan `consent-service` (Go, PostgreSQL): hesap, izin, süre; consent ID'nin iç JWT'ye taşınması, account-api'nin yalnızca rızadaki hesapları döndürmesi; rızanın geri alınması. First-party (web, mobil, şube) ve partner client credentials akışlarında consent yok (bkz. `08`) | ⏳ |
 | 10 | `logging` | mgmt'te Loki + Fluent Bit; access log'lara `x-request-id`, `zone`, `channel`; Kubernetes audit log | ⏳ |
 | 11 | `tracing` | mgmt'te Grafana Tempo + OpenTelemetry; gateway, waypoint ve servis span'leri; Grafana'da log ↔ trace geçişi | ⏳ |
 | 12 | `traffic-mgmt` | Canary (v1/v2 ağırlıklı yönlendirme), fault injection (gecikme/hata), circuit breaker, outlier detection; etkiler Kiali ve Tempo'da izlenir | ⏳ |

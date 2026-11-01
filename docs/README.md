@@ -29,6 +29,9 @@ gitGraph
     branch data
     checkout data
     commit id: "PostgreSQL + Valkey + global kota"
+    branch token-exchange
+    checkout token-exchange
+    commit id: "Keycloak + auth-service + iç JWT"
 ```
 
 Her adım bittiğinde ortam sıfırlanır ve baştan kurulur (`99-destroy.sh` → `setup.sh` → `08-verify.sh`). Böylece o adımın elle müdahale olmadan, sıfırdan çalıştığı doğrulanır.
@@ -60,9 +63,11 @@ Ana [README](../README.md) ortamın güncel ve toplu halini anlatır. Bu klasör
 | 05 | [Politika (Kyverno ve imzalı image)](05-policy.md) | `policy` | ✅ Tamamlandı (57/57 test) |
 | 06 | [DMZ kanalları (web BFF, mobil, partner, şube)](06-dmz-channels.md) | `dmz-channels` | ✅ Tamamlandı (86/86 test) |
 | 07 | [Veri katmanı (PostgreSQL, Valkey, global rate limit)](07-data.md) | `data` | ✅ Tamamlandı (107/107 test) |
+| 08 | [Kimlik ve token exchange (Keycloak, auth-service, iç JWT)](08-token-exchange.md) | `token-exchange` | ✅ Tamamlandı (131/131 test) |
 
 ## Diğer dokümanlar
 
 | Doküman | İçerik |
 |---------|--------|
+| [Araçlar ve kütüphaneler](tools.md) | Kullanılan her aracın amacı, bizdeki kullanımı ve muadilleri; lab için faydalı yardımcı araçlar |
 | [Güvenlik boşluk analizi](security-gap-analysis.md) | 13 katmanlı derinlemesine savunma gereksinimlerinin mevcut ortamla karşılaştırması ve eylem planı |

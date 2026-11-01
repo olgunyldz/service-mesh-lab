@@ -91,8 +91,9 @@ func dashboard(client *http.Client, upstream *url.URL) http.HandlerFunc {
 	}
 }
 
-// İzlenebilirlik ve kanal header'ları upstream'e taşınır
-var forwardHeaders = []string{"x-request-id", "x-channel", "traceparent", "tracestate"}
+// Kimlik (iç JWT), izlenebilirlik ve kanal header'ları upstream'e taşınır. Mesh header'ları kendiliğinden
+// kopyalamaz; x-user-jwt'yi iletmek uygulamanın işi (ters proxy yolları zaten tüm header'ları iletiyor).
+var forwardHeaders = []string{"x-user-jwt", "x-request-id", "x-channel", "traceparent", "tracestate"}
 
 func getJSON(ctx context.Context, client *http.Client, u string, in http.Header) (map[string]any, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)

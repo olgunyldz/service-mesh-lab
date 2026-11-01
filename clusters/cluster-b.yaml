@@ -7,6 +7,15 @@ containerdConfigPatches:
   - |-
     [plugins."io.containerd.grpc.v1.cri".registry]
       config_path = "/etc/containerd/certs.d"
+# kube-apiserver'ın Go heap'i için yumuşak sınır: sınır olmadan saatler içinde ~0,9 GB'tan 1,2 GB'a büyüyordu
+# (watch önbellekleri, CRD şemaları; 08 · token-exchange'te bellek baskısına yol açtı).
+kubeadmConfigPatches:
+  - |
+    kind: ClusterConfiguration
+    apiServer:
+      extraEnvs:
+        - name: GOMEMLIMIT
+          value: "700MiB"
 networking:
   podSubnet: 10.30.0.0/16
   serviceSubnet: 10.130.0.0/16

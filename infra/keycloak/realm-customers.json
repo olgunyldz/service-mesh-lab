@@ -1,0 +1,83 @@
+{
+  "realm": "customers",
+  "displayName": "Müşteriler (web, mobil)",
+  "enabled": true,
+  "sslRequired": "external",
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 900,
+  "bruteForceProtected": true,
+  "failureFactor": 5,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "passwordPolicy": "length(12) and notUsername",
+  "roles": {
+    "realm": [
+      {
+        "name": "customer",
+        "description": "Bankanın müşterisi"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "web-bff",
+        "fullScopeAllowed": false,
+      "name": "Web (BFF)",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": __LAB_DIRECT_GRANT__,
+      "consentRequired": false,
+      "redirectUris": [
+        "https://www.apps.example.local:8443/*",
+        "https://www.apps.example.local/*"
+      ],
+      "webOrigins": [
+        "https://www.apps.example.local:8443",
+        "https://www.apps.example.local"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+"
+      }
+    },
+    {
+      "clientId": "mobile-app",
+        "fullScopeAllowed": false,
+      "name": "Mobil uygulama",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": __LAB_DIRECT_GRANT__,
+      "consentRequired": false,
+      "redirectUris": [
+        "tr.com.example.bank:/oauth2redirect"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "ayse",
+      "enabled": true,
+      "email": "ayse@example.com",
+      "emailVerified": true,
+      "firstName": "Ayşe",
+      "lastName": "Yılmaz",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "__CUSTOMER_PASSWORD__",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "customer"
+      ]
+    }
+  ],
+  "scopeMappings": [
+    { "client": "web-bff", "roles": ["customer"] },
+    { "client": "mobile-app", "roles": ["customer"] }
+  ]
+}
