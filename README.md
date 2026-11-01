@@ -144,7 +144,12 @@ flowchart LR
     cni -->|"pod trafiğini yönlendirir"| zt
 ```
 
-### Topoloji görseli
+### Topoloji görselleri
+
+**Özet zone mimarisi:** güven kademeleri ve her kanalın giriş yolu (tek bakışta).
+
+[![Zone özeti](docs/images/zone-ozet.png)](docs/images/zone-ozet.svg)
+
 
 **Ayrıntılı prod topolojisi (hedef):** [docs/images/topology-prod-full.png](docs/images/topology-prod-full.png) ([SVG](docs/images/topology-prod-full.svg)). Kanal → zone → cluster → domain namespace → veri: internet kanalları ortak edge ve ortak DMZ'den (kanal başına namespace), şube kendi zone'undan, ATM/POS özel ağdan PCI cluster'ına; modern mikroservisler (`ocp-apps`, domain bazlı namespace) ve legacy core banking (`ocp-core`) ayrı cluster'larda; Oracle, MSSQL, PostgreSQL, Kafka, RabbitMQ, Valkey; ELK, Prometheus/Thanos, Grafana, Tempo, SIEM, CI/CD, Vault; dışarıya yalnızca dış çıkış zone'undan. Renkler güven seviyesini, kalın kesikli çizgiler güven sınırlarını (internet, kurum WAN'ı, banka perimetresi, private zone, PCI) gösterir.
 
