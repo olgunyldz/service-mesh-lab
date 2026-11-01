@@ -1,0 +1,85 @@
+# mgmt girişi (veri): diğer cluster'ların egress gateway'lerinden gelen TCP bağlantıları.
+#   cluster-a egress gw --mTLS :5432 (SNI postgres.mgmt.internal)--> mgmt istio-ingressgateway --> data/postgres
+#   cluster-a / dmz egress gw --mTLS :6379 (SNI valkey.mgmt.internal)--> mgmt istio-ingressgateway --> data/valkey
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: data-entry
+  namespace: istio-ingress
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 5432
+        name: tls-postgres
+        protocol: TLS
+      tls:
+        mode: ISTIO_MUTUAL
+      hosts:
+        - postgres.mgmt.internal
+    - port:
+        number: 6379
+        name: tls-valkey
+        protocol: TLS
+      tls:
+        mode: ISTIO_MUTUAL
+      hosts:
+        - valkey.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: data-entry
+  namespace: istio-ingress
+spec:
+  hosts:
+    - postgres.mgmt.internal
+    - valkey.mgmt.internal
+  gateways:
+    - data-entry
+  tcp:
+    - match:
+        - port: 5432
+      route:
+        - destination:
+            host: postgres.data.svc.cluster.local
+            port:
+              number: 5432
+    - match:
+        - port: 6379
+      route:
+        - destination:
+            host: valkey.data.svc.cluster.local
+            port:
+              number: 6379
+---
+# PostgreSQL'e yalnızca cluster-a (internal); Valkey'e cluster-a ve DMZ (global rate limit sayaçları).
+# DMZ'den PostgreSQL'e yol yok. Not: kaynak kimliği egress gateway'in kimliği; hangi servisin bağlandığını
+# veritabanı kullanıcısı ayırt eder (servis başına kullanıcı).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-data-from-egress
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-egress/sa/istio-egressgateway
+      to:
+        - operation:
+            ports: ["5432"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-egress/sa/istio-egressgateway
+              - corp.mesh/ns/istio-egress/sa/dmz-egressgateway
+      to:
+        - operation:
+            ports: ["6379"]

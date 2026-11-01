@@ -163,7 +163,8 @@ spec:
         - operation:
             ports: ["8080"]
 ---
-# Çıkış servisini yalnızca BFF kullanabilir (waypoint, L7)
+# Çıkış servisini yalnızca BFF kullanabilir (waypoint, L7). Politika Service'e bağlı; waypoint geneline
+# yazılan ALLOW, aynı waypoint'teki servis kısıtlarıyla birleşip (OR) onları genişletirdi.
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -174,23 +175,6 @@ spec:
     - kind: Service
       group: ""
       name: api-a
-  action: ALLOW
-  rules:
-    - from:
-        - source:
-            principals:
-              - corp.mesh/ns/web-bff/sa/web-bff
----
-# Waypoint pod'una yalnızca BFF ulaşabilir (ztunnel, L4). allow-nothing waypoint'i de kapsar.
-apiVersion: security.istio.io/v1
-kind: AuthorizationPolicy
-metadata:
-  name: waypoint-allow-bff
-  namespace: web-bff
-spec:
-  selector:
-    matchLabels:
-      gateway.networking.k8s.io/gateway-name: waypoint
   action: ALLOW
   rules:
     - from:

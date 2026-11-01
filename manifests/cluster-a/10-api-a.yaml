@@ -40,6 +40,9 @@ spec:
             - configMapRef:
                 name: api-a-backend   # PODINFO_BACKEND_URL
                 optional: true
+            - secretRef:
+                name: api-a-cache     # PODINFO_CACHE_SERVER: Valkey (mgmt), api_a kullanıcısı (05b-create-data-secrets.sh)
+                optional: true
           env:
             - name: PODINFO_UI_MESSAGE
               value: "api-a @ cluster-a"

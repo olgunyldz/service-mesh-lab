@@ -43,6 +43,9 @@ spec:
               - corp.mesh/ns/istio-mobile/sa/mobile-gateway
               - corp.mesh/ns/istio-partner/sa/partner-gateway
               - corp.mesh/ns/istio-branch/sa/branch-gateway
+      to:
+        - operation:
+            ports: ["443"]   # yalnızca zone-exit; veri çıkışı (16379) ayrı politikada (26-global-rate-limit.yaml)
 ---
 # Kanal gateway'leri ve BFF waypoint'i -> egress gateway: mesh kimlikleriyle mTLS.
 # Servisin kendi namespace'inde: tüm istemci namespace'leri için geçerli.
@@ -103,3 +106,89 @@ spec:
             port:
               number: 443
 # cluster-b'ye çıkış: cluster-b/31-cluster-b-gateway.yaml (yalnızca cluster-b aktifken uygulanır)
+---
+# --- Veri çıkışı (07 · data): global rate limit sayaçları -> mgmt Valkey ---
+#   ratelimit waypoint --mTLS--> dmz-egressgateway :16379 --mTLS (SNI valkey.mgmt.internal)--> mgmt :6379
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: data-exit
+  namespace: istio-egress
+spec:
+  selector:
+    istio: dmz-egressgateway
+  servers:
+    - port:
+        number: 16379
+        name: tls-valkey
+        protocol: TLS
+      tls:
+        mode: ISTIO_MUTUAL
+      hosts: ["*"]
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: mgmt-valkey
+  namespace: istio-egress
+spec:
+  hosts:
+    - valkey.mgmt.internal
+  location: MESH_EXTERNAL
+  resolution: STATIC
+  ports:
+    - number: 6379
+      name: tcp-valkey
+      protocol: TCP
+  endpoints:
+    - address: __NET_PREFIX__.203.10
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: mgmt-valkey
+  namespace: istio-egress
+spec:
+  host: valkey.mgmt.internal
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      sni: valkey.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: data-exit
+  namespace: istio-egress
+spec:
+  hosts: ["*"]
+  gateways:
+    - data-exit
+  tcp:
+    - match:
+        - port: 16379
+      route:
+        - destination:
+            host: valkey.mgmt.internal
+            port:
+              number: 6379
+---
+# Veri çıkışına yalnızca ratelimit'in waypoint'i, yalnızca Valkey portundan. DMZ'den PostgreSQL'e çıkış yok.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-data-exit
+  namespace: istio-egress
+spec:
+  selector:
+    matchLabels:
+      istio: dmz-egressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/ratelimit/sa/waypoint
+      to:
+        - operation:
+            ports: ["16379"]

@@ -13,3 +13,14 @@ metadata:
   labels:
     zone: mgmt
     pod-security.kubernetes.io/enforce: restricted
+---
+# Veri zone'u (07 · data): PostgreSQL ve Valkey. Ambient mesh'te; yalnızca imzalı image'lar (Kyverno)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: data
+  labels:
+    zone: mgmt
+    istio.io/dataplane-mode: ambient
+    policy.corp.mesh/image-source: lab-registry
+    pod-security.kubernetes.io/enforce: restricted

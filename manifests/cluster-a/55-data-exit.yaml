@@ -1,0 +1,204 @@
+# Veri çıkışı (07 · data): cluster-a servisleri -> mgmt veri katmanı. __NET_PREFIX__ scriptte doldurulur.
+#   account-api -> [postgres Service] -> waypoint (account-api) -> istio-egressgateway :15432 --mTLS--> mgmt :5432
+#   api-a       -> [valkey Service]   -> waypoint (api-a)       -> istio-egressgateway :16379 --mTLS--> mgmt :6379
+# Uygulamalar mgmt'i doğrudan göremez; yalnızca kendi namespace'lerindeki seçicisiz Service'i çağırır.
+
+# --- İstemci tarafı: seçicisiz Service'ler (waypoint'e gider) ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: account-api
+spec:
+  ports:
+    - name: tcp-postgres
+      port: 5432
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: postgres-via-egress
+  namespace: account-api
+spec:
+  hosts:
+    - postgres.account-api.svc.cluster.local
+  tcp:
+    - route:
+        - destination:
+            host: istio-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 15432
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey
+  namespace: api-a
+spec:
+  ports:
+    - name: tcp-valkey
+      port: 6379
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: valkey-via-egress
+  namespace: api-a
+spec:
+  hosts:
+    - valkey.api-a.svc.cluster.local
+  tcp:
+    - route:
+        - destination:
+            host: istio-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 16379
+---
+# Waypoint'ler -> egress gateway: mesh kimlikleriyle mTLS (servisin kendi namespace'inde, tüm istemciler için)
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: istio-egressgateway
+  namespace: istio-egress
+spec:
+  host: istio-egressgateway.istio-egress.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+---
+# --- Egress gateway tarafı ---
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: data-exit
+  namespace: istio-egress
+spec:
+  selector:
+    istio: egressgateway
+  servers:
+    # Waypoint Istio'nun iç SNI'ını gönderir; host listesi kısıtlanamaz. Kimlik mTLS ile, yönlendirme port ile.
+    - port:
+        number: 15432
+        name: tls-postgres
+        protocol: TLS
+      tls:
+        mode: ISTIO_MUTUAL
+      hosts: ["*"]
+    - port:
+        number: 16379
+        name: tls-valkey
+        protocol: TLS
+      tls:
+        mode: ISTIO_MUTUAL
+      hosts: ["*"]
+---
+# TCP portlu ServiceEntry tek host alabilir: PostgreSQL ve Valkey ayrı kayıtlar
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: mgmt-postgres
+  namespace: istio-egress
+spec:
+  hosts:
+    - postgres.mgmt.internal
+  location: MESH_EXTERNAL
+  resolution: STATIC
+  ports:
+    - number: 5432
+      name: tcp-postgres
+      protocol: TCP
+  endpoints:
+    - address: __NET_PREFIX__.203.10   # mgmt istio-ingressgateway (MetalLB)
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: mgmt-valkey
+  namespace: istio-egress
+spec:
+  hosts:
+    - valkey.mgmt.internal
+  location: MESH_EXTERNAL
+  resolution: STATIC
+  ports:
+    - number: 6379
+      name: tcp-valkey
+      protocol: TCP
+  endpoints:
+    - address: __NET_PREFIX__.203.10
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: mgmt-postgres
+  namespace: istio-egress
+spec:
+  host: postgres.mgmt.internal
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      sni: postgres.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: mgmt-valkey
+  namespace: istio-egress
+spec:
+  host: valkey.mgmt.internal
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      sni: valkey.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: data-exit
+  namespace: istio-egress
+spec:
+  hosts: ["*"]
+  gateways:
+    - data-exit
+  tcp:
+    - match:
+        - port: 15432
+      route:
+        - destination:
+            host: postgres.mgmt.internal
+            port:
+              number: 5432
+    - match:
+        - port: 16379
+      route:
+        - destination:
+            host: valkey.mgmt.internal
+            port:
+              number: 6379
+---
+# Veri çıkışına yalnızca ilgili waypoint, yalnızca kendi portundan
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-data-exit
+  namespace: istio-egress
+spec:
+  selector:
+    matchLabels:
+      istio: egressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/account-api/sa/waypoint
+      to:
+        - operation:
+            ports: ["15432"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/api-a/sa/waypoint
+      to:
+        - operation:
+            ports: ["16379"]

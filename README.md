@@ -4,7 +4,7 @@ Bu proje, kurumsal bir OpenShift yapısını yerelde **kind** ile simüle eder:
 
 - **DMZ cluster**: dış dünyaya açık tek katman. Edge load balancer ve public Istio ingress gateway burada çalışır.
 - **cluster-a** ve **cluster-b**: internal cluster'lar. API'ler burada çalışır, dışarıdan doğrudan erişilemez.
-- **mgmt**: paylaşılan ürünler. Şu an merkezi gözlemlenebilirlik (tek Kiali, tek Grafana, merkezi Prometheus); ileride veri, Keycloak, Vault.
+- **mgmt**: paylaşılan ürünler. Şu an merkezi gözlemlenebilirlik (tek Kiali, tek Grafana, merkezi Prometheus) ve veri (PostgreSQL, Valkey); ileride Keycloak, Vault.
 
 > **Şu an aktif cluster'lar: `dmz`, `cluster-a` ve `mgmt`** (her biri tek node). **cluster-b RAM kısıtı nedeniyle şimdilik kapalı** ve yol haritasının son adımında (17 · `cluster-b`) geri gelecek. Bu README'deki mimari ve akış anlatımları cluster-b dahil hedef tasarımı gösterir; cluster-b'ye bağlı kısımlar *(cluster-b kapalı)* olarak işaretlidir. Bkz. [Kaynak kısıtları](#kaynak-kısıtları).
 - **Istio Ambient Mesh**: sidecar yoktur. L4 mTLS'i **ztunnel**, L7 politikaları **waypoint** üstlenir. Giriş trafiği **ingress gateway**, çıkış trafiği **egress gateway** üzerinden geçer.
@@ -29,6 +29,7 @@ Giriş noktaları (host'ta `--resolve ...:8443:127.0.0.1` ve `certs/edge/ca.pem`
 | 1 | İnternet → edge (HAProxy + WAF) → web gateway → Web BFF → DMZ egress → cluster-a → api-a (HTTPS) | ✅ |
 | – | Kanallar: web (BFF, CORS, güvenlik header'ları), mobil (yalnızca `/mobile/v1/*`), partner (istemci sertifikası, izin listesi, kota 429); sahte `x-channel`/`x-partner-id` eziliyor; web gateway BFF'i atlayıp internal'a çıkamıyor | ✅ |
 | – | Şube kanalı: şube WAN'ı → iç firewall → branch-gateway (cihaz sertifikası, kimlik `x-branch-device` ile arka uca); sertifikasız/yabancı CA reddi; şube ağından diğer kapılara ve internetten şube kanalına yol yok | ✅ |
+| 5 | Veri: account-api → PostgreSQL ve api-a → Valkey (mgmt), mesh üzerinden; servis başına kullanıcı (başka şema/yazma reddi, Valkey ACL); DMZ'den PostgreSQL'e yol yok; partner başına global kota (429) | ✅ |
 | – | Edge: HTTP → HTTPS (301), HSTS, TLS 1.1 reddi, TLS 1.2/1.3 kabulü | ✅ |
 | – | Edge: WAF XSS ve SQL injection denemelerini engelliyor (403) | ✅ |
 | – | Edge: sahte `X-Forwarded-For` ve `x-user-jwt` içeri geçmiyor | ✅ |
@@ -67,6 +68,10 @@ Kullanılan sürümler:
 | Kyverno | 1.19.2 (chart 3.9.2) | Admission politikaları; CEL tabanlı `policies.kyverno.io/v1` API'si |
 | cosign | 2.5.3 | Image imzalama (container olarak çalışır, kurulum gerekmez) |
 | Lab registry | `registry:2.8.3` | `lab-registry:5000`: imzalı uygulama image'ları (kurumsal iç registry'nin karşılığı) |
+| PostgreSQL | 18.1 (alpine) | mgmt, tek replika StatefulSet |
+| Valkey | 9.0.0 (alpine) | mgmt; Redis uyumlu, BSD lisanslı |
+| Envoy ratelimit | `f4e76690` | DMZ; partner başına global kota |
+| Go servisleri | Go 1.27.1, distroless static | `web-bff`, `account-api` (pgx v5.7.6) |
 
 ---
 
@@ -379,6 +384,42 @@ sequenceDiagram
 
 *(cluster-b kapalı)* cluster-b'de de aynı yapı var (yalnızca httpbin.org için): [manifests/cluster-b/50-egress.yaml](manifests/cluster-b/50-egress.yaml).
 
+### Akış 5: Servis → veri (mgmt)
+
+Tüm veri mgmt'te (`07 · data`). Servisler mgmt'in adresini bilmez; kendi namespace'lerindeki seçicisiz bir Service'e bağlanır, gerisini mesh yönlendirir:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    box rgb(219,234,254) cluster-a
+        participant A as account-api
+        participant W as waypoint<br/>ns account-api
+        participant E as istio-egressgateway
+    end
+    box rgb(237,233,254) mgmt
+        participant G as istio-ingressgateway
+        participant P as postgres<br/>ns data
+    end
+
+    A->>W: TCP postgres.account-api:5432 (HBONE)
+    Note over W: AuthZ: yalnızca account-api
+    W->>E: mTLS :15432
+    Note over E: AuthZ: 15432 yalnızca account-api waypoint'i
+    E->>G: mTLS → 172.18.203.10:5432 · SNI postgres.mgmt.internal
+    Note over G: AuthZ: 5432 yalnızca cluster-a egress
+    G->>P: HBONE :5432
+    Note over P: rol account_api: yalnızca accounts.accounts SELECT
+```
+
+| İstemci | Hedef | Yol | Veri tabanı kullanıcısı |
+|---------|-------|-----|-------------------------|
+| account-api (cluster-a) | PostgreSQL | waypoint → egress `:15432` → mgmt `:5432` | `account_api` (yalnızca `accounts.accounts` SELECT) |
+| api-a (cluster-a, podinfo önbelleği) | Valkey | waypoint → egress `:16379` → mgmt `:6379` | `api_a` (yalnızca `cache:api-a:*`) |
+| ratelimit (dmz, global kota) | Valkey | waypoint → dmz-egress `:16379` → mgmt `:6379` | `ratelimit` (yalnızca `rl:*`) |
+| DMZ'deki herhangi bir bileşen | PostgreSQL | **yol yok** (DMZ egress'te 15432 yok; mgmt 5432'yi DMZ'ye açmıyor) | – |
+
+Ayrıntılar: [docs/07-data.md](docs/07-data.md).
+
 ### Şifreleme özeti
 
 | Bölüm | Durum |
@@ -391,6 +432,7 @@ sequenceDiagram
 | cluster-a egress ↔ cluster-b ingress | mTLS (`ISTIO_MUTUAL`) |
 | Cluster içi (gateway ↔ waypoint ↔ ztunnel ↔ pod) | mTLS (HBONE); `PeerAuthentication STRICT` (cluster-a/b) |
 | Egress gateway → httpbin.org | Düz HTTP (dış hedef) |
+| Servis → mgmt veri katmanı (PostgreSQL, Valkey) | mTLS (waypoint → egress → mgmt ingress → HBONE); veritabanının kendi TLS'i yok |
 
 ---
 
@@ -542,6 +584,9 @@ Graph'ı okurken dikkat edilecekler:
 | mobile-gateway / partner-gateway / branch-gateway | dmz | istio-mobile / istio-partner / istio-branch | helm `istio/gateway` |
 | branch-fw (iç firewall) + branch-terminal | – (Docker, `branch-net`; branch-fw ayrıca `kind`) | – | `scripts/06c-deploy-branch.sh` |
 | web-bff (Go) + waypoint | dmz | web-bff | `services/web-bff`, `manifests/dmz/10-web-bff.yaml` |
+| ratelimit (Envoy) + waypoint | dmz | ratelimit | `manifests/dmz/26-global-rate-limit.yaml` |
+| account-api (Go) + waypoint | cluster-a | account-api | `services/account-api`, `manifests/cluster-a/15-account-api.yaml` |
+| PostgreSQL, Valkey | mgmt | data | `manifests/mgmt/20-data.yaml` |
 | dmz-egressgateway | dmz | istio-egress | helm `istio/gateway` |
 | istio-ingressgateway (internal) | a, b | istio-ingress | helm `istio/gateway` |
 | istio-egressgateway | a, b | istio-egress | helm `istio/gateway` |
@@ -583,23 +628,28 @@ service-mesh/
 │   │   ├── 22-partner-channel.yaml     # partner-gateway: izin listesi, /partner/v1/* → egress
 │   │   ├── 23-branch-channel.yaml      # branch-gateway: cihaz sertifikası, /branch/v1/* → egress
 │   │   ├── 25-rate-limits.yaml         # kanal başına local rate limit (EnvoyFilter)
+│   │   ├── 26-global-rate-limit.yaml   # partner başına global kota: ratelimit servisi + Valkey (mgmt)
 │   │   ├── 30-internal-clusters.yaml   # egress: zone-exit Gateway, AuthZ, cluster-a ServiceEntry/DR/VS
 │   │   ├── 40-security.yaml            # PeerAuthentication STRICT
 │   │   ├── 60-metrics-exit.yaml        # Prometheus -> dmz-egressgateway -> mgmt (remote_write)
 │   │   └── cluster-b/                  # yalnızca cluster-b aktifken: api-b rotası ve çıkışı
 │   ├── cluster-a/
 │   │   ├── 00-namespaces.yaml          # ambient + waypoint etiketleri
-│   │   ├── 10-api-a.yaml               # podinfo (backend opsiyonel, ConfigMap'ten)
+│   │   ├── 10-api-a.yaml               # podinfo (backend opsiyonel, ConfigMap'ten; Valkey önbelleği)
+│   │   ├── 15-account-api.yaml         # account-api (PostgreSQL), waypoint, AuthZ
 │   │   ├── 20-waypoint.yaml            # waypoint + seccomp ConfigMap
 │   │   ├── 30-internal-gateway.yaml    # ISTIO_MUTUAL gateway + AuthZ
 │   │   ├── 40-security.yaml            # STRICT mTLS, allow-nothing, L4/L7 AuthZ, egress gw AuthZ
 │   │   ├── 50-egress.yaml              # ServiceEntry → waypoint → egress gw → httpbin.org
+│   │   ├── 55-data-exit.yaml           # veri çıkışı: postgres/valkey Service → waypoint → egress → mgmt
 │   │   ├── 60-metrics-exit.yaml        # Prometheus -> istio-egressgateway -> mgmt (remote_write)
 │   │   └── cluster-b/                  # yalnızca cluster-b aktifken: api-a backend, api-b'ye egress
 │   ├── cluster-b/                      # cluster-b'nin kendisi (şimdilik kapalı): api-b, httpbin egress
 │   └── mgmt/
-│       ├── 00-namespaces.yaml          # istio-ingress, istio-egress (restricted)
+│       ├── 00-namespaces.yaml          # istio-ingress, istio-egress, data (restricted)
 │       ├── 10-metrics-entry.yaml       # mgmt girişi: Gateway + VS + AuthZ (yalnızca egress kimlikleri)
+│       ├── 20-data.yaml                # PostgreSQL (servis başına rol) + Valkey (ACL), ns data
+│       ├── 25-data-entry.yaml          # veri girişi: :5432 / :6379, port + kimlik bazlı AuthZ
 │       └── 40-security.yaml            # STRICT mTLS, mgmt egress varsayılan reddi
 ├── scripts/
 │   ├── setup.sh                # hepsini sırayla çalıştırır
@@ -612,6 +662,7 @@ service-mesh/
 │   ├── 03c-install-kyverno.sh  # Kyverno + politikalar + istisnalar (Istio'dan önce)
 │   ├── 04-install-istio.sh     # base, istiod, cni, ztunnel
 │   ├── 05-install-gateways.sh  # ingress / egress gateway'ler
+│   ├── 05b-create-data-secrets.sh  # veri parolaları (certs/data/) ve Secret'lar
 │   ├── 06-deploy-manifests.sh
 │   ├── 06b-deploy-edge.sh      # edge-net, edge-waf, edge-lb, loadgen (Docker)
 │   ├── 06c-deploy-branch.sh    # şube WAN'ı: branch-net, branch-fw, branch-terminal (Docker)
@@ -619,7 +670,8 @@ service-mesh/
 │   ├── 08-verify.sh            # uçtan uca testler (✔/✘ özeti)
 │   └── 99-destroy.sh           # --certs, --cache
 ├── services/
-│   └── web-bff/                # Go: web kanalının BFF'i (distroless, imzalı)
+│   ├── web-bff/                # Go: web kanalının BFF'i (distroless, imzalı)
+│   └── account-api/            # Go: hesapları PostgreSQL'den okuyan internal servis
 ├── tests/
 │   ├── zone-direct-path.yaml   # "tek kapı" negatif testi için geçici rota
 │   └── web-bypass-bff.yaml     # web gateway'in BFF'i atlayamadığını gösteren geçici rota
@@ -676,6 +728,7 @@ Bu yüzden:
 - `mgmt` adımında cluster başına Kiali/Grafana tek kopyaya indirildi; ancak mgmt cluster'ı eklendiği için kullanılabilir bellek ~6,7 GB'tan ~5,2 GB'a indi (`04-mgmt` ölçümü).
 - `policy` adımında Kyverno üç cluster'a kuruldu: kullanılabilir bellek ~5,2 GB'tan ~3,6 GB'a indi. Kyverno pod'ları cluster başına ~160 MB; asıl maliyet, Kyverno'nun CRD şemalarını tutan kube-apiserver (`05-policy` ölçümü).
 - `dmz-channels` adımında 3 yeni gateway, Web BFF ve waypoint eklendi: kullanılabilir bellek ~3,6 GB'tan ~3,2 GB'a indi (`06-dmz-channels` ölçümü).
+- `data` adımında PostgreSQL, Valkey, account-api, ratelimit ve iki waypoint eklendi: kullanılabilir bellek ~3,2 GB'tan ~3,0 GB'a indi (`07-data` ölçümü).
 - Ek tasarruf gerekirse: loadgen yalnızca izlerken açık tutulur (`kubectl --context kind-dmz -n loadgen scale deploy/loadgen --replicas=0`), uygulama kopyaları 1'e indirilir.
 
 ## Kurulum
@@ -692,6 +745,7 @@ bash scripts/03b-publish-images.sh
 bash scripts/03c-install-kyverno.sh   # Audit modu için: ... Audit
 bash scripts/04-install-istio.sh
 bash scripts/05-install-gateways.sh
+bash scripts/05b-create-data-secrets.sh
 bash scripts/06-deploy-manifests.sh
 bash scripts/06b-deploy-edge.sh
 bash scripts/06c-deploy-branch.sh
@@ -942,7 +996,7 @@ Her adım ayrı bir branch'te yapılır; her branch bir önceki biten branch'ten
 | 04 | `mgmt` | mgmt cluster'ı; merkezi Prometheus (`remote_write`, gateway üzerinden), tek Kiali, tek Grafana; cluster başına Kiali/Grafana kaldırılır | ✅ |
 | 05 | `policy` | Kyverno: `latest` tag, privileged pod, hostPath reddi; cosign ile imzalı image zorunluluğu | ✅ |
 | 06 | `dmz-channels` | Mobile GW, Partner GW ve şube kanalı (ayrı Istio gateway'ler), Web BFF; ingress host bazlı yönlendirme, internal'a egress üzerinden; kanal bazlı rate limit, CORS, güvenlik header'ları | ✅ |
-| 07 | `data` | mgmt'te PostgreSQL ve Redis; internal servislerden mgmt gateway üzerinden mTLS (TCP) erişim; servis başına DB kullanıcısı | ⏳ |
+| 07 | `data` | mgmt'te PostgreSQL ve Valkey (Redis uyumlu); internal servislerden mgmt gateway üzerinden mTLS (TCP) erişim; servis başına DB kullanıcısı; partner başına global rate limit | ✅ |
 | 08 | `token-exchange` | DMZ'de auth-service (access token → iç JWT), Keycloak mgmt'te (MFA, kısa ömürlü token, kanal client'ları); header'ları aktaran örnek mikroservis; ayrıntılar: [Planlanan: Kullanıcı kimliği yayılımı](#planlanan-kullanıcı-kimliği-yayılımı-token-exchange) | ⏳ |
 | 09 | `l7-policies` | Waypoint'te claim bazlı yetkilendirme (rol, kanal, `acr`) ve header kuralları; Redis ile kullanıcı ve partner bazlı global rate limit ve kota | ⏳ |
 | 10 | `logging` | mgmt'te Loki + Fluent Bit; access log'lara `x-request-id`, `zone`, `channel`; Kubernetes audit log | ⏳ |

@@ -304,7 +304,7 @@ BFF'in çıkışı, seçicisiz bir Service (`api-a.web-bff`, waypoint etiketli) 
 |----------|-----------|-------|
 | `allow-nothing` | ztunnel | Varsayılan reddet |
 | `web-bff-allow-web-gateway` | ztunnel (L4) | BFF'e yalnızca web gateway, yalnızca 8080 |
-| `waypoint-allow-bff` | ztunnel (L4) | Waypoint'e yalnızca BFF |
+| ~~`waypoint-allow-bff`~~ | – | **07'de kaldırıldı:** waypoint pod'u ambient'te olmadığı için L4 politikası etkisizdi; waypoint geneline yazılan ALLOW ise servis kısıtlarını genişletiyordu ([07-data.md, sorun #1](07-data.md#karşılaşılan-sorunlar-ve-çözümler)) |
 | `api-a-upstream-allow-bff` | waypoint (L7) | Çıkış servisini yalnızca BFF kullanabilir |
 
 ## Değişen dosyalar

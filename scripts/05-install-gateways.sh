@@ -62,6 +62,8 @@ install_ingress dmz branch-gateway --ns istio-branch --octet "$(channel_vip_octe
 install_egress dmz dmz-egressgateway
 
 for c in $(internal_clusters); do
-  install_ingress "$c" istio-ingressgateway
+  extra=()
+  [[ $c == mgmt ]] && extra=(-f "$V/ingress-gateway-mgmt.yaml")   # veri girişi portları (5432, 6379)
+  install_ingress "$c" istio-ingressgateway "${extra[@]}"
   install_egress "$c" istio-egressgateway
 done

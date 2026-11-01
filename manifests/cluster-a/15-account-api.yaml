@@ -1,0 +1,179 @@
+# account-api (services/account-api): hesapları PostgreSQL'den (mgmt) okur.
+#   internal ingress gw -> waypoint (account-api) -> account-api -> [postgres Service, waypoint] -> egress gw -> mgmt
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: account-api
+  namespace: account-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: account-api
+  namespace: account-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: account-api
+  template:
+    metadata:
+      labels:
+        app: account-api
+        version: v1
+    spec:
+      serviceAccountName: account-api
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: lab-registry:5000/lab/account-api:0.1.0   # build + imza: 03b-publish-images.sh
+          env:
+            - name: PGHOST
+              value: postgres.account-api.svc.cluster.local   # seçicisiz Service (55-data-exit.yaml)
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: corebank
+            - name: PGSSLMODE
+              value: disable   # taşıma şifrelemesi mesh mTLS'inde
+          envFrom:
+            - secretRef:
+                name: account-api-db   # PGUSER, PGPASSWORD (05b-create-data-secrets.sh)
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: account-api
+  namespace: account-api
+  labels:
+    istio.io/ingress-use-waypoint: "true"   # ingress gateway trafiği de waypoint'ten geçsin (L7 AuthZ)
+spec:
+  selector:
+    app: account-api
+  ports:
+    - name: http
+      port: 8080
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: waypoint-options
+  namespace: account-api
+data:
+  deployment: |
+    spec:
+      template:
+        spec:
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: waypoint
+  namespace: account-api
+  labels:
+    istio.io/waypoint-for: service
+spec:
+  gatewayClassName: istio-waypoint
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: waypoint-options
+  listeners:
+    - name: mesh
+      port: 15008
+      protocol: HBONE
+---
+# --- Yetkilendirme: varsayılan reddet ---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-nothing
+  namespace: account-api
+spec: {}
+---
+# Pod'lara L4'te yalnızca namespace'in waypoint'i
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: account-api-allow-waypoint
+  namespace: account-api
+spec:
+  selector:
+    matchLabels:
+      app: account-api
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/account-api/sa/waypoint
+---
+# Veritabanı çıkışını (postgres Service, waypoint) yalnızca account-api kullanabilir.
+# Not: politikalar Service'e bağlanır, waypoint'in (Gateway) tamamına değil. Aynı waypoint'teki ALLOW politikaları
+# birleşir (OR); waypoint geneline yazılan bir izin, servis bazlı kısıtları (ör. yalnızca GET) genişletirdi.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: postgres-allow-account-api
+  namespace: account-api
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: postgres
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/account-api/sa/account-api
+---
+# L7 (waypoint'te): account-api servisine yalnızca internal ingress gateway, yalnızca okuma (GET)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: account-api-allow-ingress
+  namespace: account-api
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: account-api
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/accounts", "/accounts/*"]

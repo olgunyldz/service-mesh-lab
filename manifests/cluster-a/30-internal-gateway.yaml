@@ -28,6 +28,15 @@ spec:
   gateways:
     - internal-gateway
   http:
+    # Hesap API'si (07 · data): /accounts* -> account-api (PostgreSQL'den okur)
+    - match:
+        - uri:
+            prefix: /accounts
+      route:
+        - destination:
+            host: account-api.account-api.svc.cluster.local
+            port:
+              number: 8080
     - route:
         - destination:
             host: api-a.api-a.svc.cluster.local

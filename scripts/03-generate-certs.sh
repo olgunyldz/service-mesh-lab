@@ -73,9 +73,10 @@ fi
 # gerçekte her partner'ın sertifikası kurumun partner PKI'ından (onboarding sırasında) verilir.
 #   acme   : izin listesinde (geçerli partner)
 #   globex : aynı CA'dan ama izin listesinde değil (gateway AuthZ'de 403)
+#   initech: izin listesinde, düşük global kotalı partner (07 · data, global rate limit testi)
 #   rogue  : başka bir CA'dan, CN=acme (edge'de TLS el sıkışması reddedilir)
 mkdir -p partner
-if [[ ! -f partner/acme.crt ]]; then
+if [[ ! -f partner/initech.crt ]]; then
   log "Partner CA ve partner istemci sertifikaları üretiliyor"
   openssl req -x509 -new -nodes -newkey rsa:2048 -sha256 -days 3650 \
     -keyout partner/ca-key.pem -out partner/ca.pem \
@@ -84,7 +85,7 @@ if [[ ! -f partner/acme.crt ]]; then
     -addext "keyUsage=critical,keyCertSign,cRLSign"
   printf 'basicConstraints=CA:false\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth\n' \
     > partner/client-ext.cnf
-  for p in acme globex; do
+  for p in acme globex initech; do
     openssl req -new -nodes -newkey rsa:2048 -sha256 \
       -keyout "partner/$p.key" -out "partner/$p.csr" -subj "/O=$p/CN=$p"
     openssl x509 -req -sha256 -days 397 -in "partner/$p.csr" \

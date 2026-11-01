@@ -1,0 +1,252 @@
+# Veri katmanı (mgmt, ns data): PostgreSQL (kalıcı) ve Valkey (önbellek + rate limit sayaçları, kalıcı değil).
+# Kimlik bilgileri: 05b-create-data-secrets.sh (postgres-admin, postgres-app-users, valkey-acl).
+# Erişim yalnızca mgmt ingress gateway üzerinden (25-data-entry.yaml); namespace'te varsayılan reddet.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: data
+data:
+  # İlk açılışta (boş veri dizini) bir kez çalışır. Servis başına rol, en az yetki:
+  #   account_api -> yalnızca accounts.accounts üzerinde SELECT; audit şemasına erişimi yok.
+  10-schema.sh: |
+    #!/bin/sh
+    set -e
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<EOSQL
+      REVOKE ALL ON SCHEMA public FROM PUBLIC;
+      REVOKE ALL ON DATABASE "$POSTGRES_DB" FROM PUBLIC;
+
+      CREATE ROLE account_api LOGIN PASSWORD '$ACCOUNT_API_PASSWORD' CONNECTION LIMIT 10;
+      GRANT CONNECT ON DATABASE "$POSTGRES_DB" TO account_api;
+
+      CREATE SCHEMA accounts;
+      CREATE TABLE accounts.accounts (
+        id       bigint PRIMARY KEY,
+        iban     text NOT NULL,
+        owner    text NOT NULL,
+        currency char(3) NOT NULL,
+        balance  numeric(18,2) NOT NULL
+      );
+      INSERT INTO accounts.accounts VALUES
+        (1, 'TR330006100519786457841326', 'Ayşe Yılmaz',  'TRY', 125430.50),
+        (2, 'TR320010009999901234567890', 'Mehmet Demir', 'TRY',   8920.00),
+        (3, 'TR190006400000112345678901', 'Acme Ltd.',    'USD',  45000.75),
+        (4, 'TR560006200000000123456789', 'Zeynep Kaya',  'EUR',   3150.20);
+      GRANT USAGE ON SCHEMA accounts TO account_api;
+      GRANT SELECT ON accounts.accounts TO account_api;
+
+      -- Başka bir servisin verisi: account_api erişememeli (08-verify testi)
+      CREATE SCHEMA audit;
+      CREATE TABLE audit.events (id bigserial PRIMARY KEY, at timestamptz DEFAULT now(), detail text);
+      INSERT INTO audit.events (detail) VALUES ('init');
+    EOSQL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: data
+spec:
+  selector:
+    app: postgres
+  ports:
+    - name: tcp-postgres
+      port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: data
+spec:
+  serviceName: postgres
+  replicas: 1   # gerçekte en az 3 (yedekli, otomatik failover: CloudNativePG / Patroni)
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70    # alpine image'ındaki postgres kullanıcısı
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: lab-registry:5000/lab/postgres:18.1-alpine
+          env:
+            - name: POSTGRES_DB
+              value: corebank
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          envFrom:
+            - secretRef:
+                name: postgres-admin        # POSTGRES_PASSWORD
+            - secretRef:
+                name: postgres-app-users    # ACCOUNT_API_PASSWORD (yalnızca init betiği kullanır)
+          ports:
+            - name: tcp-postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "corebank"]
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: init
+          configMap:
+            name: postgres-init
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey
+  namespace: data
+spec:
+  selector:
+    app: valkey
+  ports:
+    - name: tcp-valkey
+      port: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valkey
+  namespace: data
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: valkey
+  template:
+    metadata:
+      labels:
+        app: valkey
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999   # alpine image'ındaki valkey kullanıcısı
+        runAsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: valkey
+          image: lab-registry:5000/lab/valkey:9.0.0-alpine
+          # Kalıcılık yok (önbellek ve sayaçlar); kullanıcılar ve yetkiler ACL dosyasından
+          args: ["valkey-server", "--aclfile", "/acl/users.acl", "--save", "", "--appendonly", "no",
+                 "--maxmemory", "48mb", "--maxmemory-policy", "allkeys-lru"]
+          ports:
+            - name: tcp-valkey
+              containerPort: 6379
+          readinessProbe:
+            tcpSocket:
+              port: 6379
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 96Mi
+          volumeMounts:
+            - name: acl
+              mountPath: /acl
+              readOnly: true
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: acl
+          secret:
+            secretName: valkey-acl
+        - name: data
+          emptyDir: {}
+---
+# --- Yetkilendirme: yalnızca mgmt ingress gateway, yalnızca kendi portuna (ztunnel, L4) ---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-nothing
+  namespace: data
+spec: {}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: postgres-allow-ingress
+  namespace: data
+spec:
+  selector:
+    matchLabels:
+      app: postgres
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports: ["5432"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: valkey-allow-ingress
+  namespace: data
+spec:
+  selector:
+    matchLabels:
+      app: valkey
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports: ["6379"]
