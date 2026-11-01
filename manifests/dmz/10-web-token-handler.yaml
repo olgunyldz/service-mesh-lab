@@ -37,7 +37,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: handler
-          image: lab-registry:5000/lab/web-token-handler:0.1.0   # build + imza: 03b-publish-images.sh
+          image: lab-registry:5000/lab/web-token-handler:0.2.0   # build + imza: 03b-publish-images.sh
           env:
             - name: PUBLIC_URL   # tarayıcının gördüğü adres (lab'de edge 8443'te); redirect_uri bunun altında
               value: https://www.apps.example.local:8443

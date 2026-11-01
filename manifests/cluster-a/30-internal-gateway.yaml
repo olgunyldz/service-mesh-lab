@@ -29,10 +29,12 @@ spec:
   gateways:
     - internal-gateway
   http:
-    # Hesap API'si (07 · data): /accounts* -> account-api (PostgreSQL'den okur)
+    # Hesap API'si (07 · data): /accounts* ve /products (09b) -> account-api
     - match:
         - uri:
             prefix: /accounts
+        - uri:
+            prefix: /products
       route:
         - destination:
             host: account-api.account-api.svc.cluster.local

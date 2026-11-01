@@ -30,8 +30,9 @@ Giriş noktaları (host'ta `--resolve ...:8443:127.0.0.1` ve `certs/edge/ca.pem`
 | – | Kanallar: web (token handler, internal BFF, CORS, güvenlik header'ları), mobil (yalnızca `/mobile/v1/*`), partner (istemci sertifikası, izin listesi, kota 429); sahte `x-channel`/`x-partner-id` eziliyor; web gateway token handler'ı atlayıp internal'a çıkamıyor; DMZ'de BFF yok | ✅ |
 | – | Şube kanalı: şube WAN'ı → iç firewall → branch-gateway (cihaz sertifikası, kimlik `x-branch-device` ile arka uca); sertifikasız/yabancı CA reddi; şube ağından diğer kapılara ve internetten şube kanalına yol yok | ✅ |
 | 5 | Veri: account-api → PostgreSQL ve api-a → Valkey (mgmt), mesh üzerinden; servis başına kullanıcı (başka şema/yazma reddi, Valkey ACL); DMZ'den PostgreSQL'e yol yok; partner başına global kota (429) | ✅ |
-| – | Kimlik (IdP token exchange): her kanalda kimlik zorunlu (401); değiştirilmiş token, yanlış client/realm, başka partner'ın sertifikası, başka şubenin cihazı reddediliyor; iç JWT'yi Keycloak imzalıyor (≤ 2 dk, `channel`, `acr`, `sid`, kişisel veri yok); IdP'de kapatılan oturum 30 sn içinde reddediliyor; DMZ'de imza anahtarı yok; Keycloak yönetim konsolu internetten kapalı | ✅ |
+| – | Kimlik (IdP token exchange): her kanalda kimlik zorunlu (401); değiştirilmiş token, yanlış client/realm, başka partner'ın sertifikası, başka şubenin cihazı reddediliyor; iç JWT'yi Keycloak imzalıyor (≤ 2 dk, `channel`, `scope`, `sid`, `loa_map`, kişisel veri yok); IdP'de kapatılan oturum 30 sn içinde reddediliyor; DMZ'de imza anahtarı yok; Keycloak yönetim konsolu internetten kapalı | ✅ |
 | – | Web oturumu: tarayıcıda token yok, yalnızca `__Host-sid` (HttpOnly, Secure, SameSite=Strict); CSRF'siz POST 403; sahte cookie 401; logout sonrası 401; oturum deposu Valkey'de hash'li anahtarla, ayrı ACL kullanıcısıyla | ✅ |
+| – | L7 yetki: partner bazlı scope (acme yalnızca hesap okuma, initech yalnızca ürün kataloğu; Keycloak atanmamış scope'u vermiyor); waypoint'te scope / kanal / rol kuralları; BOLA (başka müşterinin hesabı 404); transfer için seviye 2 (OTP) ve RFC 9470 step-up (yalnızca OTP sorulur); şube gişe transferi | ✅ |
 | – | Edge: HTTP → HTTPS (301), HSTS, TLS 1.1 reddi, TLS 1.2/1.3 kabulü | ✅ |
 | – | Edge: WAF XSS ve SQL injection denemelerini engelliyor (403) | ✅ |
 | – | Edge: sahte `X-Forwarded-For` ve `x-user-jwt` içeri geçmiyor | ✅ |
@@ -49,7 +50,7 @@ Giriş noktaları (host'ta `--resolve ...:8443:127.0.0.1` ve `certs/edge/ca.pem`
 | – | Merkezi gözlemlenebilirlik: tek Kiali ve tek Grafana (mgmt), merkezi Prometheus'ta dmz ve cluster-a metrikleri, Kiali üç cluster'ı görüyor, mgmt girişi mesh dışına kapalı | ✅ |
 | – | Politika (Kyverno, Deny): `latest`/tag'siz image, privileged, hostNetwork, hostPath ve izinsiz registry reddediliyor; api-a'da lab registry dışı ve imzasız image reddediliyor, imzalı image digest'e sabitlenerek kabul ediliyor | ✅ |
 
-Adım adım doğrulama sonuçları: [docs/](docs/README.md). Araçların amacı ve muadilleri: [docs/tools.md](docs/tools.md).
+Adım adım doğrulama sonuçları: [docs/](docs/README.md). Prod hedefi ve gereksinimler: [docs/target-architecture.md](docs/target-architecture.md); pilotta karşılanma durumu ve farklar: [docs/pilot-architecture.md](docs/pilot-architecture.md). Araçların amacı ve muadilleri: [docs/tools.md](docs/tools.md).
 
 Kullanılan sürümler:
 
@@ -513,7 +514,9 @@ Her workload sertifikası `spiffe://corp.mesh/ns/<namespace>/sa/<serviceaccount>
 | cluster-b ingress gw | `dmz-egressgateway` + `istio-egressgateway` | L4/L7 | gateway Envoy |
 | api-a namespace'i (varsayılan) | hiçbiri (`allow-nothing`) | L4 | ztunnel |
 | api-a pod'ları | yalnızca `api-a/sa/waypoint` | L4 | ztunnel |
-| api-a servisi | yalnızca `istio-ingressgateway` ve `channel-bff/web-bff`, `GET`/`POST`, iç JWT | L7 | waypoint |
+| api-a servisi | yalnızca `istio-ingressgateway` ve `channel-bff/web-bff`, iç JWT; müşteri ve personel kanalları `GET`/`POST`, partner yalnızca `info:read` ile `GET` | L7 | waypoint |
+| account-api servisi | aynı kaynaklar ve iç JWT; `GET /accounts*` → `accounts:read`; `GET /products` → `products:read`; `POST /accounts/{id}/transfers` → `transfers:write` + kanal web/mobil (seviye 2 serviste) ya da kanal şube + gişe/operasyon rolü | L7 | waypoint (+ BOLA ve seviye uygulamada) |
+| partner istekleri | yol + metot ↔ scope (`accounts:read`, `products:read`, `info:read`); listede olmayan reddedilir | L7 | auth-service (DMZ) |
 | cluster-a egress gw | yalnızca `api-a/sa/waypoint` | L4/L7 | gateway Envoy |
 | api-b servisi | yalnızca `istio-ingressgateway`, `GET`/`POST` | L7 | waypoint |
 | cluster-a/b mesh geneli | – | mTLS `STRICT` | ztunnel |
@@ -714,6 +717,8 @@ service-mesh/
 │   ├── README.md               # adımların listesi
 │   ├── 00-setup.md             # her adımın dokümanı: yapılanlar, değişen dosyalar,
 │   ├── 01-kiali.md             #   sorunlar, doğrulama
+│   ├── target-architecture.md    # kurumsal hedef mimari: gereksinimler, akışlar, lab sapmaları
+│   ├── pilot-architecture.md     # pilot (bu lab): gereksinim bazında durum ve fark nedenleri
 │   └── security-gap-analysis.md  # 13 katmanlı güvenlik boşluk analizi
 └── certs/                      # üretilen sertifikalar (gitignore)
 ```
@@ -890,7 +895,7 @@ sequenceDiagram
     AS->>KC: introspection (aktif mi, oturum açık mı, azp, rol)
     Note over AS: iss = kanalın realm'i · azp = kanalın client'ı<br/>(partner: = sertifika CN) · rol · şube cihazı
     AS->>KC: token exchange (RFC 8693, kanalın exchange client'ı, audience internal-apis)
-    KC-->>AS: iç JWT (realm imzalı, 2 dk, channel, acr, sid, roles)
+    KC-->>AS: iç JWT (realm imzalı, 2 dk, channel, scope, sid, roles, loa_map)
     AS-->>G: 200 + x-user-jwt (30 sn önbellekli)
     Note over G: Authorization silinir
     G->>E: mTLS · x-user-jwt
@@ -919,7 +924,7 @@ sequenceDiagram
 - **Kısa ömür, iptal.** İç JWT 2 dk yaşar. Introspection, IdP'de kapatılan oturumu yakalar (önbellek nedeniyle en geç 30 sn).
 - **Kişisel veri yok.** İç JWT'de ad ve e-posta yok; servisler kullanıcıyı `sub` ile tanır.
 - **Header aktarımı uygulamanın işi.** Mesh header'ları kendiliğinden kopyalamaz; web-bff `x-user-jwt`'yi upstream çağrılarına taşır.
-- **Consent:** first-party (web, mobil, şube) ve partner client credentials akışlarında yok. Üçüncü taraf açık bankacılık rızası: `09c · consent`.
+- **Consent:** first-party (web, mobil, şube) ve partner client credentials akışlarında yok. Üçüncü taraf açık bankacılık rızası: `09f · consent`.
 
 ## Hedef katman modeli (planlanan)
 
@@ -992,8 +997,11 @@ Her adım ayrı bir branch'te yapılır; her branch bir önceki biten branch'ten
 | 07 | `data` | mgmt'te PostgreSQL ve Valkey (Redis uyumlu); internal servislerden mgmt gateway üzerinden mTLS (TCP) erişim; servis başına DB kullanıcısı; partner başına global rate limit | ✅ |
 | 08 | `token-exchange` | DMZ'de auth-service (access token → iç JWT), Keycloak mgmt'te (kanal client'ları, kısa ömürlü token, brute force, personel OTP); internal'da iç JWT zorunlu; ayrıntılar: [Kullanıcı kimliği yayılımı](#kullanıcı-kimliği-yayılımı-token-exchange) | ✅ |
 | 09a | `idp-token-exchange` | İç JWT'yi Keycloak üretir (introspection + RFC 8693 token exchange, kanal başına exchange client'ı, 2 dk, `channel`/`acr`/`sid`, kişisel veri yok); DMZ'de imza anahtarı yok; lightweight dış token'lar; web'de token handler (cookie oturumu, CSRF, refresh rotation), BFF internal'da (`channel-bff`); ayrıntılar: [docs/09a-idp-token-exchange.md](docs/09a-idp-token-exchange.md) | ✅ |
-| 09b | `l7-policies` | Waypoint'te claim bazlı yetkilendirme: API scope'ları (`accounts:read`, `transfers:write`), `acr` seviyeleri ve step-up, kanal kuralları, nesne seviyesinde yetki (BOLA); örnek yazma ucu (transfer); kullanıcı bazlı global kota | ⏳ |
-| 09c | `consent` | Açık bankacılık rızası: üçüncü taraf client (ör. `fintech-x`) için authorization code akışında müşteri rızası; rızaları tutan `consent-service` (Go, PostgreSQL): hesap, izin, süre; consent ID'nin iç JWT'ye taşınması, account-api'nin yalnızca rızadaki hesapları döndürmesi; rızanın geri alınması. First-party (web, mobil, şube) ve partner client credentials akışlarında consent yok (bkz. `08`) | ⏳ |
+| 09b | `l7-policies` | Claim bazlı yetki: client başına API scope'ları (partner bazlı yetki: acme hesap okuma, initech ürün kataloğu), waypoint'te scope / kanal / rol kuralları, doğrulama seviyeleri (parola / OTP) ve RFC 9470 step-up, nesne seviyesinde yetki (BOLA), örnek transfer ucu; exchange'de scope yükseltme koruması; ayrıntılar: [docs/09b-l7-policies.md](docs/09b-l7-policies.md) | ✅ |
+| 09c | `mobile-binding` | Mobil cihaz bağlama: ilk kurulumda cihaz anahtar çifti, public key'in IdP'ye kaydı (device-registry), cihaz anahtarıyla giriş; DPoP (token cihaza bağlı, mobile-gateway'de proof ve `jti` tekrar kontrolü, `dmz-redis`); app attestation ve minimum sürüm kontrolü (simülasyon); iç JWT'de `device_id`; `mobile-bff` (channel-bff). Hedef: CH-02..04, GW-04, GW-06, IAM-04, INT-07, AC-04 | ⏳ |
+| 09d | `tx-signing` | Seviye 3 doğrulama: cihaz anahtarıyla işlem imzası ve dinamik bağlama (tutar + alıcı imzada), `tx-signing-svc` (security namespace'i); transfer seviye 3 ister. Hedef: CH-08, IAM-08 | ⏳ |
+| 09e | `branch-controls` | `branch-bff`; personel rolleri (gişe, yetkili, müdür) ve limit üstü işlemde dört göz onayı (talep eden ≠ onaylayan, aynı şube); mesai saati kontrolü; personel erişiminin şubeye daraltılması. Hedef: CH-13, INT-07 | ⏳ |
+| 09f | `consent` | Açık bankacılık rızası: üçüncü taraf client (ör. `fintech-x`) için authorization code akışında müşteri rızası; rızaları tutan `consent-service` (Go, PostgreSQL): hesap, izin, süre; consent ID'nin iç JWT'ye taşınması, account-api'nin yalnızca rızadaki hesapları döndürmesi; rızanın geri alınması. First-party (web, mobil, şube) ve partner client credentials akışlarında consent yok (bkz. `08`) | ⏳ |
 | 10 | `logging` | mgmt'te Loki + Fluent Bit; access log'lara `x-request-id`, `zone`, `channel`; Kubernetes audit log | ⏳ |
 | 11 | `tracing` | mgmt'te Grafana Tempo + OpenTelemetry; gateway, waypoint ve servis span'leri; Grafana'da log ↔ trace geçişi | ⏳ |
 | 12 | `traffic-mgmt` | Canary (v1/v2 ağırlıklı yönlendirme), fault injection (gecikme/hata), circuit breaker, outlier detection; etkiler Kiali ve Tempo'da izlenir | ⏳ |

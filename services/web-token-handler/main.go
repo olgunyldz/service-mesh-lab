@@ -4,7 +4,7 @@
 //
 //	/healthz        -> kendi sağlık kontrolü
 //	/               -> küçük statik sayfa (lab'de web-static yerine)
-//	/auth/login     -> Keycloak'a yönlendirir (Authorization Code + PKCE, state, nonce)
+//	/auth/login     -> Keycloak'a yönlendirir (Authorization Code + PKCE, state, nonce); ?acr=2: step-up (OTP)
 //	/auth/callback  -> code'u sunucu tarafında token'a çevirir (gizli client), oturumu açar, cookie'yi yazar
 //	/auth/session   -> oturum durumu ve CSRF token'ı (SPA için)
 //	/auth/logout    -> IdP oturumunu da kapatır (POST, CSRF)
@@ -146,6 +146,10 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		"nonce":                 {nonce},
 		"code_challenge":        {base64.RawURLEncoding.EncodeToString(challenge[:])},
 		"code_challenge_method": {"S256"},
+	}
+	// Step-up (09b): daha yüksek doğrulama seviyesi. IdP'de açık oturum varsa yalnızca eksik adım (OTP) sorulur.
+	if r.URL.Query().Get("acr") == "2" {
+		q.Set("acr_values", "2")
 	}
 	// state'i bu tarayıcıya bağlar (login CSRF): callback'teki state cookie'dekiyle aynı olmalı.
 	// Lax: IdP'den dönüş üst seviye bir yönlendirme; Strict'te cookie gelmeyebilir.

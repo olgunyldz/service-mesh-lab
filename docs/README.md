@@ -65,10 +65,13 @@ Ana [README](../README.md) ortamın güncel ve toplu halini anlatır. Bu klasör
 | 07 | [Veri katmanı (PostgreSQL, Valkey, global rate limit)](07-data.md) | `data` | ✅ Tamamlandı (107/107 test) |
 | 08 | [Kimlik ve token exchange (Keycloak, auth-service, iç JWT)](08-token-exchange.md) | `token-exchange` | ✅ Tamamlandı (131/131 test) |
 | 09a | [IdP tabanlı token exchange, web oturumu ve internal BFF](09a-idp-token-exchange.md) | `idp-token-exchange` | ✅ Tamamlandı (150/150 test) |
+| 09b | [L7 yetki: scope, step-up, BOLA, partner bazlı yetki](09b-l7-policies.md) | `l7-policies` | ✅ Tamamlandı (173/173 test) |
 
 ## Diğer dokümanlar
 
 | Doküman | İçerik |
 |---------|--------|
+| [Kurumsal hedef mimari](target-architecture.md) | Prod hedefi: zone ve cluster yapısı, isimlendirme, kanal bazında istek yolları ve login/servis sequence diyagramları, gereksinimler (CH, EDGE, GW, IAM, INT, CORE, DATA, CARD, OUT, NET, SOC), kabul kriterleri, lab sapmaları |
+| [Pilot mimari](pilot-architecture.md) | Hedef mimarinin pilottaki (bu lab) karşılığı: zone eşlemesi, isimlendirme, kanal istek yolları ve sequence diyagramları, her gereksinimin pilottaki durumu ve fark nedenleri, pilot bulguları |
 | [Araçlar ve kütüphaneler](tools.md) | Kullanılan her aracın amacı, bizdeki kullanımı ve muadilleri; lab için faydalı yardımcı araçlar |
 | [Güvenlik boşluk analizi](security-gap-analysis.md) | 13 katmanlı derinlemesine savunma gereksinimlerinin mevcut ortamla karşılaştırması ve eylem planı |
