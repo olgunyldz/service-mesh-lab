@@ -33,6 +33,7 @@ Giriş noktaları (host'ta `--resolve ...:8443:127.0.0.1` ve `certs/edge/ca.pem`
 | – | Kimlik (IdP token exchange): her kanalda kimlik zorunlu (401); değiştirilmiş token, yanlış client/realm, başka partner'ın sertifikası, başka şubenin cihazı reddediliyor; iç JWT'yi Keycloak imzalıyor (≤ 2 dk, `channel`, `scope`, `sid`, `loa_map`, kişisel veri yok); IdP'de kapatılan oturum 30 sn içinde reddediliyor; DMZ'de imza anahtarı yok; Keycloak yönetim konsolu internetten kapalı | ✅ |
 | – | Web oturumu: tarayıcıda token yok, yalnızca `__Host-sid` (HttpOnly, Secure, SameSite=Strict); CSRF'siz POST 403; sahte cookie 401; logout sonrası 401; oturum deposu Valkey'de hash'li anahtarla, ayrı ACL kullanıcısıyla | ✅ |
 | – | L7 yetki: partner bazlı scope (acme yalnızca hesap okuma, initech yalnızca ürün kataloğu; Keycloak atanmamış scope'u vermiyor); waypoint'te scope / kanal / rol kuralları; BOLA (başka müşterinin hesabı 404); transfer için seviye 2 (OTP) ve RFC 9470 step-up (yalnızca OTP sorulur); şube gişe transferi | ✅ |
+| – | Mobil cihaz bağlama: cihaz anahtarıyla DPoP kanıtı her istekte (Bearer, kanıtsız, tekrarlanan, başka adres için kanıt 401); çalınan token başka cihazdan 403 (AC-04); attestation (kanıtsız / bütünlüğü bozuk 403, eski sürüm 426); cihaz kaydı yalnızca seviye 2 ile; silinen cihaz 30 sn içinde 403; tüm mobil trafik mobile-bff'ten | ✅ |
 | – | Edge: HTTP → HTTPS (301), HSTS, TLS 1.1 reddi, TLS 1.2/1.3 kabulü | ✅ |
 | – | Edge: WAF XSS ve SQL injection denemelerini engelliyor (403) | ✅ |
 | – | Edge: sahte `X-Forwarded-For` ve `x-user-jwt` içeri geçmiyor | ✅ |
@@ -74,7 +75,7 @@ Kullanılan sürümler:
 | PostgreSQL | 18.1 (alpine) | mgmt, tek replika StatefulSet |
 | Valkey | 9.0.0 (alpine) | mgmt; Redis uyumlu, BSD lisanslı |
 | Envoy ratelimit | `f4e76690` | DMZ; partner başına global kota |
-| Go servisleri | Go 1.27.1, distroless static | `web-token-handler`, `auth-service` (yalnızca stdlib), `web-bff`, `account-api` (pgx v5.7.6) |
+| Go servisleri | Go 1.27.1, distroless static | `web-token-handler`, `auth-service`, `web-bff`, `mobile-bff`, `mobile-sim` (yalnızca stdlib), `account-api`, `device-registry` (pgx v5.7.6) |
 | Keycloak | 26.8.0 (optimize image) | mgmt; standard token exchange (RFC 8693), introspection, lightweight access token |
 
 ---
@@ -268,7 +269,7 @@ DMZ'ye dört kanaldan girilir (`06 · dmz-channels`). İnternet kanalları edge'
 | Kanal | Host | DMZ'deki yol | Kanala özel kurallar |
 |-------|------|--------------|----------------------|
 | web | `www.apps.example.local` | web gateway (`dmz-ingressgateway`) → **web-token-handler** (cookie → iç JWT) → waypoint → egress → internal **web-bff** | Tarayıcıda token yok (oturum cookie'si, CSRF), CORS (yalnızca kendi origin'imiz), güvenlik header'ları, 50 rps |
-| mobile | `mobile-api.apps.example.local` | `mobile-gateway` → egress | Yalnızca `/mobile/v1/*` (önek kaldırılır), 30 rps |
+| mobile | `mobile-api.apps.example.local` | `mobile-gateway` (ext_authz: DPoP, attestation, kayıtlı cihaz) → egress → internal **mobile-bff** | Yalnızca `/mobile/v1/*` (önek kaldırılır), `Authorization: DPoP`, 30 rps |
 | partner | `partner-api.apps.example.local` | edge'de istemci sertifikası → `partner-gateway` → egress | Partner CA sertifikası zorunlu, izin listesi (`acme`), yalnızca `/partner/v1/*`, 5 rps |
 | branch (şube) | `branch-api.corp.internal` | **edge yok:** şube WAN'ı → `branch-fw` (TCP 443) → `branch-gateway` → egress | Branch CA cihaz sertifikası (gateway'de), `x-branch-device`, yalnızca `/branch/v1/*`, 20 rps |
 
@@ -998,7 +999,7 @@ Her adım ayrı bir branch'te yapılır; her branch bir önceki biten branch'ten
 | 08 | `token-exchange` | DMZ'de auth-service (access token → iç JWT), Keycloak mgmt'te (kanal client'ları, kısa ömürlü token, brute force, personel OTP); internal'da iç JWT zorunlu; ayrıntılar: [Kullanıcı kimliği yayılımı](#kullanıcı-kimliği-yayılımı-token-exchange) | ✅ |
 | 09a | `idp-token-exchange` | İç JWT'yi Keycloak üretir (introspection + RFC 8693 token exchange, kanal başına exchange client'ı, 2 dk, `channel`/`acr`/`sid`, kişisel veri yok); DMZ'de imza anahtarı yok; lightweight dış token'lar; web'de token handler (cookie oturumu, CSRF, refresh rotation), BFF internal'da (`channel-bff`); ayrıntılar: [docs/09a-idp-token-exchange.md](docs/09a-idp-token-exchange.md) | ✅ |
 | 09b | `l7-policies` | Claim bazlı yetki: client başına API scope'ları (partner bazlı yetki: acme hesap okuma, initech ürün kataloğu), waypoint'te scope / kanal / rol kuralları, doğrulama seviyeleri (parola / OTP) ve RFC 9470 step-up, nesne seviyesinde yetki (BOLA), örnek transfer ucu; exchange'de scope yükseltme koruması; ayrıntılar: [docs/09b-l7-policies.md](docs/09b-l7-policies.md) | ✅ |
-| 09c | `mobile-binding` | Mobil cihaz bağlama: ilk kurulumda cihaz anahtar çifti, public key'in IdP'ye kaydı (device-registry), cihaz anahtarıyla giriş; DPoP (token cihaza bağlı, mobile-gateway'de proof ve `jti` tekrar kontrolü, `dmz-redis`); app attestation ve minimum sürüm kontrolü (simülasyon); iç JWT'de `device_id`; `mobile-bff` (channel-bff). Hedef: CH-02..04, GW-04, GW-06, IAM-04, INT-07, AC-04 | ⏳ |
+| 09c | `mobile-binding` | Mobil cihaz bağlama: cihaz anahtar çifti ve `device-registry` (mgmt); DPoP (RFC 9449, her istekte kanıt, `jti` tekrar kontrolü Valkey'de); kayıtlı cihaz kontrolü DMZ'de (Keycloak DPoP + token exchange birlikte çalışmıyor); app attestation ve minimum sürüm (simülasyon); `mobile-bff`; `mobile-sim` (uygulama simülatörü). Ayrıntılar: [docs/09c-mobile-binding.md](docs/09c-mobile-binding.md) | ✅ |
 | 09d | `tx-signing` | Seviye 3 doğrulama: cihaz anahtarıyla işlem imzası ve dinamik bağlama (tutar + alıcı imzada), `tx-signing-svc` (security namespace'i); transfer seviye 3 ister. Hedef: CH-08, IAM-08 | ⏳ |
 | 09e | `branch-controls` | `branch-bff`; personel rolleri (gişe, yetkili, müdür) ve limit üstü işlemde dört göz onayı (talep eden ≠ onaylayan, aynı şube); mesai saati kontrolü; personel erişiminin şubeye daraltılması. Hedef: CH-13, INT-07 | ⏳ |
 | 09f | `consent` | Açık bankacılık rızası: üçüncü taraf client (ör. `fintech-x`) için authorization code akışında müşteri rızası; rızaları tutan `consent-service` (Go, PostgreSQL): hesap, izin, süre; consent ID'nin iç JWT'ye taşınması, account-api'nin yalnızca rızadaki hesapları döndürmesi; rızanın geri alınması. First-party (web, mobil, şube) ve partner client credentials akışlarında consent yok (bkz. `08`) | ⏳ |

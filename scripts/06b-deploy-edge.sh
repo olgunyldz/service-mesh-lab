@@ -17,6 +17,7 @@ log "edge-waf (ModSecurity + OWASP CRS, mod=$WAF_MODE) -> web $(dmz_vip web) · 
 docker rm -f edge-waf >/dev/null 2>&1 || true
 # BACKEND bir nginx değişkeni: hedef, Host'a göre waf-channels.conf.template'teki map'ten gelir
 # CORS_*: image her yanıta Allow-Headers, her 403'e "Allow-Origin: *" ekliyor; CORS kararı yalnızca web gateway'inde
+# ALLOWED_METHODS: CRS varsayılanı GET HEAD POST OPTIONS; DELETE mobil cihaz kaydını silmek için (09c)
 docker run -d --name edge-waf --restart unless-stopped --network "$EDGE_NETWORK" \
   -e 'BACKEND=https://$dmz_gateway' \
   -e DMZ_WEB_GW="$(dmz_vip web)" -e DMZ_MOBILE_GW="$(dmz_vip mobile)" -e DMZ_PARTNER_GW="$(dmz_vip partner)" \
@@ -26,6 +27,7 @@ docker run -d --name edge-waf --restart unless-stopped --network "$EDGE_NETWORK"
   -e PORT=8080 \
   -e MODSEC_RULE_ENGINE="$WAF_MODE" \
   -e BLOCKING_PARANOIA=1 \
+  -e 'ALLOWED_METHODS=GET HEAD POST OPTIONS DELETE' \
   -e REAL_IP_HEADER=X-Forwarded-For \
   -e SET_REAL_IP_FROM="$EDGE_SUBNET" \
   -e NGINX_X_FORWARDED_PROTO=https \
@@ -49,20 +51,20 @@ docker run -d --name edge-lb --restart unless-stopped --network "$EDGE_NETWORK" 
   "$HAPROXY_IMAGE" >/dev/null
 
 # İnternet istemcisi simülasyonu: Kiali grafiklerinin canlı görünmesi için sürekli trafik.
-# Her saniye: web (GET /, POST /api/api/echo, BFF dashboard), mobil (GET /mobile/v1/accounts), partner (acme sertifikasıyla
-# GET /partner/v1/); her 10 turda bir web'de /api/status/500. cluster-b aktifse api-b'ye de (cluster-b/21-api-b-route.yaml).
-# Mobil ve partner token'ları Keycloak'tan (sso host'u, edge üzerinden), 4 dakikada bir yenilenir (ömür 5 dk): mobil için
-# direct grant (lab istisnası), partner için client credentials. Web'de token yok (09a): loadgen tarayıcı gibi giriş yapar
-# (/auth/login -> Keycloak giriş formu -> callback) ve oturum cookie'siyle gezer; oturum düşerse yeniden giriş yapar.
+# Her saniye: web (GET /, POST /api/api/echo, BFF dashboard), partner (acme sertifikasıyla GET /partner/v1/); her 10 turda
+# bir web'de /api/status/500. cluster-b aktifse api-b'ye de (cluster-b/21-api-b-route.yaml).
+# Partner token'ı Keycloak'tan (client credentials), 200 sn'de bir yenilenir (ömür 5 dk). Web'de token yok (09a): loadgen
+# tarayıcı gibi giriş yapar (/auth/login -> Keycloak giriş formu -> callback) ve oturum cookie'siyle gezer.
+# Mobil trafik ayrı container'da (mobile-loadgen, aşağıda): mobil kanal cihaz anahtarı, DPoP ve attestation ister (09c).
 # Web yolları token handler'da /api önekini kaybeder: /api/api/echo -> web-bff /api/echo -> api-a (podinfo) /api/echo.
 extra=""
 has_cluster cluster-b && extra="api-b.${APPS_DOMAIN}"
 pwf() { cat "$ROOT_DIR/certs/data/$1.pw" 2>/dev/null || true; }
 
-log "loadgen (web, mobile, partner${extra:+, $extra})"
+log "loadgen (web, partner${extra:+, $extra})"
 docker rm -f loadgen >/dev/null 2>&1 || true
 docker run -d --name loadgen --restart unless-stopped --network "$EDGE_NETWORK" \
-  -e WEB="$WEB_HOST" -e MOBILE="$MOBILE_HOST" -e PARTNER="$PARTNER_HOST" -e SSO="$SSO_HOST" -e EXTRA="$extra" \
+  -e WEB="$WEB_HOST" -e PARTNER="$PARTNER_HOST" -e SSO="$SSO_HOST" -e EXTRA="$extra" \
   -e CUSTOMER_PW="$(pwf kc-customer-ayse)" -e ACME_SECRET="$(pwf kc-partner-acme)" \
   -v "$ROOT_DIR/certs/edge/ca.pem:/ca.pem:ro" \
   -v "$ROOT_DIR/certs/partner/acme.crt:/partner.crt:ro" \
@@ -85,8 +87,7 @@ docker run -d --name loadgen --restart unless-stopped --network "$EDGE_NETWORK" 
     }
     i=0; last=0
     while true; do
-      now=$(date +%s); if [ $((now - last)) -ge 200 ] || [ -z "$TM" ]; then last=$now
-        TM=$(token customers -d grant_type=password -d client_id=mobile-app -d username=ayse --data-urlencode "password=$CUSTOMER_PW")
+      now=$(date +%s); if [ $((now - last)) -ge 200 ] || [ -z "$TP" ]; then last=$now
         TP=$(token partners -d grant_type=client_credentials -d client_id=acme --data-urlencode "client_secret=$ACME_SECRET")
       fi
       if [ $((i % 60)) -eq 0 ] && [ "$(c -o /dev/null -w "%{http_code}" "https://$WEB:8443/auth/session")" != 200 ]; then
@@ -96,12 +97,23 @@ docker run -d --name loadgen --restart unless-stopped --network "$EDGE_NETWORK" 
       c -o /dev/null "https://$WEB:8443/"
       c -o /dev/null -H "X-CSRF-Token: $CSRF" -X POST -d ping "https://$WEB:8443/api/api/echo"
       c -o /dev/null "https://$WEB:8443/api/bff/v1/dashboard"
-      req "$MOBILE" -H "Authorization: Bearer $TM" "https://$MOBILE:8443/mobile/v1/accounts"
       req "$PARTNER" -H "Authorization: Bearer $TP" --cert /partner.crt --key /partner.key "https://$PARTNER:8443/partner/v1/"
-      for h in $EXTRA; do req "$h" -H "Authorization: Bearer $TM" "https://$h:8443/"; done
+      for h in $EXTRA; do req "$h" "https://$h:8443/"; done
       [ $((i % 10)) -eq 0 ] && c -o /dev/null "https://$WEB:8443/api/status/500"
       sleep 1
     done' >/dev/null
+
+# Mobil uygulama simülasyonu (09c · mobile-binding): mobile-sim (services/mobile-sim, imzalı image) gerçek bir uygulama
+# gibi giriş yapar (Authorization Code + PKCE, seviye 2: OTP), cihaz anahtarını kaydeder ve saniyede bir hesapları sorar;
+# her istek DPoP kanıtı ve attestation taşır. Testlerin kullanıcısıyla (ayse) OTP çakışmasın diye ayrı kullanıcı (mehmet).
+log "mobile-loadgen (mobile-sim, kullanıcı mehmet)"
+docker rm -f mobile-loadgen >/dev/null 2>&1 || true
+docker pull -q "localhost:$LAB_REGISTRY_HOST_PORT/lab/mobile-sim:$(echo "$LAB_BUILDS" | tr ' ' '\n' | sed -n 's/^mobile-sim://p')" >/dev/null
+MSYS_NO_PATHCONV=1 docker run -d --name mobile-loadgen --restart unless-stopped --network "$EDGE_NETWORK" \
+  --tmpfs /state:uid=65532,gid=65532 \
+  -e USERNAME=mehmet -e PASSWORD="$(pwf kc-customer-mehmet)" -e OTP_SECRET="$(pwf kc-customer-mehmet-otp)" \
+  -v "$ROOT_DIR/certs/edge/ca.pem:/ca.pem:ro" -v "$ROOT_DIR/certs/attest/attest.key:/attest/attest.key:ro" \
+  "localhost:$LAB_REGISTRY_HOST_PORT/lab/mobile-sim:$(echo "$LAB_BUILDS" | tr ' ' '\n' | sed -n 's/^mobile-sim://p')" loop >/dev/null
 
 log "Edge hazır mı?"
 for i in $(seq 1 30); do

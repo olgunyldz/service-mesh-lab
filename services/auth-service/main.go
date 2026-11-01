@@ -8,14 +8,21 @@
 //
 // İç JWT'yi Keycloak imzalar (kanal başına exchange client'ı: ömür 2 dk, channel claim'i); DMZ'de imza anahtarı yoktur.
 // Dış token DMZ'de kalır (gateway Authorization'ı siler); internal servisler yalnızca iç JWT'yi görür.
+//
+// Mobil kanal (09c · mobile-binding): token cihaza bağlıdır. Her istekte DPoP kanıtı (RFC 9449, cihaz anahtarıyla
+// imzalı, bu istek ve bu token için, tek kullanımlık), uygulama bütünlük kanıtı (attestation, minimum sürüm) ve
+// kanıtı imzalayan anahtarın bu kullanıcıya kayıtlı bir cihaza ait olduğu (device-registry) doğrulanır.
 // Yalnızca standart kütüphane kullanır.
 package main
 
 import (
+	"crypto/ecdsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -66,6 +73,13 @@ type config struct {
 	idpBase     string            // Keycloak'ın mesh içi adresi: http://keycloak.auth.svc.cluster.local/realms/
 	internalAud string            // iç JWT'nin audience'ı
 	secrets     map[string]string // exchange client -> secret
+
+	// mobil kanal (09c)
+	mobileOrigin string           // DPoP htu öneki: istemcinin gördüğü adres (https://mobile-api...:8443)
+	registryURL  string           // device-registry (mgmt, DMZ egress üzerinden)
+	appID        string           // beklenen uygulama kimliği
+	minVersion   string           // minimum uygulama sürümü (GW-06)
+	attestPub    *ecdsa.PublicKey // attestation sağlayıcısının açık anahtarı
 }
 
 func main() {
@@ -82,7 +96,18 @@ func main() {
 		}
 		cfg.secrets[r.exchange] = s
 	}
-	a := &authz{cfg: cfg, client: &http.Client{Timeout: 2 * time.Second}, cache: map[string]cached{}, inflight: map[string]*call{}} // iki çağrı, ext_authz süresi 4 sn
+	cfg.mobileOrigin = env("MOBILE_ORIGIN", "https://mobile-api.apps.example.local:8443")
+	cfg.registryURL = env("REGISTRY_URL", "http://device-registry.auth.svc.cluster.local")
+	cfg.appID = env("APP_ID", "tr.com.example.bank")
+	cfg.minVersion = env("MIN_APP_VERSION", "3.0.0")
+	pub, err := loadECPublicKey(env("ATTEST_PUBLIC_KEY", "/attest/attest.pub"))
+	if err != nil {
+		log.Fatalf("attestation açık anahtarı: %v", err)
+	}
+	cfg.attestPub = pub
+	a := &authz{cfg: cfg, client: &http.Client{Timeout: 2 * time.Second}, cache: map[string]cached{}, inflight: map[string]*call{}, // iki çağrı, ext_authz süresi 4 sn
+		devices: map[string]time.Time{},
+		store:   &valkey{addr: env("VALKEY_ADDR", "valkey.auth.svc.cluster.local:6379"), user: os.Getenv("VALKEY_USER"), pass: os.Getenv("VALKEY_PASSWORD")}}
 	go a.evictLoop()
 
 	srv := &http.Server{
@@ -98,8 +123,8 @@ func main() {
 }
 
 type cached struct {
-	jwt string
-	exp time.Time
+	jwt, sub string
+	exp      time.Time
 }
 
 type authz struct {
@@ -108,6 +133,8 @@ type authz struct {
 	mu       sync.Mutex
 	cache    map[string]cached // dış token (+ kanal bağlamı) -> iç JWT
 	inflight map[string]*call  // aynı anahtar için süren IdP çağrısı (singleflight)
+	devices  map[string]time.Time // kayıtlı cihaz önbelleği: sub|jkt -> geçerlilik sonu
+	store    *valkey              // DPoP jti tekrar deposu (mgmt Valkey, dpop:* öneki)
 }
 
 // call: aynı token'la eşzamanlı gelen istekler tek introspection + exchange'i bekler (IdP'ye yük patlaması olmaz)
@@ -163,18 +190,45 @@ func (a *authz) authorize(r *http.Request, channel string) (string, string, erro
 	if !ok {
 		return "", "", deny(http.StatusForbidden, "unknown_channel", channel)
 	}
-	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	scheme := "Bearer "
+	if channel == "mobile" {
+		scheme = "DPoP " // RFC 9449: mobil token cihaza bağlı, Bearer kabul edilmez
+	}
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), scheme)
 	if !ok || token == "" {
-		return "", "", deny(http.StatusUnauthorized, "missing_token", "Authorization: Bearer yok")
+		return "", "", deny(http.StatusUnauthorized, "missing_token", "Authorization: "+scheme+"yok")
 	}
 	partnerID := r.Header.Get("x-partner-id")                    // edge, sertifika CN'inden yazar
 	device := subjectCN(r.Header.Get("x-forwarded-client-cert")) // branch-gateway, cihaz sertifikasından
 
+	// Mobil: her istekte (önbellekten önce) cihaz kanıtları; device = kanıtı imzalayan anahtarın parmak izi (jkt)
+	if channel == "mobile" {
+		jkt, err := a.mobileProofs(r, token)
+		if err != nil {
+			return "", "", err
+		}
+		device = jkt
+	}
+	jwt, sub, err := a.cachedResolve(r, rule, channel, token, partnerID, device)
+	if err != nil || channel != "mobile" {
+		return jwt, sub, err
+	}
+	// Cihaz kaydı: kayıt isteği hariç (POST /mobile/v1/devices; mobile-bff seviye 2 ister), anahtar bu kullanıcıya kayıtlı olmalı
+	if !(r.Method == http.MethodPost && r.URL.Path == "/mobile/v1/devices") {
+		if err := a.deviceRegistered(sub, device); err != nil {
+			return "", "", err
+		}
+	}
+	return jwt, sub, nil
+}
+
+// cachedResolve: önbellek -> süren çağrı (singleflight) -> introspection + exchange
+func (a *authz) cachedResolve(r *http.Request, rule channelRule, channel, token, partnerID, device string) (string, string, error) {
 	ck := cacheKey(token, channel, partnerID, device, r.Method, partnerScope(r.Method, r.URL.Path))
 	a.mu.Lock()
 	if c, hit := a.cache[ck]; hit && time.Now().Before(c.exp) {
 		a.mu.Unlock()
-		return c.jwt, "(önbellek)", nil
+		return c.jwt, c.sub, nil
 	}
 	if f, ok := a.inflight[ck]; ok {
 		a.mu.Unlock()
@@ -278,10 +332,63 @@ func (a *authz) resolve(rule channelRule, channel, token, partnerID, device, met
 	}
 	a.mu.Lock()
 	if len(a.cache) < 10000 {
-		a.cache[ck] = cached{jwt, exp}
+		a.cache[ck] = cached{jwt, sub, exp}
 	}
 	a.mu.Unlock()
 	return jwt, sub, nil
+}
+
+// mobileProofs: DPoP kanıtı, tekrar kontrolü ve attestation; dönüş: cihaz anahtarının parmak izi (jkt)
+func (a *authz) mobileProofs(r *http.Request, token string) (string, error) {
+	proof, err := verifyDPoP(r.Header.Get("DPoP"), r.Method, a.cfg.mobileOrigin+r.URL.Path, token, 60*time.Second)
+	if err != nil {
+		return "", deny(http.StatusUnauthorized, "invalid_dpop_proof", err.Error())
+	}
+	// Tek kullanımlık: aynı kanıt (jti) ikinci kez kabul edilmez. Depoya erişilemezse istek reddedilir (fail-closed).
+	_, fresh, err := a.store.do("SET", "dpop:"+proof.jti, "1", "NX", "EX", "120")
+	if err != nil {
+		return "", fmt.Errorf("DPoP jti deposu: %w", err)
+	}
+	if !fresh {
+		return "", deny(http.StatusUnauthorized, "dpop_replay", "jti="+proof.jti)
+	}
+	att, err := verifyAttestation(r.Header.Get("x-app-attestation"), a.cfg.attestPub, a.cfg.appID, a.cfg.minVersion, proof.jkt)
+	if err != nil {
+		return "", deny(http.StatusForbidden, "attestation_failed", err.Error())
+	}
+	if versionLess(att.version, a.cfg.minVersion) {
+		return "", deny(http.StatusUpgradeRequired, "app_update_required", att.version+" < "+a.cfg.minVersion)
+	}
+	return proof.jkt, nil
+}
+
+// deviceRegistered: anahtar (jkt) bu kullanıcıya kayıtlı etkin bir cihaza mı ait (device-registry, 30 sn önbellek)
+func (a *authz) deviceRegistered(sub, jkt string) error {
+	key := sub + "|" + jkt
+	a.mu.Lock()
+	until, ok := a.devices[key]
+	a.mu.Unlock()
+	if ok && time.Now().Before(until) {
+		return nil
+	}
+	resp, err := a.client.Get(a.cfg.registryURL + "/v1/devices/lookup?" + url.Values{"sub": {sub}, "jkt": {jkt}}.Encode())
+	if err != nil {
+		return fmt.Errorf("device-registry: %w", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	switch resp.StatusCode {
+	case http.StatusOK:
+		a.mu.Lock()
+		if len(a.devices) < 10000 {
+			a.devices[key] = time.Now().Add(cacheTTL)
+		}
+		a.mu.Unlock()
+		return nil
+	case http.StatusNotFound:
+		return deny(http.StatusForbidden, "device_not_registered", "jkt="+jkt)
+	}
+	return fmt.Errorf("device-registry: HTTP %d", resp.StatusCode)
 }
 
 // introspect: RFC 7662; kanalın exchange client'ının kimliğiyle
@@ -351,6 +458,11 @@ func (a *authz) evictLoop() {
 		for k, c := range a.cache {
 			if time.Now().After(c.exp) {
 				delete(a.cache, k)
+			}
+		}
+		for k, until := range a.devices {
+			if time.Now().After(until) {
+				delete(a.devices, k)
 			}
 		}
 		a.mu.Unlock()
@@ -429,6 +541,26 @@ func subjectCN(xfcc string) string {
 func cacheKey(parts ...string) string {
 	h := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(h[:])
+}
+
+func loadECPublicKey(path string) (*ecdsa.PublicKey, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	blk, _ := pem.Decode(b)
+	if blk == nil {
+		return nil, errors.New("PEM değil")
+	}
+	k, err := x509.ParsePKIXPublicKey(blk.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	pub, ok := k.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, errors.New("EC anahtarı değil")
+	}
+	return pub, nil
 }
 
 func env(k, def string) string {

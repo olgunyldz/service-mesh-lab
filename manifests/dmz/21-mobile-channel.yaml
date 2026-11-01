@@ -37,7 +37,7 @@ spec:
             prefix: /mobile/v1/
       rewrite:
         uri: /
-        authority: api-a.apps.example.local   # zone'lar arası iç ad
+        authority: mobile-bff.apps.example.local   # zone'lar arası iç ad: mobil trafik internal'da mobile-bff'e (09c)
       headers:
         request:
           set:
@@ -45,6 +45,7 @@ spec:
           remove:
             - x-partner-id
             - authorization   # dış access token DMZ'de kalır; içeri yalnızca x-user-jwt (08)
+            # DPoP ve x-app-attestation içeri geçer: mobile-bff cihaz kaydında kanıtları kendisi de doğrular (09c)
       route:
         - destination:
             host: dmz-egressgateway.istio-egress.svc.cluster.local
@@ -68,4 +69,4 @@ spec:
         - operation:
             hosts: ["mobile-api.apps.example.local", "mobile-api.apps.example.local:*"]
             paths: ["/mobile/v1/*"]
-            methods: [GET, POST]
+            methods: [GET, POST, DELETE]   # DELETE: cihaz kaydını silme (09c)

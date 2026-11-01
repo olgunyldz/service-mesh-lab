@@ -1,0 +1,94 @@
+# device-registry çıkışı (09c · mobile-binding). __NET_PREFIX__ scriptte doldurulur.
+#   mobile-bff --> [device-registry Service, waypoint (channel-bff)] --mTLS--> istio-egressgateway :443
+#   --mTLS (SNI devices.mgmt.internal)--> mgmt ingress gw --> iam/device-registry
+apiVersion: v1
+kind: Service
+metadata:
+  name: device-registry
+  namespace: channel-bff
+spec:
+  ports:
+    - name: http
+      port: 80
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: device-registry-via-egress
+  namespace: channel-bff
+spec:
+  hosts:
+    - device-registry.channel-bff.svc.cluster.local
+  http:
+    - rewrite:
+        authority: devices.mgmt.internal   # egress gateway ve mgmt girişi bu adla yönlendirir
+      route:
+        - destination:
+            host: istio-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443
+      timeout: 5s
+---
+# Çıkışı yalnızca mobile-bff kullanabilir (waypoint, L7)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: device-registry-allow-mobile-bff
+  namespace: channel-bff
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: device-registry
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/channel-bff/sa/mobile-bff
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: mgmt-devices
+  namespace: istio-egress
+spec:
+  hosts:
+    - devices.mgmt.internal
+  location: MESH_EXTERNAL
+  resolution: STATIC
+  ports:
+    - number: 443
+      name: http-mtls
+      protocol: HTTP
+  endpoints:
+    - address: __NET_PREFIX__.203.10   # mgmt istio-ingressgateway (MetalLB)
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: mgmt-devices
+  namespace: istio-egress
+spec:
+  host: devices.mgmt.internal
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      sni: devices.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: egress-devices
+  namespace: istio-egress
+spec:
+  hosts:
+    - devices.mgmt.internal
+  gateways:
+    - egress
+  http:
+    - route:
+        - destination:
+            host: devices.mgmt.internal
+            port:
+              number: 443

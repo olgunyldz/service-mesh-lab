@@ -43,6 +43,10 @@ data:
       CREATE ROLE keycloak LOGIN PASSWORD '$KEYCLOAK_DB_PASSWORD' CONNECTION LIMIT 30;
       CREATE DATABASE keycloak OWNER keycloak;
 
+      -- device-registry (09c · mobile-binding): mobil cihaz kayıtları; kendi veritabanı ve sahibi
+      CREATE ROLE device_registry LOGIN PASSWORD '$DEVICE_REGISTRY_PASSWORD' CONNECTION LIMIT 10;
+      CREATE DATABASE devices OWNER device_registry;
+
       -- Başka bir servisin verisi: account_api erişememeli (08-verify testi)
       CREATE SCHEMA audit;
       CREATE TABLE audit.events (id bigserial PRIMARY KEY, at timestamptz DEFAULT now(), detail text);
@@ -97,7 +101,7 @@ spec:
             - secretRef:
                 name: postgres-admin        # POSTGRES_PASSWORD
             - secretRef:
-                name: postgres-app-users    # ACCOUNT_API_PASSWORD, KEYCLOAK_DB_PASSWORD (yalnızca init betiği kullanır)
+                name: postgres-app-users    # ACCOUNT_API_PASSWORD, KEYCLOAK_DB_PASSWORD, DEVICE_REGISTRY_PASSWORD (yalnızca init betiği)
           ports:
             - name: tcp-postgres
               containerPort: 5432
@@ -239,11 +243,12 @@ spec:
       to:
         - operation:
             ports: ["5432"]
-    # Keycloak (mgmt içi, ns iam): kendi veritabanına
+    # Keycloak ve device-registry (mgmt içi, ns iam): kendi veritabanlarına
     - from:
         - source:
             principals:
               - corp.mesh/ns/iam/sa/keycloak
+              - corp.mesh/ns/iam/sa/device-registry
       to:
         - operation:
             ports: ["5432"]

@@ -2,7 +2,7 @@
 source "$(dirname "$0")/lib.sh"
 
 # Edge container'ları (Kubernetes dışında) ve edge ağı
-for name in loadgen edge-lb edge-waf branch-terminal branch-fw; do
+for name in loadgen mobile-loadgen mobile-sim edge-lb edge-waf branch-terminal branch-fw; do
   if [[ -n "$(docker ps -aq --filter "name=^${name}$")" ]]; then
     log "Siliniyor: $name"
     docker rm -f "$name" >/dev/null

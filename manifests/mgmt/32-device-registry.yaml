@@ -1,0 +1,170 @@
+# device-registry (services/device-registry, 09c · mobile-binding): mobil cihaz kayıtları, kimlik tarafında (ns iam).
+#   DMZ auth-service  --(dmz-egress, mTLS, SNI devices.mgmt.internal)--> mgmt ingress --> device-registry  (yalnızca sorgu)
+#   mobile-bff        --(cluster-a egress, mTLS)-------------------------> mgmt ingress --> device-registry  (kayıt, liste, silme)
+#   device-registry   --> data/postgres (kendi veritabanı: devices)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: device-registry
+  namespace: iam
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: device-registry
+  namespace: iam
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: device-registry
+  template:
+    metadata:
+      labels:
+        app: device-registry
+        version: v1
+    spec:
+      serviceAccountName: device-registry
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: registry
+          image: lab-registry:5000/lab/device-registry:0.1.0   # build + imza: 03b-publish-images.sh
+          env:
+            - name: PGHOST
+              value: postgres.data.svc.cluster.local
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: devices
+            - name: PGSSLMODE
+              value: disable   # taşıma şifrelemesi mesh mTLS'inde (ztunnel)
+          envFrom:
+            - secretRef:
+                name: device-registry-db   # PGUSER, PGPASSWORD (05b-create-data-secrets.sh)
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: device-registry
+  namespace: iam
+spec:
+  selector:
+    app: device-registry
+  ports:
+    - name: http
+      port: 8080
+---
+# Pod'a yalnızca mgmt ingress gateway (ztunnel, L4); uç ve metot kuralları girişte (aşağıda)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: device-registry-allow-ingress
+  namespace: iam
+spec:
+  selector:
+    matchLabels:
+      app: device-registry
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports: ["8080"]
+---
+# --- mgmt girişi ---
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: devices-entry
+  namespace: istio-ingress
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 443
+        name: https-devices
+        protocol: HTTPS
+      tls:
+        mode: ISTIO_MUTUAL
+      hosts:
+        - devices.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: devices
+  namespace: istio-ingress
+spec:
+  hosts:
+    - devices.mgmt.internal
+  gateways:
+    - devices-entry
+  http:
+    - match:
+        - uri:
+            prefix: /v1/devices
+      route:
+        - destination:
+            host: device-registry.iam.svc.cluster.local
+            port:
+              number: 8080
+---
+# DMZ yalnızca "bu anahtar bu kullanıcıya kayıtlı mı?" sorabilir; kayıt, liste ve silme yalnızca internal'dan (mobile-bff,
+# cluster-a egress kimliği). Cihaz kaydı DMZ ele geçirilse bile DMZ'den eklenemez.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-devices
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-egress/sa/dmz-egressgateway
+      to:
+        - operation:
+            hosts: ["devices.mgmt.internal"]
+            methods: ["GET"]
+            paths: ["/v1/devices/lookup"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-egress/sa/istio-egressgateway
+      to:
+        - operation:
+            hosts: ["devices.mgmt.internal"]
+            methods: ["GET", "POST", "DELETE"]
+            paths: ["/v1/devices", "/v1/devices/*"]

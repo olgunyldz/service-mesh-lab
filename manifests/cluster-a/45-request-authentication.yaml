@@ -135,3 +135,36 @@ spec:
         - name: x-user-jwt
       forwardOriginalToken: true
       spaceDelimitedClaims: ["scope"]   # "accounts:read transfers:write" -> liste (AuthZ'de tek tek eşleşir; 09b)
+---
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: internal-jwt-mobile-bff
+  namespace: channel-bff
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: mobile-bff
+  jwtRules:
+    - issuer: https://sso.apps.example.local:8443/realms/customers
+      audiences: ["internal-apis"]
+      jwks: '__IDP_JWKS_customers__'
+      fromHeaders:
+        - name: x-user-jwt
+      forwardOriginalToken: true
+      spaceDelimitedClaims: ["scope"]   # "accounts:read transfers:write" -> liste (AuthZ'de tek tek eşleşir; 09b)
+    - issuer: https://sso.apps.example.local:8443/realms/partners
+      audiences: ["internal-apis"]
+      jwks: '__IDP_JWKS_partners__'
+      fromHeaders:
+        - name: x-user-jwt
+      forwardOriginalToken: true
+      spaceDelimitedClaims: ["scope"]   # "accounts:read transfers:write" -> liste (AuthZ'de tek tek eşleşir; 09b)
+    - issuer: https://sso.apps.example.local:8443/realms/staff
+      audiences: ["internal-apis"]
+      jwks: '__IDP_JWKS_staff__'
+      fromHeaders:
+        - name: x-user-jwt
+      forwardOriginalToken: true
+      spaceDelimitedClaims: ["scope"]   # "accounts:read transfers:write" -> liste (AuthZ'de tek tek eşleşir; 09b)

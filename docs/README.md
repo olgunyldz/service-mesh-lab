@@ -66,6 +66,7 @@ Ana [README](../README.md) ortamın güncel ve toplu halini anlatır. Bu klasör
 | 08 | [Kimlik ve token exchange (Keycloak, auth-service, iç JWT)](08-token-exchange.md) | `token-exchange` | ✅ Tamamlandı (131/131 test) |
 | 09a | [IdP tabanlı token exchange, web oturumu ve internal BFF](09a-idp-token-exchange.md) | `idp-token-exchange` | ✅ Tamamlandı (150/150 test) |
 | 09b | [L7 yetki: scope, step-up, BOLA, partner bazlı yetki](09b-l7-policies.md) | `l7-policies` | ✅ Tamamlandı (173/173 test) |
+| 09c | [Mobil cihaz bağlama: DPoP, attestation, device-registry, mobile-bff](09c-mobile-binding.md) | `mobile-binding` | ✅ Tamamlandı (191/191 test) |
 
 ## Diğer dokümanlar
 

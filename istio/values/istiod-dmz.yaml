@@ -10,7 +10,8 @@ meshConfig:
         port: 8080
         timeout: 4s                # introspection + token exchange: iki IdP çağrısı (önbellekte değilse)
         failOpen: false            # auth-service erişilemezse istek reddedilir
-        includeRequestHeadersInCheck: [authorization, x-partner-id, x-forwarded-client-cert, x-request-id]
+        # dpop, x-app-attestation: mobil cihaz kanıtları (09c)
+        includeRequestHeadersInCheck: [authorization, x-partner-id, x-forwarded-client-cert, x-request-id, dpop, x-app-attestation]
         includeAdditionalHeadersInCheck:
           x-auth-channel: mobile
         headersToUpstreamOnAllow: [x-user-jwt]

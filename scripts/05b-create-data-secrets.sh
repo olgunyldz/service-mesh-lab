@@ -21,7 +21,7 @@ log "Veri secret'ları"
 # mgmt: PostgreSQL yöneticisi ve uygulama kullanıcıları (init betiği rolleri bu parolalarla oluşturur)
 secret mgmt data postgres-admin --from-literal=POSTGRES_PASSWORD="$(pw postgres-admin)"
 secret mgmt data postgres-app-users --from-literal=ACCOUNT_API_PASSWORD="$(pw pg-account-api)" \
-  --from-literal=KEYCLOAK_DB_PASSWORD="$(pw pg-keycloak)"
+  --from-literal=KEYCLOAK_DB_PASSWORD="$(pw pg-keycloak)" --from-literal=DEVICE_REGISTRY_PASSWORD="$(pw pg-device-registry)"
 
 # mgmt: Valkey ACL. default kullanıcı kapalı; her istemci yalnızca kendi anahtar önekinde, tehlikeli komutlar yok
 acl=$(cat <<EOF
@@ -30,6 +30,7 @@ user admin on >$(pw valkey-admin) ~* &* +@all
 user api_a on >$(pw valkey-api-a) ~cache:api-a:* ~api-a-* resetchannels -@all +@read +@write +@keyspace +ping +hello +auth -@dangerous
 user ratelimit on >$(pw valkey-ratelimit) ~rl:* resetchannels -@all +@read +@write +@keyspace +@transaction +ping +hello +auth -@dangerous
 user web_session on >$(pw valkey-web-session) ~sess:* resetchannels -@all +get +set +del +ping +hello +auth
+user dpop on >$(pw valkey-dpop) ~dpop:* resetchannels -@all +set +ping +hello +auth
 EOF
 )
 secret mgmt data valkey-acl --from-literal=users.acl="$acl"
@@ -65,6 +66,8 @@ for f in "$ROOT_DIR"/infra/keycloak/realm-*.json; do
       -e "s|__AUTH_BRANCH_SECRET__|$(pw kc-auth-branch)|g" \
       -e "s|__CUSTOMER_PASSWORD__|$(pw kc-customer-ayse)|g" \
       -e "s|__CUSTOMER_OTP_SECRET__|$(pw kc-customer-ayse-otp)|g" \
+      -e "s|__CUSTOMER2_PASSWORD__|$(pw kc-customer-mehmet)|g" \
+      -e "s|__CUSTOMER2_OTP_SECRET__|$(pw kc-customer-mehmet-otp)|g" \
       -e "s|__STAFF_PASSWORD__|$(pw kc-staff-teller01)|g" \
       -e "s|__PARTNER_ACME_SECRET__|$(pw kc-partner-acme)|g" \
       -e "s|__PARTNER_INITECH_SECRET__|$(pw kc-partner-initech)|g" \
@@ -79,6 +82,15 @@ secret dmz auth auth-exchange-clients --from-literal=AUTH_WEB_SECRET="$(pw kc-au
   --from-literal=AUTH_MOBILE_SECRET="$(pw kc-auth-mobile)" --from-literal=AUTH_PARTNER_SECRET="$(pw kc-auth-partner)" \
   --from-literal=AUTH_BRANCH_SECRET="$(pw kc-auth-branch)"
 # dmz: web-token-handler -> Keycloak (web-app gizli client'ı) ve oturum deposu (mgmt Valkey, web_session kullanıcısı)
+# --- Mobil cihaz bağlama (09c · mobile-binding) ---
+# mgmt: device-registry -> kendi veritabanı (devices)
+secret mgmt iam device-registry-db --from-literal=PGUSER=device_registry --from-literal=PGPASSWORD="$(pw pg-device-registry)"
+# dmz: auth-service -> DPoP jti tekrar deposu (mgmt Valkey, dpop kullanıcısı yalnızca dpop:* anahtarları, yalnızca SET)
+secret dmz auth auth-dpop-store --from-literal=VALKEY_USER=dpop --from-literal=VALKEY_PASSWORD="$(pw valkey-dpop)"
+# dmz ve cluster-a: attestation sağlayıcısının açık anahtarı (özel anahtar yalnızca sağlayıcıda; lab'de mobile-sim)
+secret dmz auth attest-public --from-file=attest.pub="$ROOT_DIR/certs/attest/attest.pub"
+secret cluster-a channel-bff attest-public --from-file=attest.pub="$ROOT_DIR/certs/attest/attest.pub"
+
 secret dmz edge-web web-token-handler --from-literal=CLIENT_SECRET="$(pw kc-web-app)" \
   --from-literal=VALKEY_USER=web_session --from-literal=VALKEY_PASSWORD="$(pw valkey-web-session)"
 

@@ -333,6 +333,31 @@
         "customer"
       ],
       "id": "a75e0000-0000-4000-8000-000000000001"
+    },
+    {
+      "username": "mehmet",
+      "id": "e3e70000-0000-4000-8000-000000000002",
+      "enabled": true,
+      "email": "mehmet@example.com",
+      "emailVerified": true,
+      "firstName": "Mehmet",
+      "lastName": "Demir",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "__CUSTOMER2_PASSWORD__",
+          "temporary": false
+        },
+        {
+          "type": "otp",
+          "userLabel": "lab",
+          "secretData": "{\"value\": \"__CUSTOMER2_OTP_SECRET__\"}",
+          "credentialData": "{\"subType\": \"totp\", \"digits\": 6, \"counter\": 0, \"period\": 30, \"algorithm\": \"HmacSHA1\"}"
+        }
+      ],
+      "realmRoles": [
+        "customer"
+      ]
     }
   ],
   "scopeMappings": [

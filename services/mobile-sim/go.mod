@@ -1,0 +1,3 @@
+module github.com/olgunyldz/service-mesh-lab/services/mobile-sim
+
+go 1.27

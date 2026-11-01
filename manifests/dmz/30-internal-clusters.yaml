@@ -99,6 +99,7 @@ spec:
   hosts:
     - api-a.apps.example.local
     - web-bff.apps.example.local   # web kanalının BFF'i (internal, 09a); token handler'dan gelir
+    - mobile-bff.apps.example.local   # mobil kanalın BFF'i (internal, 09c); mobile-gateway'den gelir
   gateways:
     - zone-exit
   http:
@@ -298,6 +299,77 @@ spec:
             principals:
               - corp.mesh/ns/ratelimit/sa/waypoint
               - corp.mesh/ns/edge-web/sa/waypoint
+              - corp.mesh/ns/auth/sa/waypoint   # DPoP jti tekrar deposu (09c)
       to:
         - operation:
             ports: ["16379"]
+---
+# --- Cihaz kayıtları (09c · mobile-binding): auth-service -> mgmt device-registry, yalnızca sorgu ---
+#   auth waypoint --mTLS--> dmz-egressgateway :443 --mTLS (SNI devices.mgmt.internal)--> mgmt ingress gw
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: mgmt-devices
+  namespace: istio-egress
+spec:
+  hosts:
+    - devices.mgmt.internal
+  location: MESH_EXTERNAL
+  resolution: STATIC
+  ports:
+    - number: 443
+      name: http-mtls
+      protocol: HTTP
+  endpoints:
+    - address: __NET_PREFIX__.203.10
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: mgmt-devices
+  namespace: istio-egress
+spec:
+  host: devices.mgmt.internal
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      sni: devices.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: zone-exit-devices
+  namespace: istio-egress
+spec:
+  hosts:
+    - devices.mgmt.internal
+  gateways:
+    - zone-exit
+  http:
+    - route:
+        - destination:
+            host: devices.mgmt.internal
+            port:
+              number: 443
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-devices-exit
+  namespace: istio-egress
+spec:
+  selector:
+    matchLabels:
+      istio: dmz-egressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/auth/sa/waypoint
+      to:
+        - operation:
+            hosts: ["devices.mgmt.internal"]
+            ports: ["443"]
+            methods: ["GET"]
+            paths: ["/v1/devices/lookup"]

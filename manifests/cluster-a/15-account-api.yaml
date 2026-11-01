@@ -156,14 +156,14 @@ spec:
             principals:
               - corp.mesh/ns/account-api/sa/account-api
 ---
-# L7 (waypoint'te, 09b · l7-policies): account-api'ye yalnızca internal ingress gateway ve web-bff, geçerli iç JWT ile.
-# Her kural ayrı bir izin (OR); her kuralda kimlik + JWT + işlem + claim koşulları birlikte (AND):
-#   1. hesap okuma        GET /accounts*                 scope accounts:read
-#   2. ürün kataloğu      GET /products                  scope products:read (partner yetkisi örneği)
-#   3. müşteri transferi  POST /accounts/{id}/transfers  scope transfers:write, kanal web/mobil; doğrulama seviyesi 2
-#                                                        (step-up) uygulamada: Keycloak exchange acr'yi taşımıyor, seviye
-#                                                        IdP imzalı loa_map claim'inde (JSON) ve waypoint onu okuyamıyor
-#   4. şube transferi     POST /accounts/{id}/transfers  scope transfers:write, kanal branch, rol gişe/operasyon
+# L7 (waypoint'te, 09b · l7-policies, 09c · mobile-binding): account-api'ye her kanal yalnızca kendi kapısından:
+#   web -> web-bff, mobil -> mobile-bff, partner ve şube -> internal ingress gateway. Her kural ayrı bir izin (OR);
+#   her kuralda kimlik + iç JWT + işlem + claim koşulları birlikte (AND):
+#   hesap okuma       GET /accounts*                 scope accounts:read
+#   ürün kataloğu     GET /products                  partner, scope products:read
+#   transfer          POST /accounts/{id}/transfers  scope transfers:write; şubede ayrıca gişe/operasyon rolü.
+#                     Web/mobilde doğrulama seviyesi 2 (step-up) uygulamada: Keycloak exchange acr'yi taşımıyor,
+#                     seviye IdP imzalı loa_map claim'inde (JSON) ve waypoint onu okuyamıyor
 # Partner için yazma kuralı yok. Hesabın kime ait olduğu (BOLA) uygulamada kontrol edilir.
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -180,7 +180,6 @@ spec:
     - from:
         - source:
             principals:
-              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
               - corp.mesh/ns/channel-bff/sa/web-bff
             requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
                                 "https://sso.apps.example.local:8443/realms/partners/*",
@@ -190,13 +189,46 @@ spec:
             methods: ["GET"]
             paths: ["/accounts", "/accounts/*"]
       when:
+        - key: request.auth.claims[channel]
+          values: ["web"]
+        - key: request.auth.claims[scope]
+          values: ["accounts:read"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/channel-bff/sa/mobile-bff
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
+                                "https://sso.apps.example.local:8443/realms/partners/*",
+                                "https://sso.apps.example.local:8443/realms/staff/*"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/accounts", "/accounts/*"]
+      when:
+        - key: request.auth.claims[channel]
+          values: ["mobile"]
         - key: request.auth.claims[scope]
           values: ["accounts:read"]
     - from:
         - source:
             principals:
               - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
-              - corp.mesh/ns/channel-bff/sa/web-bff
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
+                                "https://sso.apps.example.local:8443/realms/partners/*",
+                                "https://sso.apps.example.local:8443/realms/staff/*"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/accounts", "/accounts/*"]
+      when:
+        - key: request.auth.claims[channel]
+          values: ["partner", "branch"]
+        - key: request.auth.claims[scope]
+          values: ["accounts:read"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
             requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
                                 "https://sso.apps.example.local:8443/realms/partners/*",
                                 "https://sso.apps.example.local:8443/realms/staff/*"]
@@ -205,12 +237,13 @@ spec:
             methods: ["GET"]
             paths: ["/products"]
       when:
+        - key: request.auth.claims[channel]
+          values: ["partner"]
         - key: request.auth.claims[scope]
           values: ["products:read"]
     - from:
         - source:
             principals:
-              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
               - corp.mesh/ns/channel-bff/sa/web-bff
             requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
                                 "https://sso.apps.example.local:8443/realms/partners/*",
@@ -220,15 +253,30 @@ spec:
             methods: ["POST"]
             paths: ["/accounts/{*}/transfers"]
       when:
+        - key: request.auth.claims[channel]
+          values: ["web"]
         - key: request.auth.claims[scope]
           values: ["transfers:write"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/channel-bff/sa/mobile-bff
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
+                                "https://sso.apps.example.local:8443/realms/partners/*",
+                                "https://sso.apps.example.local:8443/realms/staff/*"]
+      to:
+        - operation:
+            methods: ["POST"]
+            paths: ["/accounts/{*}/transfers"]
+      when:
         - key: request.auth.claims[channel]
-          values: ["web", "mobile"]
+          values: ["mobile"]
+        - key: request.auth.claims[scope]
+          values: ["transfers:write"]
     - from:
         - source:
             principals:
               - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
-              - corp.mesh/ns/channel-bff/sa/web-bff
             requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
                                 "https://sso.apps.example.local:8443/realms/partners/*",
                                 "https://sso.apps.example.local:8443/realms/staff/*"]
@@ -237,9 +285,9 @@ spec:
             methods: ["POST"]
             paths: ["/accounts/{*}/transfers"]
       when:
-        - key: request.auth.claims[scope]
-          values: ["transfers:write"]
         - key: request.auth.claims[channel]
           values: ["branch"]
+        - key: request.auth.claims[scope]
+          values: ["transfers:write"]
         - key: request.auth.claims[roles]
           values: ["teller", "operations"]
