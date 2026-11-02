@@ -41,7 +41,14 @@ kc_logout() {  # kc_logout <realm> <form argümanları...>: IdP oturumunu kapat�
     "https://$SSO_HOST:8443/realms/$realm/protocol/openid-connect/logout" "$@"
 }
 staff_token() {  # staff_token [kullanıcı] [cihaz]: personel; şube ağından, cihaz sertifikasıyla, şube gateway'inin /sso/ yolu üzerinden
-  local user=${1:-teller01} dev=${2:-$BRANCH_DEVICE}
+  local user=${1:-teller01} dev=${2:-$BRANCH_DEVICE} t i
+  for i in 1 2 3; do   # Keycloak yük altında yavaşsa boş dönebiliyor
+    t=$(staff_token_once "$user" "$dev"); [[ -n $t ]] && break; sleep 3
+  done
+  echo "$t"
+}
+staff_token_once() {
+  local user=$1 dev=$2
   MSYS_NO_PATHCONV=1 docker run --rm --network "$BRANCH_NETWORK" -v "$ROOT_DIR/certs/branch:/b:ro" "$LOADGEN_IMAGE" sh -c \
     "curl -s --max-time 15 --cacert /b/ca.pem --cert /b/$dev.crt --key /b/$dev.key \
        --resolve $BRANCH_HOST:443:\$(getent hosts branch-fw | cut -d' ' -f1) \
@@ -567,7 +574,7 @@ check "Step-up sonrası bile başka müşterinin hesabından transfer (404, BOLA
 check "Şube (gişe rolü) transfer kabul (202)" "202" \
   "$(branch device "-o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '$TRX' https://$BRANCH_HOST/branch/v1/accounts/2/transfers")"
 check "account-api transferi kullanıcı ve seviyeyle logluyor" "TRANSFER kabul" \
-  "$(kubectl --context "$(ctx cluster-a)" -n account-api logs deploy/account-api --tail=30 2>/dev/null)"
+  "$(kubectl --context "$(ctx cluster-a)" -n account-api logs deploy/account-api --since=5m 2>/dev/null | grep "TRANSFER kabul")"
 
 log "11) Mobil cihaz bağlama: DPoP, attestation, kayıtlı cihaz, mobile-bff"
 otp_fresh
@@ -649,7 +656,7 @@ check "Veritabanı da talep eden = onaylayan kaydını reddediyor (CHECK kısıt
 check "account-api onay kaydını silemiyor (yalnızca ekleme ve karar güncellemesi)" "permission denied" \
   "$(pg account_api pg-account-api "delete from accounts.transfer_approvals where id=$AID2")"
 check "account-api onayı talep eden ve onaylayanla logluyor" "TRANSFER onaylandı" \
-  "$(kubectl --context "$(ctx cluster-a)" -n account-api logs deploy/account-api --tail=50 2>/dev/null | grep "onay=$AID ")"
+  "$(kubectl --context "$(ctx cluster-a)" -n account-api logs deploy/account-api --since=5m 2>/dev/null | grep "onay=$AID ")"
 # Mesai saati: branch-bff'e geçici olarak şu anı dışarıda bırakan bir aralık verilir, sonra geri alınır
 hour=$(( (10#$(date -u +%H) + 3) % 24 ))   # Türkiye saati (UTC+3)
 (( hour < 12 )) && closed="13:00-14:00" || closed="01:00-02:00"
@@ -665,6 +672,95 @@ check "branch-bff imzalı image'la (digest)" "1" \
   "$(kubectl --context "$(ctx cluster-a)" -n channel-bff get pod -l app=branch-bff -o jsonpath='{.items[0].spec.containers[0].image}' \
      | grep -c "^$LAB_REGISTRY/lab/.*@sha256:" || true)"
 
+log "13) Merkezi loglama: Loki, Grafana, Fluent Bit, kategoriler, korelasyon"
+refresh_tokens
+GFP=$(pwf grafana-admin)
+lq() {  # lq <kullanıcı:parola> <veri kaynağı uid> <LogQL metrik sorgusu>: Grafana üzerinden Loki (yetki Grafana'da)
+  env -u MSYS_NO_PATHCONV curl -s --max-time 20 -u "$1" -G \
+    "http://localhost:$GRAFANA_PORT/api/datasources/proxy/uid/$2/loki/api/v1/query" --data-urlencode "query=$3" || true
+}
+lcount() {  # lcount <log seçici + filtre>: son 20 dk'daki satır sayısı (yönetici, tüm tenant'lar)
+  local n
+  n=$(lq "admin:$GFP" logs-all "sum(count_over_time($1 [20m]))" | sed -n 's/.*"value":\[[^,]*,"\([0-9]*\)"\].*/\1/p')
+  echo "${n:-0}"
+}
+lwait() {  # lwait <seçici> [en az] [deneme]: Fluent Bit 2 sn'de bir gönderir, Loki hemen sorgulanabilir
+  local n=0 i
+  for i in $(seq 1 "${3:-30}"); do
+    n=$(lcount "$1"); (( n >= ${2:-1} )) && break; sleep 3
+  done
+  echo "$n"
+}
+loki_raw() { kubectl --context "$(ctx mgmt)" get --raw "/api/v1/namespaces/logging/services/loki:3100/proxy$1" 2>/dev/null || true; }
+check "Loki hazır" "ready" "$(loki_raw /ready)"
+check "Loki: çok tenant'lı sorgu açık, 24 saat saklama (Loki 1d gösterir)" "retention_period: 1d multi_tenant_queries_enabled: true" \
+  "$(loki_raw /config | grep -oE "^  (retention_period: 1d|multi_tenant_queries_enabled: true)" | sed "s/^  //" | sort -r | head -2 | tr "\n" " ")"
+check "Grafana: anonim erişim kapalı (401)" "401" "$(http_code "http://localhost:$GRAFANA_PORT/api/org")"
+check "Grafana: kategori başına organizasyon (Apps, Network, Security, DB, Infra)" "5" \
+  "$(env -u MSYS_NO_PATHCONV curl -s -u "admin:$GFP" "http://localhost:$GRAFANA_PORT/api/orgs" | grep -oE '"name":"(Apps|Network|Security|DB|Infra)"' | wc -l | tr -d ' ')"
+# Olaylar: korelasyon isteği (zorunlu loglama), WAF engellemesi, başarısız DB girişi, secret işlemleri, auth-service reddi
+RID=$(edge www /api/headers -H "x-log-force: verify" | grep -A1 '"X-Request-Id"' | tail -1 | tr -d ' ",[]')
+wbefore=$(lcount '{category="security", cluster="edge"} |= "ModSecurity: Access denied"')
+edge www "/?q=<script>alert(1)</script>" -o /dev/null -g
+pg account_api pg-device-registry "select 1" >/dev/null
+an="audit-test-$(date +%s)"
+kubectl --context "$(ctx cluster-a)" -n default create secret generic "$an" --from-literal=k=v >/dev/null
+kubectl --context "$(ctx cluster-a)" -n default get secret "$an" >/dev/null
+kubectl --context "$(ctx cluster-a)" -n default delete secret "$an" >/dev/null
+BTOKEN=- branch device "-o /dev/null https://$BRANCH_HOST/branch/v1/"
+for c in $LOG_CATEGORIES; do
+  check "Kategori tenant'ı dolu: $c" "ok" "$([[ $(lwait "{category=\"$c\"}") -ge 1 ]] && echo ok || echo boş)"
+done
+check "Korelasyon: istek kimliği DMZ access log'unda" "ok" \
+  "$([[ $(lwait "{category=\"network\", cluster=\"dmz\"} | json | request_id=\"$RID\"") -ge 1 ]] && echo ok || echo "yok ($RID)")"
+check "Korelasyon: aynı istek kimliği internal'ın access log'unda (cluster-a: ingress, waypoint)" "ok" \
+  "$([[ $(lwait "{category=\"network\", cluster=\"cluster-a\"} | json | request_id=\"$RID\"") -ge 1 ]] && echo ok || echo "yok ($RID)")"
+check "Korelasyon: aynı istek kimliği auth-service'in uygulama logunda (apps)" "ok" \
+  "$([[ $(lwait "{category=\"apps\", namespace=\"auth\"} |= \"$RID\"") -ge 1 ]] && echo ok || echo "yok ($RID)")"
+check "Access log alanları: kanal, yanıt kodu, Envoy bayrakları, SPIFFE kimliği" "ok" \
+  "$([[ $(lcount "{category=\"network\", cluster=\"cluster-a\"} | json | request_id=\"$RID\" | response_flags!=\"\" | downstream_peer=~\"spiffe://.+\"") -ge 1 ]] && echo ok || echo yok)"
+check "WAF engellemesi security'de (edge-waf, kural ID'siyle)" "ok" \
+  "$([[ $(lwait '{category="security", cluster="edge"} |= "ModSecurity: Access denied"' $(( ${wbefore:-0} + 1 ))) -gt ${wbefore:-0} ]] && echo ok || echo yok)"
+check "Edge logları geliyor (edge-lb, edge-waf, branch-fw; mTLS ile mgmt'e)" "3" \
+  "$(lq "admin:$GFP" logs-all 'sum by (container) (count_over_time({category="network", cluster="edge"} [20m]))' \
+     | grep -oE '"container":"(edge-lb|edge-waf|branch-fw)"' | sort -u | wc -l | tr -d ' ')"
+check "Audit log: secret oluşturma / okuma / silme security'de (cluster-a)" "ok" \
+  "$([[ $(lwait "{category=\"security\", namespace=\"kube-audit\", cluster=\"cluster-a\"} |= \"$an\"" 3) -ge 3 ]] && echo ok || echo yok)"
+check "Audit log secret içeriğini yazmıyor (yalnızca metadata)" "0" \
+  "$(lcount "{category=\"security\", namespace=\"kube-audit\"} |= \"$an\" |= \"requestObject\"")"
+check "DB: başarısız PostgreSQL girişi db kategorisinde" "ok" \
+  "$([[ $(lwait '{category="db"} |= "password authentication failed"') -ge 1 ]] && echo ok || echo yok)"
+check "Güvenlik kopyası: auth-service reddi security'de" "ok" \
+  "$([[ $(lwait '{category="security", namespace="auth"} |= "RED channel="') -ge 1 ]] && echo ok || echo yok)"
+check "Loglarda token yok (JWT maskeleniyor)" "0" "$(lcount '{category=~".+"} |~ "eyJ[A-Za-z0-9_-]{8,}[.]eyJ"')"
+check "Log / metrik gönderimi access log'a yazılmıyor (geri besleme yok)" "0" \
+  "$(lcount '{category="network"} | json | authority=~"logs.*|prometheus.*"')"
+# Yetki: ekipler yalnızca kendi organizasyonlarının veri kaynağını (tenant) görür
+check "soc01 security loglarını sorgulayabiliyor" '"status":"success"' \
+  "$(lq "soc01:$(pwf grafana-soc01)" logs-security 'sum(count_over_time({category="security"} [5m]))')"
+check "soc01 apps veri kaynağına erişemiyor" "yok" \
+  "$(lq "soc01:$(pwf grafana-soc01)" logs-apps 'sum(count_over_time({category="apps"} [5m]))' | grep -q '"status":"success"' && echo var || echo yok)"
+check "soc01 Korelasyon'a (tüm tenant'lar) erişemiyor" "yok" \
+  "$(lq "soc01:$(pwf grafana-soc01)" logs-all 'sum(count_over_time({category="apps"} [5m]))' | grep -q '"status":"success"' && echo var || echo yok)"
+check "dba01 network veri kaynağına erişemiyor" "yok" \
+  "$(lq "dba01:$(pwf grafana-dba01)" logs-network 'sum(count_over_time({category="network"} [5m]))' | grep -q '"status":"success"' && echo var || echo yok)"
+# DMZ'den mgmt'e yalnızca push: sorgu uçları egress'te reddedilir
+dpod="lq-$RANDOM"
+MSYS_NO_PATHCONV=1 kubectl --context "$(ctx dmz)" -n logging-agent run "$dpod" --restart=Never --image="$LAB_REGISTRY/lab/curl:8.11.1" \
+  --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":100,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"c","image":"'"$LAB_REGISTRY"'/lab/curl:8.11.1","command":["sh","-c","curl -s -o /dev/null -w %{http_code} -H X-Scope-OrgID:security http://logs-mgmt.istio-egress.svc.cluster.local/loki/api/v1/query?query=1; echo; curl -s -o /dev/null -w %{http_code} -X POST http://logs-mgmt.istio-egress.svc.cluster.local/loki/api/v1/push"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' >/dev/null 2>&1
+kubectl --context "$(ctx dmz)" -n logging-agent wait pod "$dpod" --for=jsonpath='{.status.phase}'=Succeeded --timeout=90s >/dev/null 2>&1
+dq=$(kubectl --context "$(ctx dmz)" -n logging-agent logs "$dpod" 2>/dev/null | tr '\n' ' ')
+kubectl --context "$(ctx dmz)" -n logging-agent delete pod "$dpod" --wait=false >/dev/null 2>&1
+check "DMZ'den Loki'de sorgu yapılamıyor (egress: 403)" "403" "$(cut -d' ' -f1 <<<"$dq")"
+check "DMZ'den push mgmt'e ulaşıyor (tenant'sız: Loki 401)" "401" "$(cut -d' ' -f2 <<<"$dq")"
+check "Kyverno: logging-agent'ta /var/log dışı hostPath reddediliyor" "hostPath" \
+  "$(kubectl --context "$(ctx cluster-a)" -n logging-agent run "hp-$RANDOM" --image="$LAB_REGISTRY/lab/fluent-bit:5.1.3" \
+     -l app.kubernetes.io/name=fluent-bit --dry-run=server \
+     --overrides='{"spec":{"volumes":[{"name":"h","hostPath":{"path":"/etc"}}],"containers":[{"name":"c","image":"'"$LAB_REGISTRY"'/lab/fluent-bit:5.1.3","volumeMounts":[{"name":"h","mountPath":"/h"}]}]}}' 2>&1)"
+check "Loki ve Fluent Bit imzalı image'larla (digest)" "2" \
+  "$( (kubectl --context "$(ctx mgmt)" -n logging get pod -l app=loki -o jsonpath='{.items[0].spec.containers[0].image}'; echo; \
+       kubectl --context "$(ctx dmz)" -n logging-agent get pod -l app.kubernetes.io/name=fluent-bit -o jsonpath='{.items[0].spec.containers[0].image}') \
+     | grep -c "^$LAB_REGISTRY/lab/.*@sha256:" || true)"
 log "7) Politika (Kyverno, admission)"
 for c in $CLUSTERS; do
   check "$c: 6 politika hazır ve $POLICY_ACTION modunda" "6/6" \

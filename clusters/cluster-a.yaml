@@ -16,12 +16,36 @@ kubeadmConfigPatches:
       extraEnvs:
         - name: GOMEMLIMIT
           value: "700MiB"
+      # Audit log (10 · logging): politika clusters/audit-policy.yaml, log node'da; Fluent Bit okur
+      extraArgs:
+        - name: audit-policy-file
+          value: /etc/kubernetes/audit/policy.yaml
+        - name: audit-log-path
+          value: /var/log/kubernetes/audit/audit.log
+        - name: audit-log-maxsize
+          value: "20"
+        - name: audit-log-maxbackup
+          value: "2"
+      extraVolumes:
+        - name: audit-policy
+          hostPath: /etc/kubernetes/audit
+          mountPath: /etc/kubernetes/audit
+          readOnly: true
+          pathType: DirectoryOrCreate
+        - name: audit-log
+          hostPath: /var/log/kubernetes/audit
+          mountPath: /var/log/kubernetes/audit
+          pathType: DirectoryOrCreate
 networking:
   podSubnet: 10.20.0.0/16
   serviceSubnet: 10.120.0.0/16
 # Tek node (bkz. dmz.yaml); ileride "- role: worker" eklenerek 2 node'a çıkılır.
 nodes:
   - role: control-plane
+    extraMounts:   # audit politikası (01-create-clusters.sh __ROOT_DIR__'i doldurur)
+      - hostPath: __ROOT_DIR__/clusters/audit-policy.yaml
+        containerPath: /etc/kubernetes/audit/policy.yaml
+        readOnly: true
     labels:
       zone: internal
       node-role: worker

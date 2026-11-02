@@ -1,0 +1,102 @@
+# Logların mgmt'e çıkışı (10 · logging). __NET_PREFIX__ scriptte doldurulur.
+#   fluent-bit (logging-agent, mesh dışı) --HTTP:80--> egress gateway --mTLS (SNI logs.mgmt.internal)--> mgmt ingress gw
+#   --> loki. Metrik çıkışıyla (60-metrics-exit.yaml) aynı desen; yalnızca POST /loki/api/v1/push.
+apiVersion: v1
+kind: Service
+metadata:
+  name: logs-mgmt
+  namespace: istio-egress
+spec:
+  selector:
+    istio: egressgateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: logs-exit
+  namespace: istio-egress
+spec:
+  selector:
+    istio: egressgateway
+  servers:
+    - port:
+        number: 80
+        name: http-logs
+        protocol: HTTP
+      hosts:
+        - logs-mgmt.istio-egress.svc.cluster.local
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: mgmt-logs
+  namespace: istio-egress
+spec:
+  hosts:
+    - logs.mgmt.internal
+  location: MESH_EXTERNAL
+  resolution: STATIC
+  ports:
+    - number: 443
+      name: http-mtls
+      protocol: HTTP
+  endpoints:
+    - address: __NET_PREFIX__.203.10
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: mgmt-logs
+  namespace: istio-egress
+spec:
+  host: logs.mgmt.internal
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      sni: logs.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: logs-exit
+  namespace: istio-egress
+spec:
+  hosts:
+    - logs-mgmt.istio-egress.svc.cluster.local
+  gateways:
+    - logs-exit
+  http:
+    - match:
+        - uri:
+            exact: /loki/api/v1/push
+      rewrite:
+        authority: logs.mgmt.internal
+      route:
+        - destination:
+            host: logs.mgmt.internal
+            port:
+              number: 443
+      timeout: 30s
+---
+# Egress gateway'in 80 portuna log gönderimi: yalnızca bu host, POST /loki/api/v1/push (düz HTTP, kimlik yok: host/yol/metot ile sınırlı)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-logs-push
+  namespace: istio-egress
+spec:
+  selector:
+    matchLabels:
+      istio: egressgateway
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            hosts: ["logs-mgmt.istio-egress.svc.cluster.local", "logs-mgmt.istio-egress.svc.cluster.local:*"]
+            ports: ["80"]
+            methods: ["POST"]
+            paths: ["/loki/api/v1/push"]

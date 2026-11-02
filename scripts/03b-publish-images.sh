@@ -34,6 +34,17 @@ for entry in $LAB_IMAGES; do
     | grep -v "^WARNING" || true
 done
 
+# Çok mimarili image'lar (10 · logging): yalnızca linux/amd64 manifesti kopyalanır (önbellek üzerinden) ve imzalanır.
+# Aynı digest zaten imzalıysa imza atlanır.
+for entry in $LAB_PULLS; do
+  src=${entry%%=*} dst=${entry#*=}
+  log "Kopyala (amd64) + imzala: $src -> $LAB_REGISTRY/$dst"
+  cosign copy --platform linux/amd64 --allow-http-registry --force "$(from_cache "$src")" "$LAB_REGISTRY/$dst" >/dev/null
+  verify "$dst" && { echo "  zaten imzalı (aynı digest)"; continue; }
+  cosign sign --key /keys/cosign.key --allow-http-registry --tlog-upload=false --yes "$LAB_REGISTRY/$dst" 2>&1 \
+    | grep -v "^WARNING" || true
+done
+
 # Kendi servislerimiz (services/<ad>) ve kendi build'imiz olan üçüncü taraf image'lar (images/<ad>, ör. optimize
 # Keycloak): host'ta build -> lab registry (127.0.0.1:<port>) -> imza. Gerçekte CI yapar (15 · ci).
 for entry in $LAB_BUILDS; do
@@ -57,7 +68,7 @@ log "İmzasız kopya (negatif test): $LAB_REGISTRY/$LAB_UNSIGNED_IMAGE"
 copy "$src" "$LAB_UNSIGNED_IMAGE"
 
 log "Doğrulama"
-for dst in $(for e in $LAB_IMAGES; do echo "${e#*=}"; done) $(for e in $LAB_BUILDS; do echo "lab/${e%%:*}:${e#*:}"; done); do
+for dst in $(for e in $LAB_IMAGES $LAB_PULLS; do echo "${e#*=}"; done) $(for e in $LAB_BUILDS; do echo "lab/${e%%:*}:${e#*:}"; done); do
   if verify "$dst"; then echo "  ✔ imzalı: $dst"; else echo "  ✘ imza doğrulanamadı: $dst"; exit 1; fi
 done
 # cosign copy upstream'in keyless imzasını da taşır; bizim anahtarımızla doğrulanmamalı

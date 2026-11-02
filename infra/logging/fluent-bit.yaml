@@ -1,0 +1,334 @@
+# Fluent Bit (10 · logging): her cluster'da DaemonSet (ns logging-agent). 07b-setup-logging.sh cluster başına
+# __CLUSTER__, __ZONE__, __LOKI_HOST__, __LOKI_PORT__ yer tutucularını doldurup uygular.
+#   mgmt:        fluent-bit --> loki.logging:3100 (aynı cluster)
+#   dmz, cluster-a: fluent-bit --HTTP--> logs-mgmt.istio-egress:80 (egress gw) --mTLS--> mgmt ingress --> loki
+#
+# Akış: container logları (CRI) + kube-apiserver audit log'u -> enrich.lua (namespace / pod / container, zone, kategori,
+# hassas veri maskeleme) -> güvenlik açısından önemli uygulama satırları ayrıca security'ye kopyalanır -> kategoriye
+# göre Loki tenant'ı (apps | network | security | db | infra). Satır JSON olarak saklanır (LogQL: | json); Envoy access
+# log'ları (JSON) alanlara ayrıştırılır. Etiketler (indeks): zone, cluster, namespace, container.
+#
+# Hacim (ilk sıfırdan kurulumda saniyede ~170 kayıt makineyi CPU'da doyurdu; hedef ~20-30):
+#   - network: hatalı / reddedilen (>= 400), Envoy bayraklı ve "x-log-force" başlıklı istekler hep; başarılı istekler
+#     request_id'ye göre 1/10 (aynı istek tüm proxy'lerde ya hep tutulur ya hep atılır: korelasyon bozulmaz)
+#   - infra: yalnızca uyarı ve hata satırları
+#   - log / metrik gönderim trafiği access log'a hiç yazılmaz (manifests/*/62-access-log-filter.yaml)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fluent-bit
+  namespace: logging-agent
+automountServiceAccountToken: false   # Kubernetes API'ye gitmez: namespace / pod / container dosya adından
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit
+  namespace: logging-agent
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush            2
+        Log_Level        warn
+        Parsers_File     /fluent-bit/etc/parsers.conf
+        HTTP_Server      Off
+
+    # Container logları. Dosya adı: <pod>_<namespace>_<container>-<id>.log. Fluent Bit'in kendi logları alınmaz
+    [INPUT]
+        Name              tail
+        Path              /var/log/containers/*.log
+        Exclude_Path      /var/log/containers/*_logging-agent_*.log
+        multiline.parser  cri
+        Tag               kube.<namespace_name>.<pod_name>.<container_name>
+        Tag_Regex         ^/var/log/containers/(?<pod_name>[^_]+)_(?<namespace_name>[^_]+)_(?<container_name>.+)-[a-z0-9]{64}\.log$
+        DB                /state/tail.db
+        Mem_Buf_Limit     8MB
+        Skip_Long_Lines   On
+        Refresh_Interval  10
+
+    # Kubernetes audit log'u (clusters/audit-policy.yaml)
+    [INPUT]
+        Name              tail
+        Path              /var/log/kubernetes/audit/audit.log
+        Parser            json
+        Tag               audit
+        DB                /state/audit.db
+        Mem_Buf_Limit     8MB
+        Skip_Long_Lines   On
+
+    # Envoy access log'ları (gateway ve waypoint'ler, JSON; istio/values/istiod.yaml) -> alanlar
+    [FILTER]
+        Name              parser
+        Match             kube.*.istio-proxy
+        Key_Name          log
+        Parser            json
+        Reserve_Data      On
+
+    [FILTER]
+        Name              lua
+        Match_Regex       ^(kube\..*|audit)$
+        script            /fluent-bit/etc/enrich.lua
+        call              enrich
+
+    # Güvenlik açısından önemli uygulama satırları (auth-service reddi, dört göz ihlali, personel erişimi, mesai dışı,
+    # IdP giriş hatası) security'ye de kopyalanır; asıl kayıt kendi kategorisinde kalır
+    [FILTER]
+        Name              rewrite_tag
+        Match             kube.*
+        Rule              $security_copy ^yes$ secdup.$TAG true
+        Emitter_Name      security_copy
+        Emitter_Mem_Buf_Limit 4MB
+
+    [FILTER]
+        Name              lua
+        Match             secdup.*
+        script            /fluent-bit/etc/enrich.lua
+        call              to_security
+
+    # Kategoriye göre etiket: cat.<kategori>
+    [FILTER]
+        Name              rewrite_tag
+        Match_Regex       ^(kube\..*|audit|secdup\..*)$
+        Rule              $category ^(apps|network|security|db|infra)$ cat.$category false
+        Emitter_Name      category
+        Emitter_Mem_Buf_Limit 8MB
+
+    @INCLUDE /fluent-bit/etc/outputs.conf
+
+  outputs.conf: |
+    # Kategori başına Loki tenant'ı. Loki yalnızca etiketleri indeksler: düşük kardinaliteli alanlar etiket
+    # (pod adı değil), geri kalanı satırın içinde (JSON)
+    [OUTPUT]
+        Name              loki
+        Match             cat.apps
+        Host              __LOKI_HOST__
+        Port              __LOKI_PORT__
+        tenant_id         apps
+        labels            category=apps, zone=$zone, cluster=$cluster, namespace=$kubernetes['namespace'], container=$kubernetes['container']
+        remove_keys       zone, cluster, category
+        line_format       json
+        drop_single_key   off
+        Retry_Limit       5
+
+    [OUTPUT]
+        Name              loki
+        Match             cat.network
+        Host              __LOKI_HOST__
+        Port              __LOKI_PORT__
+        tenant_id         network
+        labels            category=network, zone=$zone, cluster=$cluster, namespace=$kubernetes['namespace'], container=$kubernetes['container']
+        remove_keys       zone, cluster, category
+        line_format       json
+        drop_single_key   off
+        Retry_Limit       5
+
+    [OUTPUT]
+        Name              loki
+        Match             cat.security
+        Host              __LOKI_HOST__
+        Port              __LOKI_PORT__
+        tenant_id         security
+        labels            category=security, zone=$zone, cluster=$cluster, namespace=$kubernetes['namespace'], container=$kubernetes['container']
+        remove_keys       zone, cluster, category
+        line_format       json
+        drop_single_key   off
+        Retry_Limit       5
+
+    [OUTPUT]
+        Name              loki
+        Match             cat.db
+        Host              __LOKI_HOST__
+        Port              __LOKI_PORT__
+        tenant_id         db
+        labels            category=db, zone=$zone, cluster=$cluster, namespace=$kubernetes['namespace'], container=$kubernetes['container']
+        remove_keys       zone, cluster, category
+        line_format       json
+        drop_single_key   off
+        Retry_Limit       5
+
+    [OUTPUT]
+        Name              loki
+        Match             cat.infra
+        Host              __LOKI_HOST__
+        Port              __LOKI_PORT__
+        tenant_id         infra
+        labels            category=infra, zone=$zone, cluster=$cluster, namespace=$kubernetes['namespace'], container=$kubernetes['container']
+        remove_keys       zone, cluster, category
+        line_format       json
+        drop_single_key   off
+        Retry_Limit       5
+
+  parsers.conf: |
+    [PARSER]
+        Name        json
+        Format      json
+
+  enrich.lua: |
+    -- Kayda kaynak bilgisi, zone ve kategori ekler; hassas değerleri maskeler.
+    local CLUSTER, ZONE = "__CLUSTER__", "__ZONE__"
+
+    -- namespace -> kategori (listede olmayan: infra)
+    local APPS = { ["api-a"]=1, ["account-api"]=1, ["channel-bff"]=1, ["auth"]=1, ["edge-web"]=1 }
+    local NETWORK = { ["istio-ingress"]=1, ["istio-egress"]=1, ["istio-mobile"]=1, ["istio-partner"]=1, ["istio-branch"]=1 }
+    -- Uygulama logunda bu ifadeler geçerse kayıt security'ye de kopyalanır
+    local SECURITY_MARKS = { "RED channel=", "DÖRT GÖZ İHLALİ", "PERSONEL ERİŞİMİ", "MESAİ DIŞI", "LOGIN_ERROR", "four_eyes_violation" }
+
+    local function mask(s)
+      if type(s) ~= "string" then return s end
+      s = s:gsub("[Bb]earer%s+[%w%-%._~%+/]+=*", "Bearer ***")
+      s = s:gsub("[Dd][Pp][Oo][Pp]%s+[%w%-%._~%+/]+=*", "DPoP ***")
+      s = s:gsub("eyJ[%w%-_]+%.[%w%-_]+%.[%w%-_]*", "***jwt***")
+      s = s:gsub("__Host%-sid=[^;%s\"]+", "__Host-sid=***")
+      return s
+    end
+
+    -- Başarılı istekler için örnekleme: request_id'nin baytlarından tutarlı karar (her proxy aynı kararı verir)
+    local SAMPLE = 10
+    local function sampled(rid)
+      if type(rid) ~= "string" or rid == "" then return false end
+      local h = 0
+      for i = 1, #rid do h = (h * 31 + rid:byte(i)) % 1000003 end
+      return h % SAMPLE == 0
+    end
+
+    local function keep_access_log(r)
+      local code = tonumber(r["response_code"]) or 0
+      if code == 0 or code >= 400 then return true end
+      local flags = r["response_flags"]
+      if type(flags) == "string" and flags ~= "-" and flags ~= "" then return true end
+      local force = r["log_force"]
+      if type(force) == "string" and force ~= "" then return true end
+      return sampled(r["request_id"])
+    end
+
+    -- infra: yalnızca uyarı / hata (klog: W/E/F önekli; diğerleri: seviye kelimesi)
+    local function is_warn_or_error(s)
+      if type(s) ~= "string" then return true end
+      if s:find("^[WEF]%d%d%d%d ") then return true end
+      local l = s:lower()
+      return l:find("warn", 1, true) or l:find("error", 1, true) or l:find("fatal", 1, true)
+        or l:find("panic", 1, true) or l:find("fail", 1, true) or l:find("level=err", 1, true)
+        or l:find('"err"', 1, true) or l:find(" err ", 1, true)
+    end
+
+    local function category(ns, pod, ctr)
+      if ctr == "istio-proxy" or pod:find("^ztunnel") or NETWORK[ns] then return "network" end
+      if ns == "data" then return "db" end
+      if ns == "iam" then
+        if pod:find("^device%-registry") then return "apps" end
+        return "security"   -- Keycloak: giriş olayları
+      end
+      if APPS[ns] then return "apps" end
+      return "infra"
+    end
+
+    function enrich(tag, ts, record)
+      record["cluster"] = CLUSTER
+      record["zone"] = ZONE
+      if tag == "audit" then
+        record["category"] = "security"
+        record["source"] = "kube-audit"
+        record["kubernetes"] = { namespace = "kube-audit", pod = "kube-apiserver", container = "audit" }
+        return 1, ts, record
+      end
+      local ns, pod, ctr = tag:match("^kube%.([^%.]+)%.(.+)%.([^%.]+)$")
+      if not ns then return 0, ts, record end
+      record["kubernetes"] = { namespace = ns, pod = pod, container = ctr }
+      record["category"] = category(ns, pod, ctr)
+      if record["response_code"] ~= nil and not keep_access_log(record) then return -1, ts, record end
+      if record["category"] == "infra" and not is_warn_or_error(record["log"]) then return -1, ts, record end
+      if record["log"] then
+        record["log"] = mask(record["log"])
+        if record["category"] ~= "security" and record["category"] ~= "network" then
+          for _, m in ipairs(SECURITY_MARKS) do
+            if record["log"]:find(m, 1, true) then record["security_copy"] = "yes"; break end
+          end
+        end
+      end
+      record["logtag"] = nil
+      record["_p"] = nil
+      return 1, ts, record
+    end
+
+    function to_security(tag, ts, record)
+      record["category"] = "security"
+      record["security_copy"] = nil
+      record["copied_from"] = "apps"
+      return 1, ts, record
+    end
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluent-bit
+  namespace: logging-agent
+  labels:
+    app.kubernetes.io/name: fluent-bit
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fluent-bit
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fluent-bit
+      annotations:
+        config-hash: "__CONFIG_HASH__"   # yapılandırma değişince pod'lar yenilenir
+    spec:
+      serviceAccountName: fluent-bit
+      securityContext:
+        # Node'daki log dosyaları root'a ait (0640 / 0600). Root ama hiçbir yetenek yok, kök dosya sistemi salt okunur,
+        # host dizinleri salt okunur
+        runAsUser: 0
+        seccompProfile:
+          type: RuntimeDefault
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: fluent-bit
+          image: lab-registry:5000/lab/fluent-bit:5.1.3   # 03b-publish-images.sh (LAB_PULLS)
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: config
+              mountPath: /fluent-bit/etc
+              readOnly: true
+            - name: state
+              mountPath: /state
+            - name: containers
+              mountPath: /var/log/containers
+              readOnly: true
+            - name: pods
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: audit
+              mountPath: /var/log/kubernetes/audit
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: fluent-bit
+        - name: state
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: containers
+          hostPath:
+            path: /var/log/containers
+            type: Directory
+        - name: pods
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+        - name: audit
+          hostPath:
+            path: /var/log/kubernetes/audit
+            type: DirectoryOrCreate

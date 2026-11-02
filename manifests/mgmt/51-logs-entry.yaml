@@ -1,0 +1,83 @@
+# mgmt girişi: diğer zone'lardan gelen loglar (10 · logging).
+#   dmz / cluster-a: fluent-bit --HTTP--> kendi egress gw'si --mTLS (ISTIO_MUTUAL, SNI logs.mgmt.internal)--> burası
+#   edge (Docker, mesh dışı): edge-logs --mTLS (Log CA istemci sertifikası, SNI logs-edge.mgmt.internal)--> burası
+#   --> loki (ns logging, mesh dışı). Yalnızca POST /loki/api/v1/push: sorgu, silme ve yönetim API'leri dışarıya kapalı.
+# Loki'nin kendi kimlik doğrulaması yok; yazma hakkı ağ seviyesinde (mTLS kimliği / istemci sertifikası + yol).
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: logs-entry
+  namespace: istio-ingress
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 443
+        name: https-logs
+        protocol: HTTPS
+      tls:
+        mode: ISTIO_MUTUAL
+      hosts:
+        - logs.mgmt.internal
+    - port:
+        number: 443
+        name: https-logs-edge
+        protocol: HTTPS
+      tls:
+        mode: MUTUAL
+        credentialName: logs-edge-mtls   # sunucu sertifikası + Log CA (05b-create-data-secrets.sh)
+        minProtocolVersion: TLSV1_2
+      hosts:
+        - logs-edge.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: logs-push
+  namespace: istio-ingress
+spec:
+  hosts:
+    - logs.mgmt.internal
+    - logs-edge.mgmt.internal
+  gateways:
+    - logs-entry
+  http:
+    - match:
+        - uri:
+            exact: /loki/api/v1/push
+      route:
+        - destination:
+            host: loki.logging.svc.cluster.local
+            port:
+              number: 3100
+      timeout: 30s
+---
+# Mesh'ten: yalnızca egress gateway kimlikleri. Edge'den: Log CA'nın verdiği istemci sertifikası (TLS'te doğrulandı).
+# İkisi de yalnızca POST /loki/api/v1/push.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-logs
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-egress/sa/dmz-egressgateway
+              - corp.mesh/ns/istio-egress/sa/istio-egressgateway
+      to:
+        - operation:
+            hosts: ["logs.mgmt.internal", "logs.mgmt.internal:*"]
+            methods: ["POST"]
+            paths: ["/loki/api/v1/push"]
+    - to:
+        - operation:
+            hosts: ["logs-edge.mgmt.internal", "logs-edge.mgmt.internal:*"]
+            methods: ["POST"]
+            paths: ["/loki/api/v1/push"]

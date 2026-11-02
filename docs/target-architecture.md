@@ -1017,6 +1017,7 @@ Bu mimari, [service-mesh-lab](../README.md) deposunda kind üzerinde küçültü
 | Mesai saati (şube) | Şube gateway'inde (`branch-gw`) | Internal `branch-bff`'te; lab'de tüm gün açık (`09e`) | Şube gateway'i lab'de DMZ'de; iş kuralı DMZ'ye konmadı. Domain servisleri şube kanalını yalnızca branch-bff'ten kabul ettiği için atlanamaz |
 | BFF yeri | Internal `channel-bff` (INT-07, GW-09) | ✅ `web-bff` internal'da (`channel-bff`); DMZ'de `web-token-handler` (cookie oturumu, CSRF), tarayıcıda token yok (`09a`). Oturum deposu mgmt Valkey'de (hedefte kimlik zone'unda `redis-session`) | `mobile-bff`, `branch-bff` sonraki adımlarda |
 | Cluster sayısı ve node | Zone başına cluster, her DC'de, çok node | Tek node'lu kind cluster'ları: `dmz`, `cluster-a`, `mgmt`; `cluster-b` kapalı | `cluster-b` A/B adımında geri gelir; core, PCI ve veri ayrı cluster olarak temsil edilmez (veri `mgmt`'te) |
+| Log hattı (SOC-02) | `fluent-bit` → `logstash` → Elasticsearch + SIEM; WORM saklama | Fluent Bit → Loki (kategori başına tenant), arayüz Grafana; tek binary, 24 saat; WORM yok (`10 · logging`) | ELK denendi: bu makinede (12 çekirdek, 1,7 GHz) Elasticsearch + Kibana boştayken bile ~1 çekirdek tuttu ve kontrol düzlemini CPU'da aç bıraktı (K-Kaynak). Toplama tarafı (Fluent Bit, alanlar, maskeleme, taşıma) hedefle aynı; hedefte yalnızca çıkış değişir. WORM `10b` |
 | Edge | DDoS / CDN, GSLB, F5 + WAF | Docker konteynerinde HAProxy + ModSecurity (OWASP CRS) | Ürün davranışı temsil edilir, ürün değil |
 
 ## Değişiklik geçmişi
@@ -1025,6 +1026,7 @@ Bu mimari, [service-mesh-lab](../README.md) deposunda kind üzerinde küçültü
 | --- | --- |
 | Nov 1, 2026 (6) | Kimlik zone'u için ayrı A/B cluster hedefi ve yerleşim sayısı (14) netleştirildi; mobil cihaz kaydı/IdP erişimi edge ve DMZ üzerinden tanımlandı; web OIDC state cookie ve oturum erişimi netleştirildi; iptal yayılımı, token scope sınırı, DB failover/fencing, ağ akışı izinleri ve ek kabul/izlenebilirlik kriterleri eklendi |
 | Oct 31, 2026 | İlk sürüm |
+| Nov 2, 2026 | Lab sapmaları: log hattı (Logstash yok, WORM yok; `10 · logging`) |
 | Nov 1, 2026 (8) | Lab sapmaları: mesai saati kontrolünün yeri (`09e · branch-controls`) |
 | Nov 1, 2026 (7) | Lab sapmaları: işlem imzası açık nokta (`09d` atlandı) |
 | Nov 1, 2026 (6) | Lab sapmaları: mobil cihaz bağlama (DPoP DMZ'de, Keycloak exchange kısıtı; `09c · mobile-binding`) |

@@ -24,3 +24,15 @@ metadata:
   labels:
     zone: internal
     pod-security.kubernetes.io/enforce: restricted
+---
+# Log toplayıcı (10 · logging): Fluent Bit DaemonSet. Node'daki container ve audit loglarını okumak için hostPath
+# (salt okunur) ister; bu yüzden PSA "privileged" ve Kyverno istisnası (infra/kyverno/exceptions.yaml) yalnızca
+# bu namespace'teki fluent-bit için. Mesh dışında (Prometheus gibi); mgmt'e egress gateway üzerinden gider.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging-agent
+  labels:
+    zone: internal
+    policy.corp.mesh/image-source: lab-registry
+    pod-security.kubernetes.io/enforce: privileged

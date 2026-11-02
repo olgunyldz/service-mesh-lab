@@ -96,3 +96,13 @@ secret cluster-a channel-bff attest-public --from-file=attest.pub="$ROOT_DIR/cer
 secret dmz edge-web web-token-handler --from-literal=CLIENT_SECRET="$(pw kc-web-app)" \
   --from-literal=VALKEY_USER=web_session --from-literal=VALKEY_PASSWORD="$(pw valkey-web-session)"
 
+
+# --- Merkezi loglama (10 · logging) ---
+# mgmt: Grafana yöneticisi (anonim erişim kapalı; ekipler kendi organizasyonlarında). Kiali de Grafana'ya bununla bağlanır
+secret mgmt istio-system grafana-admin --from-literal=GF_SECURITY_ADMIN_USER=admin \
+  --from-literal=GF_SECURITY_ADMIN_PASSWORD="$(pw grafana-admin)" --from-literal=password="$(pw grafana-admin)"
+# mgmt ingress gateway: edge log toplayıcısının girişi (sunucu sertifikası + Log CA; istemci sertifikası zorunlu)
+secret mgmt istio-ingress logs-edge-mtls --from-file=tls.crt="$ROOT_DIR/certs/logs/server.crt" \
+  --from-file=tls.key="$ROOT_DIR/certs/logs/server.key" --from-file=ca.crt="$ROOT_DIR/certs/logs/ca.pem"
+# Grafana ekip kullanıcılarının parolaları (07b-setup-logging.sh oluşturur): certs/data/grafana-<kullanıcı>.pw
+for u in dev01 netops01 soc01 dba01 platform01; do pw "grafana-$u" >/dev/null; done

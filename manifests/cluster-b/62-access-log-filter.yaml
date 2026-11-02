@@ -1,0 +1,17 @@
+# Access log filtresi (10 · logging): log ve metrik gönderim trafiği access log'a yazılmaz. Yazılsaydı her log gönderimi
+# gateway'lerde yeni bir access log satırı üretir, o da gönderilirdi (geri besleme döngüsü; ilk kurulumda egress
+# gateway'lerin logları toplam hacmin yarısıydı ve makineyi CPU'da doyurdu). Biçim istio/values/istiod.yaml'da.
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: mesh-default
+  namespace: istio-system
+spec:
+  accessLogging:
+    - providers:
+        - name: envoy
+      filter:
+        expression: >-
+          !(request.host.startsWith('logs-mgmt.') || request.host.startsWith('logs.mgmt.internal') ||
+            request.host.startsWith('logs-edge.mgmt.internal') || request.host.startsWith('prometheus-mgmt.') ||
+            request.host.startsWith('prometheus.mgmt.internal'))

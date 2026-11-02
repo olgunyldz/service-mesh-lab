@@ -50,6 +50,11 @@ spec:
             # Token'ların issuer'ı ve kullanıcıya gösterilen adresler bu adla (DMZ üzerinden erişilen ad)
             - name: KC_HOSTNAME
               value: https://sso.apps.example.local:8443
+            # Yönetim konsolunun adresi (10 · logging sırasında eklendi): yalnızca port-forward ile, yöneticinin kendi
+            # makinesinden (kubectl -n iam port-forward svc/keycloak 8080:8080). /admin DMZ'de kapalı kalır; konsol
+            # sso.apps... adına yönlenseydi oradan engellenirdi
+            - name: KC_HOSTNAME_ADMIN
+              value: http://localhost:8080
             # Arka kanal (mesh içi, ör. auth-service'in JWKS çağrısı) istek adresini kullanır
             - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
               value: "true"

@@ -18,7 +18,8 @@ docker rm -f edge-waf >/dev/null 2>&1 || true
 # BACKEND bir nginx değişkeni: hedef, Host'a göre waf-channels.conf.template'teki map'ten gelir
 # CORS_*: image her yanıta Allow-Headers, her 403'e "Allow-Origin: *" ekliyor; CORS kararı yalnızca web gateway'inde
 # ALLOWED_METHODS: CRS varsayılanı GET HEAD POST OPTIONS; DELETE mobil cihaz kaydını silmek için (09c)
-docker run -d --name edge-waf --restart unless-stopped --network "$EDGE_NETWORK" \
+docker run -d --name edge-waf --restart unless-stopped --label log.name=edge-waf --label log.category=network --log-opt labels=log.name,log.category \
+  --network "$EDGE_NETWORK" \
   -e 'BACKEND=https://$dmz_gateway' \
   -e DMZ_WEB_GW="$(dmz_vip web)" -e DMZ_MOBILE_GW="$(dmz_vip mobile)" -e DMZ_PARTNER_GW="$(dmz_vip partner)" \
   -e MOBILE_HOST="$MOBILE_HOST" -e PARTNER_HOST="$PARTNER_HOST" \
@@ -42,7 +43,8 @@ docker network connect kind edge-waf
 
 log "edge-lb (HAProxy: TLS, limitler, header temizliği)"
 docker rm -f edge-lb >/dev/null 2>&1 || true
-docker run -d --name edge-lb --restart unless-stopped --network "$EDGE_NETWORK" \
+docker run -d --name edge-lb --restart unless-stopped --label log.name=edge-lb --label log.category=network --log-opt labels=log.name,log.category \
+  --network "$EDGE_NETWORK" \
   -p 8080:8080 -p 8443:8443 \
   -v "$ROOT_DIR/edge/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
   -v "$ROOT_DIR/edge/crt-list.txt:/usr/local/etc/haproxy/crt-list.txt:ro" \
@@ -64,7 +66,7 @@ pwf() { cat "$ROOT_DIR/certs/data/$1.pw" 2>/dev/null || true; }
 log "loadgen (web, partner${extra:+, $extra})"
 docker rm -f loadgen >/dev/null 2>&1 || true
 docker run -d --name loadgen --restart unless-stopped --network "$EDGE_NETWORK" \
-  -e WEB="$WEB_HOST" -e PARTNER="$PARTNER_HOST" -e SSO="$SSO_HOST" -e EXTRA="$extra" \
+  -e WEB="$WEB_HOST" -e PARTNER="$PARTNER_HOST" -e SSO="$SSO_HOST" -e EXTRA="$extra" -e INTERVAL="$LOADGEN_INTERVAL" \
   -e CUSTOMER_PW="$(pwf kc-customer-ayse)" -e ACME_SECRET="$(pwf kc-partner-acme)" \
   -v "$ROOT_DIR/certs/edge/ca.pem:/ca.pem:ro" \
   -v "$ROOT_DIR/certs/partner/acme.crt:/partner.crt:ro" \
@@ -90,7 +92,7 @@ docker run -d --name loadgen --restart unless-stopped --network "$EDGE_NETWORK" 
       now=$(date +%s); if [ $((now - last)) -ge 200 ] || [ -z "$TP" ]; then last=$now
         TP=$(token partners -d grant_type=client_credentials -d client_id=acme --data-urlencode "client_secret=$ACME_SECRET")
       fi
-      if [ $((i % 60)) -eq 0 ] && [ "$(c -o /dev/null -w "%{http_code}" "https://$WEB:8443/auth/session")" != 200 ]; then
+      if [ $((i % 12)) -eq 0 ] && [ "$(c -o /dev/null -w "%{http_code}" "https://$WEB:8443/auth/session")" != 200 ]; then
         web_login
       fi
       i=$((i+1))
@@ -100,7 +102,7 @@ docker run -d --name loadgen --restart unless-stopped --network "$EDGE_NETWORK" 
       req "$PARTNER" -H "Authorization: Bearer $TP" --cert /partner.crt --key /partner.key "https://$PARTNER:8443/partner/v1/"
       for h in $EXTRA; do req "$h" "https://$h:8443/"; done
       [ $((i % 10)) -eq 0 ] && c -o /dev/null "https://$WEB:8443/api/status/500"
-      sleep 1
+      sleep "$INTERVAL"
     done' >/dev/null
 
 # Mobil uygulama simülasyonu (09c · mobile-binding): mobile-sim (services/mobile-sim, imzalı image) gerçek bir uygulama
@@ -110,7 +112,7 @@ log "mobile-loadgen (mobile-sim, kullanıcı mehmet)"
 docker rm -f mobile-loadgen >/dev/null 2>&1 || true
 docker pull -q "localhost:$LAB_REGISTRY_HOST_PORT/lab/mobile-sim:$(echo "$LAB_BUILDS" | tr ' ' '\n' | sed -n 's/^mobile-sim://p')" >/dev/null
 MSYS_NO_PATHCONV=1 docker run -d --name mobile-loadgen --restart unless-stopped --network "$EDGE_NETWORK" \
-  --tmpfs /state:uid=65532,gid=65532 \
+  --tmpfs /state:uid=65532,gid=65532 -e LOOP_INTERVAL="$LOADGEN_INTERVAL" \
   -e USERNAME=mehmet -e PASSWORD="$(pwf kc-customer-mehmet)" -e OTP_SECRET="$(pwf kc-customer-mehmet-otp)" \
   -v "$ROOT_DIR/certs/edge/ca.pem:/ca.pem:ro" -v "$ROOT_DIR/certs/attest/attest.key:/attest/attest.key:ro" \
   "localhost:$LAB_REGISTRY_HOST_PORT/lab/mobile-sim:$(echo "$LAB_BUILDS" | tr ' ' '\n' | sed -n 's/^mobile-sim://p')" loop >/dev/null

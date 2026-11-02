@@ -69,6 +69,8 @@ Ana [README](../README.md) ortamın güncel ve toplu halini anlatır. Bu klasör
 | 09c | [Mobil cihaz bağlama: DPoP, attestation, device-registry, mobile-bff](09c-mobile-binding.md) | `mobile-binding` | ✅ Tamamlandı (191/191 test) |
 | 09d | İşlem imzası (`tx-signing`) | – | ⏭ Atlandı, açık nokta (bkz. [pilot mimari](pilot-architecture.md)) |
 | 09e | [Şube kontrolleri: branch-bff, şube kapsamı, dört göz onayı, mesai saati](09e-branch-controls.md) | `branch-controls` | ✅ Tamamlandı (211/211 test) |
+| 09f | Açık bankacılık rızası (`consent`) | – | ⏸ Ertelendi (cluster-b'den sonra) |
+| 10 | [Merkezi loglama: Loki, Grafana, Fluent Bit, kategoriler, audit log](10-logging.md) | `logging` | ✅ Tamamlandı (240/240 test) |
 
 ## Diğer dokümanlar
 
