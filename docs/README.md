@@ -71,6 +71,7 @@ Ana [README](../README.md) ortamın güncel ve toplu halini anlatır. Bu klasör
 | 09e | [Şube kontrolleri: branch-bff, şube kapsamı, dört göz onayı, mesai saati](09e-branch-controls.md) | `branch-controls` | ✅ Tamamlandı (211/211 test) |
 | 09f | Açık bankacılık rızası (`consent`) | – | ⏸ Ertelendi (cluster-b'den sonra) |
 | 10 | [Merkezi loglama: Loki, Grafana, Fluent Bit, kategoriler, audit log](10-logging.md) | `logging` | ✅ Tamamlandı (240/240 test) |
+| 10a | [Yönetim arayüzleri: Keycloak yönetim konsolu, Loki panoları](10a-admin-access.md) | `admin-access` | ✅ Tamamlandı (250/250 test) |
 
 ## Diğer dokümanlar
 

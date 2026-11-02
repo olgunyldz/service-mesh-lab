@@ -1,0 +1,84 @@
+# Keycloak yönetim konsolu (10a · admin-access): komut çalıştırmadan, tarayıcıdan http://localhost:8081/admin
+#   tarayıcı --> 127.0.0.1:8081 (kind port eşlemesi, yalnızca bu makine) --> node :30808 --> mgmt istio-ingressgateway
+#   (yönetim dinleyicisi, :8081) --mesh (ingress gateway kimliği)--> keycloak:8080
+# Keycloak'ın kendi kuralı değişmez (L4'te yalnızca ingress gateway kimliği). Yol kısıtı gateway'de: yalnızca yönetim
+# konsolu, master realm'i ve statik dosyalar; uygulama realm'leri (customers, partners, staff) bu kapıdan açılmaz.
+# İnternet ve DMZ tarafında /admin ve master realm kapalı kalır (dmz/27-ext-authz.yaml, 35-keycloak-entry.yaml).
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-admin-nodeport
+  namespace: istio-ingress
+spec:
+  type: NodePort
+  selector:
+    istio: ingressgateway
+  ports:
+    - name: http-admin
+      port: 8081
+      targetPort: 8081
+      nodePort: 30808
+---
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: keycloak-admin
+  namespace: istio-ingress
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 8081
+        name: http-admin
+        protocol: HTTP
+      # Istio kısa ad (localhost) kabul etmiyor; bu port yalnızca yönetim için, Host kısıtı AuthorizationPolicy'de
+      hosts:
+        - "*"
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: keycloak-admin
+  namespace: istio-ingress
+spec:
+  hosts:
+    - "*"
+  gateways:
+    - keycloak-admin   # yalnızca bu gateway'in 8081 dinleyicisi
+  http:
+    # /admin ve /admin/ doğrudan konsola (Keycloak bu kökü gateway arkasında 404 döndürüyordu)
+    - match:
+        - uri:
+            exact: /admin
+        - uri:
+            exact: /admin/
+        - uri:
+            exact: /
+      redirect:
+        uri: /admin/master/console/
+    - route:
+        - destination:
+            host: keycloak.iam.svc.cluster.local
+            port:
+              number: 8080
+      timeout: 30s
+---
+# Yalnızca yönetim yolları. Kaynak kimliği yok (tarayıcı mesh dışında); erişim host'ta 127.0.0.1'le ve Keycloak'ın
+# kendi girişiyle (admin parolası) sınırlı
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-keycloak-admin
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            hosts: ["localhost", "localhost:*"]
+            ports: ["8081"]
+            paths: ["/", "/admin", "/admin/*", "/realms/master", "/realms/master/*", "/resources/*"]

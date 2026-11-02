@@ -142,6 +142,6 @@ Kurulumda zorunlu değiller; incelemeyi ve hata ayıklamayı kolaylaştırırlar
 | **hey / k6** | Yük ve hız sınırı testi | `hey -n 200 -c 20 -H "Authorization: Bearer $T" https://www.apps.example.local:8443/` |
 | **pgcli / psql** | PostgreSQL'e bağlanma | `kubectl --context kind-mgmt -n data exec -it postgres-0 -- psql -U postgres -d corebank` |
 | **valkey-cli** | Valkey'e bağlanma (ACL kullanıcısıyla) | `kubectl --context kind-mgmt -n data exec -it deploy/valkey -- valkey-cli --user admin --pass <parola>` |
-| **Keycloak yönetim konsolu** | Realm, client ve kullanıcıları görme (dışarıya kapalı; port-forward ile) | `kubectl --context kind-mgmt -n iam port-forward svc/keycloak 8080` → http://localhost:8080/admin |
+| **Keycloak yönetim konsolu** | Realm, client ve kullanıcıları yönetme (internetten ve DMZ'den kapalı; yalnızca bu makineden, 10a) | http://localhost:8081/admin (`admin` / `certs/data/keycloak-admin.pw`) |
 | **Trivy** | Image ve manifest güvenlik taraması | `trivy image localhost:5001/lab/auth-service:0.2.0`, `trivy config manifests/` |
 | **kube-score / Polaris** | Manifest'lerde en iyi uygulama denetimi | `kube-score score manifests/dmz/*.yaml` |

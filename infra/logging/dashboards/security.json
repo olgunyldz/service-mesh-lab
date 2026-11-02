@@ -1,0 +1,532 @@
+{
+  "uid": "logs-security",
+  "title": "Security - Güvenlik olayları",
+  "description": "WAF engellemeleri, Kubernetes audit, auth-service redleri, Keycloak giriş olayları, dört göz ihlali ve personel erişimi (uygulama loglarından kopya).",
+  "tags": [
+    "loki",
+    "10-logging"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "editable": true,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "WAF engellemesi",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({cluster=\"edge\"} |= \"ModSecurity: Access denied\" [$__range]))",
+          "queryType": "instant",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-security"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "id": 1,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-security"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "auth-service reddi",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({namespace=\"auth\"} |= \"RED channel=\" [$__range]))",
+          "queryType": "instant",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-security"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "id": 2,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-security"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Keycloak giriş hatası",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({namespace=\"iam\"} |= \"LOGIN_ERROR\" [$__range]))",
+          "queryType": "instant",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-security"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "id": 3,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-security"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Personel erişimi",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({category=\"security\"} |= \"PERSONEL ERİŞİMİ\" [$__range]))",
+          "queryType": "instant",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-security"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "id": 4,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-security"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "auth-service redleri (sebep)",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (sebep) (count_over_time({namespace=\"auth\"} |= \"RED channel=\" | regexp `sebep=\"(?P<sebep>[^\"]*)\"` [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{sebep}}",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-security"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 5,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-security"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "WAF engellemeleri",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (zone) (count_over_time({cluster=\"edge\"} |= \"ModSecurity: Access denied\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{zone}}",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-security"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 6,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-security"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Audit: işlem ve kaynak",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(15, sum by (verb, objectRef_resource) (count_over_time({namespace=\"kube-audit\"} | json [$__range])))",
+          "queryType": "instant",
+          "legendFormat": "{{verb}} {{objectRef_resource}}",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-security"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "continuous-BlYlRd"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      },
+      "id": 7,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-security"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Audit: kim (kullanıcı)",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(10, sum by (user_username) (count_over_time({namespace=\"kube-audit\"} | json [$__range])))",
+          "queryType": "instant",
+          "legendFormat": "{{user_username}}",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-security"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "continuous-BlYlRd"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      },
+      "id": 8,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-security"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Secret erişimi (audit)",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{namespace=\"kube-audit\"} | json | objectRef_resource=\"secrets\"",
+          "queryType": "range",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-security"
+          }
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      },
+      "id": 9,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-security"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 10
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Güvenlik olayları (WAF, ret, giriş hatası, dört göz)",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{category=\"security\", namespace!=\"kube-audit\"} |~ \"ModSecurity: Access denied|RED channel=|LOGIN_ERROR|DÖRT GÖZ|MESAİ DIŞI\"",
+          "queryType": "range",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-security"
+          }
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      },
+      "id": 10,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-security"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 12
+      }
+    }
+  ]
+}

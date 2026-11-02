@@ -761,6 +761,31 @@ check "Loki ve Fluent Bit imzalı image'larla (digest)" "2" \
   "$( (kubectl --context "$(ctx mgmt)" -n logging get pod -l app=loki -o jsonpath='{.items[0].spec.containers[0].image}'; echo; \
        kubectl --context "$(ctx dmz)" -n logging-agent get pod -l app.kubernetes.io/name=fluent-bit -o jsonpath='{.items[0].spec.containers[0].image}') \
      | grep -c "^$LAB_REGISTRY/lab/.*@sha256:" || true)"
+log "14) Yönetim arayüzleri: Keycloak yönetim konsolu, log panoları"
+KA="http://localhost:$KEYCLOAK_ADMIN_PORT"
+check "Keycloak yönetim portu host'ta yalnızca 127.0.0.1'de" "127.0.0.1:$KEYCLOAK_ADMIN_PORT" \
+  "$(docker port mgmt-control-plane 30808/tcp 2>/dev/null)"
+check "Keycloak: $KA/admin konsola yönleniyor" "$KA/admin/master/console/" \
+  "$(env -u MSYS_NO_PATHCONV curl -s -o /dev/null -w '%{redirect_url}' --max-time 10 "$KA/admin")"
+check "Keycloak konsolu açılıyor ve giriş adresi localhost (sso.apps... değil)" "\"authServerUrl\": \"$KA\"" \
+  "$(env -u MSYS_NO_PATHCONV curl -s --max-time 10 "$KA/admin/master/console/")"
+check "Keycloak: yönetici girişi (master realm) bu kapıdan çalışıyor" '"access_token"' \
+  "$(env -u MSYS_NO_PATHCONV curl -s --max-time 10 "$KA/realms/master/protocol/openid-connect/token" -d grant_type=password \
+     -d client_id=admin-cli -d username=admin --data-urlencode "password=$(pwf keycloak-admin)")"
+check "Keycloak yönetim kapısından uygulama realm'leri açılmıyor (403)" "403" \
+  "$(http_code "$KA/realms/customers/.well-known/openid-configuration")"
+check "Keycloak yönetim konsolu internetten hâlâ kapalı (edge, 403)" "403" \
+  "$(NOAUTH=1 edge sso /admin/master/console/ -o /dev/null -w '%{http_code}')"
+check "Grafana: genel bakış panosu (Main Org)" '"uid":"logs-overview"' \
+  "$(env -u MSYS_NO_PATHCONV curl -s -u "admin:$(pwf grafana-admin)" "http://localhost:$GRAFANA_PORT/api/search?type=dash-db&tag=10-logging")"
+check "Grafana: soc01 Security panosunu görüyor" '"uid":"logs-security"' \
+  "$(env -u MSYS_NO_PATHCONV curl -s -u "soc01:$(pwf grafana-soc01)" "http://localhost:$GRAFANA_PORT/api/search?type=dash-db")"
+check "Grafana: soc01 genel bakış ve başka ekiplerin panolarını görmüyor" "yok" \
+  "$(env -u MSYS_NO_PATHCONV curl -s -u "soc01:$(pwf grafana-soc01)" "http://localhost:$GRAFANA_PORT/api/search?type=dash-db" \
+     | grep -qE '"uid":"logs-(overview|apps|network|db|infra)"' && echo var || echo yok)"
+check "Loglarda Türkçe metin aranabiliyor (İZİN, kaçışsız UTF-8)" "ok" \
+  "$([[ $(lcount '{category="apps", namespace="auth"} |= "İZİN channel="') -ge 1 ]] && echo ok || echo yok)"
+
 log "7) Politika (Kyverno, admission)"
 for c in $CLUSTERS; do
   check "$c: 6 politika hazır ve $POLICY_ACTION modunda" "6/6" \

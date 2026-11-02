@@ -5,7 +5,8 @@
 #      tenant'ının Loki veri kaynağı ve ekip kullanıcısı; yönetici organizasyonunda tüm tenant'lar ("Korelasyon")
 #   2) Her cluster'a Fluent Bit (infra/logging/fluent-bit.yaml)
 #   3) Edge log toplayıcısı (Docker, infra/logging/edge/)
-#   4) Keycloak yönetim konsoluna port-forward erişimi
+#   4) Loki panoları (infra/logging/dashboards/): Main Org'a genel bakış, her ekip organizasyonuna kendi kategorisi
+#   5) Keycloak yönetim konsolu (http://localhost:8081/admin): master realm'in giriş adresi
 # Tekrar çalıştırılabilir: her istek "oluştur ya da güncelle".
 source "$(dirname "$0")/lib.sh"
 
@@ -14,12 +15,14 @@ pwf() { cat "$ROOT_DIR/certs/data/$1.pw"; }
 LOKI_URL=http://loki.logging.svc.cluster.local:3100
 GP=$(pwf grafana-admin)
 
-# gf <metot> <yol> [gövde] [org id]: Grafana API'si (host'tan, yönetici)
+# gf <metot> <yol> [gövde] [org id]: Grafana API'si (host'tan, yönetici). Gövde stdin'den: Windows'ta komut satırı
+# argümanı kod sayfasına çevriliyor ve UTF-8 karakterler (ü, ı, ·) bozuluyordu
 gf() {
-  local org=()
+  local org=() body=()
   [[ -n ${4:-} ]] && org=(-H "X-Grafana-Org-Id: $4")
-  env -u MSYS_NO_PATHCONV curl -s -u "admin:$GP" -X "$1" -H 'Content-Type: application/json' "${org[@]}" \
-    "http://localhost:$GRAFANA_PORT$2" ${3:+--data-binary "$3"}
+  [[ -n ${3:-} ]] && body=(--data-binary @-)
+  printf '%s' "${3:-}" | env -u MSYS_NO_PATHCONV curl -s -u "admin:$GP" -X "$1" -H 'Content-Type: application/json' \
+    "${org[@]}" "${body[@]}" "http://localhost:$GRAFANA_PORT$2"
 }
 # Loki veri kaynağı: tenant(lar) X-Scope-OrgID başlığıyla (secureJsonData: arayüzde görünmez)
 datasource() {  # datasource <uid> <ad> <tenant(lar)> <org id>
@@ -43,6 +46,7 @@ for i in $(seq 1 60); do
 done
 declare -A TITLE=([apps]="Apps" [network]="Network" [security]="Security" [db]="DB" [infra]="Infra")
 declare -A USER=([apps]=dev01 [network]=netops01 [security]=soc01 [db]=dba01 [infra]=platform01)
+declare -A ORG=()
 ALL=$(echo $LOG_CATEGORIES | tr ' ' '|')
 # Yönetici (Main Org): tüm tenant'lar birlikte; request_id ile bir isteğin tüm zone'lardaki izi
 datasource logs-all "Korelasyon (tüm kategoriler)" "$ALL" 1
@@ -67,7 +71,18 @@ for c in $LOG_CATEGORIES; do
   # Grafana yeni kullanıcıyı Main Org'a Viewer olarak ekler (otomatik atama kapatılırsa her kullanıcıya kişisel
   # organizasyon açıyor); Korelasyon orada olduğu için buradan çıkarılır
   gf DELETE "/api/orgs/1/users/$uid" >/dev/null
+  gf POST "/api/orgs/$org/users" '{"loginOrEmail":"admin","role":"Admin"}' >/dev/null   # yönetici tüm organizasyonları görebilsin
+  ORG[$c]=$org
   echo "  $name (org $org): veri kaynağı logs-$c (tenant $c), kullanıcı $u"
+done
+
+log "Loki panoları"
+dashboard() {  # dashboard <json dosyası> <org id>
+  gf POST /api/dashboards/db "{\"overwrite\":true,\"dashboard\":$(cat "$1")}" "$2" | grep -o '"url":"[^"]*"' || true
+}
+echo "  Main Org: $(dashboard "$ROOT_DIR/infra/logging/dashboards/overview.json" 1)"
+for c in $LOG_CATEGORIES; do
+  echo "  ${TITLE[$c]}: $(dashboard "$ROOT_DIR/infra/logging/dashboards/$c.json" "${ORG[$c]}")"
 done
 
 log "Fluent Bit (her cluster, ns logging-agent)"
@@ -96,15 +111,15 @@ MSYS_NO_PATHCONV=1 docker run -d --name edge-logs --restart unless-stopped --net
   "localhost:$LAB_REGISTRY_HOST_PORT/lab/fluent-bit:5.1.3" >/dev/null
 echo "  edge-logs -> https://$LOGS_EDGE_HOST (Log CA istemci sertifikası)"
 
-# Keycloak yönetim konsolu: yalnızca port-forward ile (KC_HOSTNAME_ADMIN, manifests/mgmt/30-keycloak.yaml). master
-# realm'inin giriş adresi de localhost olmalı; yoksa konsol sso.apps... adına yönlenir ve /admin, master realm'i DMZ'de
-# kapalı olduğu için giriş yapılamaz. Uygulama realm'leri etkilenmez
-log "Keycloak yönetim konsolu (port-forward: http://localhost:8080/admin)"
+# Keycloak yönetim konsolu (10a): http://localhost:$KEYCLOAK_ADMIN_PORT/admin (mgmt ingress gateway'in yönetim
+# dinleyicisi, manifests/mgmt/36-keycloak-admin.yaml). master realm'inin giriş adresi de bu olmalı; yoksa konsol
+# sso.apps... adına yönlenir, orada /admin ve master realm DMZ'de kapalı. Uygulama realm'leri etkilenmez
+log "Keycloak yönetim konsolu (http://localhost:$KEYCLOAK_ADMIN_PORT/admin)"
 kubectl --context "$(ctx mgmt)" -n iam exec deploy/keycloak -- sh -c \
   "/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user admin \
      --password '$(pwf keycloak-admin)' --config /tmp/kcadm.cfg >/dev/null \
-   && /opt/keycloak/bin/kcadm.sh update realms/master -s attributes.frontendUrl=http://localhost:8080 --config /tmp/kcadm.cfg \
+   && /opt/keycloak/bin/kcadm.sh update realms/master -s attributes.frontendUrl=http://localhost:$KEYCLOAK_ADMIN_PORT --config /tmp/kcadm.cfg \
    && rm -f /tmp/kcadm.cfg" >/dev/null
-echo "  kubectl --context $(ctx mgmt) -n iam port-forward svc/keycloak 8080:8080  (admin / certs/data/keycloak-admin.pw)"
+echo "  http://localhost:$KEYCLOAK_ADMIN_PORT/admin  (admin / certs/data/keycloak-admin.pw; yalnızca bu makineden)"
 
 echo "  Grafana: http://localhost:$GRAFANA_PORT (yönetici: admin / certs/data/grafana-admin.pw; ekipler: certs/data/grafana-<kullanıcı>.pw)"

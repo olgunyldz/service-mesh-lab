@@ -1,0 +1,369 @@
+{
+  "uid": "logs-network",
+  "title": "Network - Access log'lar",
+  "description": "Gateway / waypoint access log'ları (JSON), ztunnel ve edge (HAProxy, WAF, branch-fw). Başarılı (2xx/3xx) access log'lar request_id'ye göre 1/10 örneklenir; hata, ret ve bayraklı istekler tam.",
+  "tags": [
+    "loki",
+    "10-logging"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "editable": true,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Yanıt kodu",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (response_code) (count_over_time({category=\"network\", container=\"istio-proxy\"} | json [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{response_code}}",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-network"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 1,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-network"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Kanal",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (channel) (count_over_time({category=\"network\", container=\"istio-proxy\"} | json | channel != \"\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{channel}}",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-network"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 2,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-network"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Süre p95 (ms, cluster'a göre)",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "quantile_over_time(0.95, {category=\"network\", container=\"istio-proxy\"} | json | duration_ms != \"\" | unwrap duration_ms [$__auto]) by (cluster)",
+          "queryType": "range",
+          "legendFormat": "{{cluster}}",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-network"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 3,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-network"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Envoy yanıt bayrakları",
+      "description": "UH: sağlıklı upstream yok, UF: bağlantı hatası, URX: yeniden deneme sınırı, RL: kota, UAEX: ext_authz reddi …",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (response_flags) (count_over_time({category=\"network\", container=\"istio-proxy\"} | json | response_flags != \"-\" [$__range]))",
+          "queryType": "instant",
+          "legendFormat": "{{response_flags}}",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-network"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "continuous-BlYlRd"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      },
+      "id": 4,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-network"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "En çok hata dönen hedefler",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(10, sum by (authority, path) (count_over_time({category=\"network\", container=\"istio-proxy\"} | json | response_code >= 400 [$__range])))",
+          "queryType": "instant",
+          "legendFormat": "{{authority}}{{path}}",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-network"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "continuous-BlYlRd"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      },
+      "id": 5,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-network"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Edge container'ları",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (container) (count_over_time({cluster=\"edge\"} [$__range]))",
+          "queryType": "instant",
+          "legendFormat": "{{container}}",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-network"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "continuous-BlYlRd"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      },
+      "id": 6,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-network"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Hatalı istekler",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{category=\"network\", container=\"istio-proxy\"} | json | response_code >= 400",
+          "queryType": "range",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-network"
+          }
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      },
+      "id": 7,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-network"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 12
+      }
+    }
+  ]
+}

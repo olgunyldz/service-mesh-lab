@@ -562,7 +562,8 @@ Gözlemlenebilirlik **mgmt cluster'ında merkezi**dir (`04 · mgmt`). Her cluste
 |--------|-------|-----|
 | **Kiali** | http://localhost:20001/kiali | Üç cluster tek arayüzde (çoklu cluster), salt okunur (`view_only_mode`) |
 | **Grafana** | http://localhost:3001 | Istio dashboard'ları, merkezi Prometheus. Girişli (10 · logging'den itibaren): `admin` / `certs/data/grafana-admin.pw` |
-| **Grafana: loglar** | http://localhost:3001 (Explore) | Merkezi loglar (10 · logging): Apps, Network, Security, DB, Infra organizasyonları; Main Org'da "Korelasyon" (tüm kategoriler). Yönetici `admin` (`certs/data/grafana-admin.pw`), ekip kullanıcıları `dev01`, `netops01`, `soc01`, `dba01`, `platform01` (`certs/data/grafana-<kullanıcı>.pw`). Anonim erişim kapalı |
+| **Grafana: loglar** | http://localhost:3001 (Explore, panolar) | Merkezi loglar (10 · logging): Apps, Network, Security, DB, Infra organizasyonları ve panoları; Main Org'da "Korelasyon" ve **Loglar - Genel bakış** panosu (request_id ile iz). Yönetici `admin` (`certs/data/grafana-admin.pw`), ekip kullanıcıları `dev01`, `netops01`, `soc01`, `dba01`, `platform01` (`certs/data/grafana-<kullanıcı>.pw`). Anonim erişim kapalı |
+| **Keycloak yönetim konsolu** | http://localhost:8081/admin | `admin` / `certs/data/keycloak-admin.pw` (10a). Yalnızca bu makineden (127.0.0.1); internetten ve DMZ'den kapalı |
 
 ```mermaid
 flowchart LR
@@ -1012,6 +1013,7 @@ Her adım ayrı bir branch'te yapılır; her branch bir önceki biten branch'ten
 | 09d | ~~`tx-signing`~~ | **Atlandı, açık nokta.** Seviye 3 doğrulama: cihaz anahtarıyla işlem imzası ve dinamik bağlama (tutar + alıcı imzada), `tx-signing-svc`. Eşik ve hangi işlemin onay isteyeceği iş kararı. Hedef: CH-08, IAM-08 | ⏭ |
 | 09e | `branch-controls` | `branch-bff` (tüm şube trafiği, mesai saati); personel rolleri (gişe, operasyon, yetkili) ve limit üstü transferde dört göz onayı (talep eden ≠ onaylayan, aynı şube; veritabanında da kısıt); personelin kendi şubesinin hesaplarıyla sınırlanması. Limit, onay süresi ve mesai saatleri konfigürasyon. Ayrıntılar: [docs/09e-branch-controls.md](docs/09e-branch-controls.md) | ✅ |
 | 10 | `logging` | mgmt'te **Loki** (ilk tasarım ELK'ydi; bu makinede CPU'ya sığmadı), arayüz Grafana; her cluster'da Fluent Bit; loglar beş kategoride (apps, network, security, db, infra) ayrı Loki tenant'ı ve Grafana organizasyonu, ekip başına kullanıcı; zone'lar arası yalnızca push (mTLS); JSON access log (`request_id`, `channel`, yanıt bayrakları, SPIFFE kimlikleri), başarılı istekler 1/10 örneklenir; Kubernetes audit log; edge logları (mTLS, Log CA); token / JWT maskeleme; yük üreticileri 5 sn aralıkla. Ayrıntılar: [docs/10-logging.md](docs/10-logging.md) | ✅ |
+| 10a | `admin-access` | Keycloak yönetim konsolu komutsuz (http://localhost:8081/admin, yalnızca 127.0.0.1, mgmt ingress gateway'in yönetim dinleyicisi, yalnızca yönetim yolları); Loki panoları (genel bakış + ekip başına). Ayrıntılar: [docs/10a-admin-access.md](docs/10a-admin-access.md) | ✅ |
 | 10b | `log-archive` | WORM arşivi: Fluent Bit'in ikinci çıkışı, Object Lock (compliance) açık S3 uyumlu nesne deposuna (audit, access, WAF, onay kayıtları); nesne deposu ürünü bir denemeyle seçilir (MinIO CE arşivlendi) | ⏳ |
 | 11 | `tracing` | mgmt'te Grafana Tempo + OpenTelemetry; gateway, waypoint ve servis span'leri; Grafana'da log ↔ trace geçişi | ⏳ |
 | 12 | `traffic-mgmt` | Canary (v1/v2 ağırlıklı yönlendirme), fault injection (gecikme/hata), circuit breaker, outlier detection; etkiler Kiali ve Tempo'da izlenir | ⏳ |

@@ -58,3 +58,7 @@ nodes:
       - containerPort: 30300   # Grafana
         hostPort: 3001
         protocol: TCP
+      - containerPort: 30808   # Keycloak yönetim konsolu (10a): yalnızca bu makineden
+        hostPort: 8081
+        listenAddress: "127.0.0.1"
+        protocol: TCP

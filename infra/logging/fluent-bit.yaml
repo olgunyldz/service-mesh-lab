@@ -30,6 +30,8 @@ data:
     [SERVICE]
         Flush            2
         Log_Level        warn
+        # Türkçe karakterler satırda olduğu gibi (İ değil): Loki'de "İZİN", "ERİŞİMİ" gibi metin filtreleri eşleşsin
+        json.escape_unicode Off
         Parsers_File     /fluent-bit/etc/parsers.conf
         HTTP_Server      Off
 
