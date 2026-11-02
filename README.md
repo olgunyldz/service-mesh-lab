@@ -20,7 +20,7 @@ Giriş noktaları (host'ta `--resolve ...:8443:127.0.0.1` ve `certs/edge/ca.pem`
 | web | **https://www.apps.example.local:8443** (giriş: `/auth/login`; API: `/api/*`, oturum cookie'siyle) |
 | mobile | https://mobile-api.apps.example.local:8443/mobile/v1/ |
 | partner | https://partner-api.apps.example.local:8443/partner/v1/ (istemci sertifikası: `certs/partner/acme.crt`) |
-| branch (şube) | https://branch-api.corp.internal/branch/v1/: yalnızca şube ağından (`branch-net`, cihaz sertifikası `certs/branch/sube-0001.crt`); host'tan ve internetten erişilemez |
+| branch (şube) | https://branch-api.corp.internal/branch/v1/: yalnızca şube ağından (`branch-net`, cihaz sertifikası `certs/branch/sube-0001.crt`, ikinci şube `sube-0002.crt`); host'tan ve internetten erişilemez |
 
 `scripts/08-verify.sh` ile uçtan uca doğrulananlar:
 
@@ -34,6 +34,7 @@ Giriş noktaları (host'ta `--resolve ...:8443:127.0.0.1` ve `certs/edge/ca.pem`
 | – | Web oturumu: tarayıcıda token yok, yalnızca `__Host-sid` (HttpOnly, Secure, SameSite=Strict); CSRF'siz POST 403; sahte cookie 401; logout sonrası 401; oturum deposu Valkey'de hash'li anahtarla, ayrı ACL kullanıcısıyla | ✅ |
 | – | L7 yetki: partner bazlı scope (acme yalnızca hesap okuma, initech yalnızca ürün kataloğu; Keycloak atanmamış scope'u vermiyor); waypoint'te scope / kanal / rol kuralları; BOLA (başka müşterinin hesabı 404); transfer için seviye 2 (OTP) ve RFC 9470 step-up (yalnızca OTP sorulur); şube gişe transferi | ✅ |
 | – | Mobil cihaz bağlama: cihaz anahtarıyla DPoP kanıtı her istekte (Bearer, kanıtsız, tekrarlanan, başka adres için kanıt 401); çalınan token başka cihazdan 403 (AC-04); attestation (kanıtsız / bütünlüğü bozuk 403, eski sürüm 426); cihaz kaydı yalnızca seviye 2 ile; silinen cihaz 30 sn içinde 403; tüm mobil trafik mobile-bff'ten | ✅ |
+| – | Şube kontrolleri: tüm şube trafiği branch-bff'ten; personel yalnızca kendi şubesinin hesapları (başka şube 404); limit üstü transfer onaya düşer; dört göz (gişe onaylayamaz 403, talep eden kendi işlemini onaylayamaz 403 + veritabanı CHECK, başka şubenin yetkilisi 404, ikinci onay 409); mesai dışı 403 | ✅ |
 | – | Edge: HTTP → HTTPS (301), HSTS, TLS 1.1 reddi, TLS 1.2/1.3 kabulü | ✅ |
 | – | Edge: WAF XSS ve SQL injection denemelerini engelliyor (403) | ✅ |
 | – | Edge: sahte `X-Forwarded-For` ve `x-user-jwt` içeri geçmiyor | ✅ |
@@ -75,7 +76,7 @@ Kullanılan sürümler:
 | PostgreSQL | 18.1 (alpine) | mgmt, tek replika StatefulSet |
 | Valkey | 9.0.0 (alpine) | mgmt; Redis uyumlu, BSD lisanslı |
 | Envoy ratelimit | `f4e76690` | DMZ; partner başına global kota |
-| Go servisleri | Go 1.27.1, distroless static | `web-token-handler`, `auth-service`, `web-bff`, `mobile-bff`, `mobile-sim` (yalnızca stdlib), `account-api`, `device-registry` (pgx v5.7.6) |
+| Go servisleri | Go 1.27.1, distroless static | `web-token-handler`, `auth-service`, `web-bff`, `mobile-bff`, `mobile-sim` (yalnızca stdlib), `account-api`, `device-registry` (pgx v5.7.6), `branch-bff` |
 | Keycloak | 26.8.0 (optimize image) | mgmt; standard token exchange (RFC 8693), introspection, lightweight access token |
 
 ---
@@ -271,7 +272,7 @@ DMZ'ye dört kanaldan girilir (`06 · dmz-channels`). İnternet kanalları edge'
 | web | `www.apps.example.local` | web gateway (`dmz-ingressgateway`) → **web-token-handler** (cookie → iç JWT) → waypoint → egress → internal **web-bff** | Tarayıcıda token yok (oturum cookie'si, CSRF), CORS (yalnızca kendi origin'imiz), güvenlik header'ları, 50 rps |
 | mobile | `mobile-api.apps.example.local` | `mobile-gateway` (ext_authz: DPoP, attestation, kayıtlı cihaz) → egress → internal **mobile-bff** | Yalnızca `/mobile/v1/*` (önek kaldırılır), `Authorization: DPoP`, 30 rps |
 | partner | `partner-api.apps.example.local` | edge'de istemci sertifikası → `partner-gateway` → egress | Partner CA sertifikası zorunlu, izin listesi (`acme`), yalnızca `/partner/v1/*`, 5 rps |
-| branch (şube) | `branch-api.corp.internal` | **edge yok:** şube WAN'ı → `branch-fw` (TCP 443) → `branch-gateway` → egress | Branch CA cihaz sertifikası (gateway'de), `x-branch-device`, yalnızca `/branch/v1/*`, 20 rps |
+| branch (şube) | `branch-api.corp.internal` | **edge yok:** şube WAN'ı → `branch-fw` (TCP 443) → `branch-gateway` → egress | Branch CA cihaz sertifikası (gateway'de), `x-branch-device`, yalnızca `/branch/v1/*`, 20 rps; internal'da **branch-bff** (mesai saati) |
 
 Web kanalı adım adım (oturum açılmış; giriş akışı: [Kullanıcı kimliği yayılımı](#kullanıcı-kimliği-yayılımı-token-exchange)):
 
@@ -515,8 +516,8 @@ Her workload sertifikası `spiffe://corp.mesh/ns/<namespace>/sa/<serviceaccount>
 | cluster-b ingress gw | `dmz-egressgateway` + `istio-egressgateway` | L4/L7 | gateway Envoy |
 | api-a namespace'i (varsayılan) | hiçbiri (`allow-nothing`) | L4 | ztunnel |
 | api-a pod'ları | yalnızca `api-a/sa/waypoint` | L4 | ztunnel |
-| api-a servisi | yalnızca `istio-ingressgateway` ve `channel-bff/web-bff`, iç JWT; müşteri ve personel kanalları `GET`/`POST`, partner yalnızca `info:read` ile `GET` | L7 | waypoint |
-| account-api servisi | aynı kaynaklar ve iç JWT; `GET /accounts*` → `accounts:read`; `GET /products` → `products:read`; `POST /accounts/{id}/transfers` → `transfers:write` + kanal web/mobil (seviye 2 serviste) ya da kanal şube + gişe/operasyon rolü | L7 | waypoint (+ BOLA ve seviye uygulamada) |
+| api-a servisi | her kanal kendi kapısından: web → `web-bff`, mobil → `mobile-bff`, şube → `branch-bff`, partner → `istio-ingressgateway`; iç JWT; müşteri ve personel kanalları `GET`/`POST`, partner yalnızca `info:read` ile `GET` | L7 | waypoint |
+| account-api servisi | aynı kaynaklar ve iç JWT; `GET /accounts*` → `accounts:read`; `GET /products` → `products:read`; `POST /accounts/{id}/transfers` → `transfers:write` + kanal web/mobil (seviye 2 serviste) ya da kanal şube + gişe/operasyon/yetkili rolü; `GET /approvals`, `POST /approvals/{id}/approve` → şube + `supervisor` | L7 | waypoint (+ BOLA, şube kapsamı, seviye ve dört göz uygulamada) |
 | partner istekleri | yol + metot ↔ scope (`accounts:read`, `products:read`, `info:read`); listede olmayan reddedilir | L7 | auth-service (DMZ) |
 | cluster-a egress gw | yalnızca `api-a/sa/waypoint` | L4/L7 | gateway Envoy |
 | api-b servisi | yalnızca `istio-ingressgateway`, `GET`/`POST` | L7 | waypoint |
@@ -918,7 +919,7 @@ sequenceDiagram
 | web | `customers` | `web-app` (token handler) | `auth-web` (`web`) | rol `customer`, oturum cookie'si + CSRF | – |
 | mobile | `customers` | `mobile-app` | `auth-mobile` (`mobile`) | rol `customer` | – |
 | partner | `partners` | sertifika CN'i (`x-partner-id`) | `auth-partner` (`partner`) | client credentials, rol `partner` (token sertifikaya bağlı) | `partner_id` |
-| branch | `staff` | `branch-teller` | `auth-branch` (`branch`) | rol `teller`/`operations` + cihaz sertifikası; `branch_id` = cihaz | `branch_id` |
+| branch | `staff` | `branch-teller` | `auth-branch` (`branch`) | rol `teller`/`operations`/`supervisor` + cihaz sertifikası; `branch_id` = cihaz | `branch_id` |
 
 - **İç JWT'yi IdP imzalar.** DMZ ele geçirilse bile içeri girecek kimliği DMZ uyduramaz; kanal bilgisi (`channel`) de IdP'nin imzaladığı bir claim.
 - **Internal yalnızca Keycloak realm anahtarlarına güvenir.** Açık anahtarlar `RequestAuthentication`'da inline JWKS. Realm anahtarları kurulumda üretilip Keycloak'a verildiği için internal'dan IdP'ye ağ çağrısı yok.
@@ -1002,7 +1003,7 @@ Her adım ayrı bir branch'te yapılır; her branch bir önceki biten branch'ten
 | 09b | `l7-policies` | Claim bazlı yetki: client başına API scope'ları (partner bazlı yetki: acme hesap okuma, initech ürün kataloğu), waypoint'te scope / kanal / rol kuralları, doğrulama seviyeleri (parola / OTP) ve RFC 9470 step-up, nesne seviyesinde yetki (BOLA), örnek transfer ucu; exchange'de scope yükseltme koruması; ayrıntılar: [docs/09b-l7-policies.md](docs/09b-l7-policies.md) | ✅ |
 | 09c | `mobile-binding` | Mobil cihaz bağlama: cihaz anahtar çifti ve `device-registry` (mgmt); DPoP (RFC 9449, her istekte kanıt, `jti` tekrar kontrolü Valkey'de); kayıtlı cihaz kontrolü DMZ'de (Keycloak DPoP + token exchange birlikte çalışmıyor); app attestation ve minimum sürüm (simülasyon); `mobile-bff`; `mobile-sim` (uygulama simülatörü). Ayrıntılar: [docs/09c-mobile-binding.md](docs/09c-mobile-binding.md) | ✅ |
 | 09d | ~~`tx-signing`~~ | **Atlandı, açık nokta.** Seviye 3 doğrulama: cihaz anahtarıyla işlem imzası ve dinamik bağlama (tutar + alıcı imzada), `tx-signing-svc`. Eşik ve hangi işlemin onay isteyeceği iş kararı. Hedef: CH-08, IAM-08 | ⏭ |
-| 09e | `branch-controls` | `branch-bff`; personel rolleri (gişe, yetkili, müdür) ve limit üstü işlemde dört göz onayı (talep eden ≠ onaylayan, aynı şube); mesai saati kontrolü; personel erişiminin şubeye daraltılması. Hedef: CH-13, INT-07 | ⏳ |
+| 09e | `branch-controls` | `branch-bff` (tüm şube trafiği, mesai saati); personel rolleri (gişe, operasyon, yetkili) ve limit üstü transferde dört göz onayı (talep eden ≠ onaylayan, aynı şube; veritabanında da kısıt); personelin kendi şubesinin hesaplarıyla sınırlanması. Limit, onay süresi ve mesai saatleri konfigürasyon. Ayrıntılar: [docs/09e-branch-controls.md](docs/09e-branch-controls.md) | ✅ |
 | 09f | `consent` | Açık bankacılık rızası: üçüncü taraf client (ör. `fintech-x`) için authorization code akışında müşteri rızası; rızaları tutan `consent-service` (Go, PostgreSQL): hesap, izin, süre; consent ID'nin iç JWT'ye taşınması, account-api'nin yalnızca rızadaki hesapları döndürmesi; rızanın geri alınması. First-party (web, mobil, şube) ve partner client credentials akışlarında consent yok (bkz. `08`) | ⏳ |
 | 10 | `logging` | mgmt'te Loki + Fluent Bit; access log'lara `x-request-id`, `zone`, `channel`; Kubernetes audit log | ⏳ |
 | 11 | `tracing` | mgmt'te Grafana Tempo + OpenTelemetry; gateway, waypoint ve servis span'leri; Grafana'da log ↔ trace geçişi | ⏳ |

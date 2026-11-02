@@ -18,6 +18,7 @@ spec:
         - api-a.apps.example.local
         - web-bff.apps.example.local   # web kanalının BFF'i (09a): DMZ token handler -> egress -> buraya
         - mobile-bff.apps.example.local   # mobil kanalın BFF'i (09c): DMZ mobile-gateway -> egress -> buraya
+        - branch-bff.apps.example.local   # şube kanalının BFF'i (09e): DMZ branch-gateway -> egress -> buraya
 ---
 apiVersion: networking.istio.io/v1
 kind: VirtualService
@@ -80,6 +81,25 @@ spec:
     - route:
         - destination:
             host: mobile-bff.channel-bff.svc.cluster.local
+            port:
+              number: 8080
+      timeout: 10s
+---
+# Şube kanalı (09e): BFF internal'da; şube trafiği domain servislerine yalnızca branch-bff üzerinden gider
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: branch-bff
+  namespace: istio-ingress
+spec:
+  hosts:
+    - branch-bff.apps.example.local
+  gateways:
+    - internal-gateway
+  http:
+    - route:
+        - destination:
+            host: branch-bff.channel-bff.svc.cluster.local
             port:
               number: 8080
       timeout: 10s

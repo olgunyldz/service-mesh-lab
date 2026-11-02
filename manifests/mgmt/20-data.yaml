@@ -8,7 +8,8 @@ metadata:
   namespace: data
 data:
   # İlk açılışta (boş veri dizini) bir kez çalışır. Servis başına rol, en az yetki:
-  #   account_api -> yalnızca accounts.accounts üzerinde SELECT; audit şemasına erişimi yok.
+  #   account_api -> accounts.accounts üzerinde SELECT; accounts.transfer_approvals'da yalnızca ekleme ve karar
+  #   kolonlarını güncelleme (silme yok, 09e); audit şemasına erişimi yok.
   10-schema.sh: |
     #!/bin/sh
     set -e
@@ -29,15 +30,34 @@ data:
         currency   char(3) NOT NULL,
         balance    numeric(18,2) NOT NULL,
         owner_sub  text,
-        partner_id text
+        partner_id text,
+        branch_id  text NOT NULL   -- hesabın şubesi (09e): personel yalnızca kendi şubesinin hesaplarını görür
       );
       INSERT INTO accounts.accounts VALUES
-        (1, 'TR330006100519786457841326', 'Ayşe Yılmaz',  'TRY', 125430.50, 'a75e0000-0000-4000-8000-000000000001', NULL),
-        (2, 'TR320010009999901234567890', 'Mehmet Demir', 'TRY',   8920.00, 'e3e70000-0000-4000-8000-000000000002', NULL),
-        (3, 'TR190006400000112345678901', 'Acme Ltd.',    'USD',  45000.75, NULL, 'acme'),
-        (4, 'TR560006200000000123456789', 'Zeynep Kaya',  'EUR',   3150.20, 'f0e10000-0000-4000-8000-000000000004', NULL);
+        (1, 'TR330006100519786457841326', 'Ayşe Yılmaz',  'TRY', 125430.50, 'a75e0000-0000-4000-8000-000000000001', NULL, 'sube-0001'),
+        (2, 'TR320010009999901234567890', 'Mehmet Demir', 'TRY',   8920.00, 'e3e70000-0000-4000-8000-000000000002', NULL, 'sube-0001'),
+        (3, 'TR190006400000112345678901', 'Acme Ltd.',    'USD',  45000.75, NULL, 'acme', 'sube-0002'),
+        (4, 'TR560006200000000123456789', 'Zeynep Kaya',  'EUR',   3150.20, 'f0e10000-0000-4000-8000-000000000004', NULL, 'sube-0002');
+      -- Dört göz onayı (09e · branch-controls): şubede limit üstü transfer talebi. Talep eden ile onaylayan aynı kişi
+      -- olamaz: uygulama kontrol eder, veritabanı da CHECK ile reddeder (derinlemesine savunma).
+      CREATE TABLE accounts.transfer_approvals (
+        id           bigserial PRIMARY KEY,
+        account_id   bigint NOT NULL REFERENCES accounts.accounts(id),
+        to_iban      text NOT NULL,
+        amount       numeric(18,2) NOT NULL CHECK (amount > 0),
+        branch_id    text NOT NULL,
+        requested_by text NOT NULL,
+        requested_at timestamptz NOT NULL DEFAULT now(),
+        status       text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+        decided_by   text,
+        decided_at   timestamptz,
+        CHECK (decided_by IS NULL OR decided_by <> requested_by)
+      );
       GRANT USAGE ON SCHEMA accounts TO account_api;
       GRANT SELECT ON accounts.accounts TO account_api;
+      GRANT SELECT, INSERT ON accounts.transfer_approvals TO account_api;
+      GRANT UPDATE (status, decided_by, decided_at) ON accounts.transfer_approvals TO account_api;
+      GRANT USAGE ON SEQUENCE accounts.transfer_approvals_id_seq TO account_api;
 
       -- Keycloak (08 · token-exchange): kendi veritabanı ve sahibi; diğer veritabanlarına erişimi yok
       CREATE ROLE keycloak LOGIN PASSWORD '$KEYCLOAK_DB_PASSWORD' CONNECTION LIMIT 30;

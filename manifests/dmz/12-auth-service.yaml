@@ -35,7 +35,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: auth
-          image: lab-registry:5000/lab/auth-service:0.4.0   # build + imza: 03b-publish-images.sh
+          image: lab-registry:5000/lab/auth-service:0.4.1   # build + imza: 03b-publish-images.sh
           env:
             - name: ISSUER_BASE   # token'ların issuer öneki (Keycloak KC_HOSTNAME)
               value: https://sso.apps.example.local:8443/realms/

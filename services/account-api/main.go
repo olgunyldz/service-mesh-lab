@@ -4,12 +4,15 @@
 //	/readyz         -> veritabanı erişilebilir mi
 //	GET  /accounts                 -> kullanıcının görebildiği hesaplar (en fazla 20)
 //	GET  /accounts/{id}            -> tek hesap (sahibi değilse 404)
-//	POST /accounts/{id}/transfers  -> örnek yazma ucu: transfers:write, web/mobilde son 5 dk içinde seviye 2, şubede gişe/operasyon (09b)
+//	POST /accounts/{id}/transfers  -> örnek yazma ucu: transfers:write, web/mobilde son 5 dk içinde seviye 2, şubede gişe/operasyon/yetkili (09b);
+//	                                  şubede limit üstü tutar onaya düşer (dört göz, 09e)
+//	GET  /approvals                -> şube: onay bekleyen transferler (yalnızca yetkili, kendi şubesi; 09e)
+//	POST /approvals/{id}/approve   -> şube: onay (yetkili, aynı şube, talep edenden farklı kişi, süresi geçmemiş; 09e)
 //	GET  /products                 -> ürün kataloğu (partner yetkisi örneği)
 //
 // Nesne seviyesinde yetki (BOLA, 09b): müşteri yalnızca kendi hesaplarını (owner_sub = sub), partner yalnızca kendisine
-// bağlı hesapları (partner_id) görür; personel tüm hesapları görür ve her erişimi loglanır. Mesh hangi hesabın kime
-// ait olduğunu bilemez; bu karar uygulamada.
+// bağlı hesapları (partner_id), personel yalnızca kendi şubesinin hesaplarını (branch_id, 09e) görür; personel erişimi
+// loglanır. Mesh hangi hesabın kime ait olduğunu bilemez; bu karar uygulamada.
 //
 // Veritabanı bağlantısı libpq ortam değişkenlerinden gelir (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD).
 // Bağlantı mesh üzerinden gider: account-api -> waypoint -> istio-egressgateway -> mgmt ingress gw -> postgres.
@@ -22,8 +25,10 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -34,6 +39,13 @@ import (
 )
 
 var version = "dev" // build sırasında -ldflags ile verilir
+
+// Şube rolleri (09e): işlem başlatabilenler ve onaylayabilenler (dört göz)
+var (
+	branchStaff     = []string{"teller", "operations", "supervisor"}
+	branchApprovers = []string{"supervisor"}
+	amountRe        = regexp.MustCompile(`^[0-9]{1,15}(\.[0-9]{1,2})?$`)
+)
 
 type account struct {
 	ID       int64  `json:"id"`
@@ -56,6 +68,16 @@ func main() {
 		log.Fatalf("veritabanı havuzu: %v", err)
 	}
 	defer pool.Close()
+	// Dört göz (09e): bu tutarın üzerindeki şube transferi aynı şubeden başka bir yetkilinin onayını bekler.
+	// Limit ve onay süresi iş kararı, konfigürasyondan gelir.
+	limit, ok := new(big.Rat).SetString(env("APPROVAL_LIMIT", "10000"))
+	if !ok {
+		log.Fatalf("APPROVAL_LIMIT geçersiz")
+	}
+	ttl, err := time.ParseDuration(env("APPROVAL_TTL", "30m"))
+	if err != nil {
+		log.Fatalf("APPROVAL_TTL geçersiz: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -115,7 +137,7 @@ func main() {
 				return
 			}
 		case "branch":
-			if !slices.Contains(u.Roles, "teller") && !slices.Contains(u.Roles, "operations") {
+			if !u.hasAnyRole(branchStaff) {
 				writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 				return
 			}
@@ -127,7 +149,7 @@ func main() {
 			ToIBAN string `json:"to_iban"`
 			Amount string `json:"amount"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil || req.ToIBAN == "" || req.Amount == "" {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil || req.ToIBAN == "" || !amountRe.MatchString(req.Amount) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
 			return
 		}
@@ -136,9 +158,109 @@ func main() {
 			writeJSON(w, status, map[string]string{"error": http.StatusText(status)})
 			return
 		}
+		amount, _ := new(big.Rat).SetString(req.Amount)
+		if u.Channel == "branch" && amount.Cmp(limit) > 0 {
+			var id int64
+			err := pool.QueryRow(r.Context(), `INSERT INTO accounts.transfer_approvals (account_id, to_iban, amount, branch_id, requested_by)
+				VALUES ($1, $2, $3, $4, $5) RETURNING id`, acc.ID, req.ToIBAN, req.Amount, u.BranchID, u.Sub).Scan(&id)
+			if err != nil {
+				dbError(w, r, err)
+				return
+			}
+			log.Printf("TRANSFER onay bekliyor onay=%d hesap=%d alici=%s tutar=%s talep_eden=%q şube=%q", id, acc.ID, maskIBAN(req.ToIBAN), req.Amount, u.Sub, u.BranchID)
+			writeJSON(w, http.StatusAccepted, map[string]any{"status": "pending_approval", "approval_id": id,
+				"note": "limit üstü: aynı şubeden başka bir yetkilinin onayı gerekli (dört göz)"})
+			return
+		}
 		ref := "TRX-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		log.Printf("TRANSFER kabul ref=%s hesap=%d alici=%s tutar=%s sub=%q kanal=%q loa=%s", ref, acc.ID, maskIBAN(req.ToIBAN), req.Amount, u.Sub, u.Channel, u.LoaMap)
 		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted", "reference": ref, "note": "lab: işlem yapılmaz, yalnızca kaydedilir"})
+	})
+	// Dört göz onayı (09e). Waypoint yalnızca branch-bff + şube kanalı + yetkili rolüne izin verir; kurallar burada
+	// tekrar (derinlemesine savunma). Başka şubenin talebi 404 (varlığı sızdırılmaz).
+	mux.HandleFunc("GET /approvals", func(w http.ResponseWriter, r *http.Request) {
+		u := userFrom(r)
+		if u.Channel != "branch" || !u.hasAnyRole(branchApprovers) || u.BranchID == "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		rows, err := pool.Query(r.Context(), `SELECT id, account_id, to_iban, amount::text, requested_by, requested_at
+			FROM accounts.transfer_approvals WHERE branch_id = $1 AND status = 'pending'
+			AND requested_at > now() - make_interval(secs => $2) ORDER BY id LIMIT 50`, u.BranchID, ttl.Seconds())
+		if err != nil {
+			dbError(w, r, err)
+			return
+		}
+		type pending struct {
+			ID          int64     `json:"id"`
+			AccountID   int64     `json:"account_id"`
+			ToIBAN      string    `json:"to_iban"`
+			Amount      string    `json:"amount"`
+			RequestedBy string    `json:"requested_by"`
+			RequestedAt time.Time `json:"requested_at"`
+		}
+		list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (pending, error) {
+			var p pending
+			err := row.Scan(&p.ID, &p.AccountID, &p.ToIBAN, &p.Amount, &p.RequestedBy, &p.RequestedAt)
+			p.ToIBAN = maskIBAN(p.ToIBAN)
+			return p, err
+		})
+		if err != nil {
+			dbError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"approvals": list})
+	})
+	mux.HandleFunc("POST /approvals/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
+		u := userFrom(r)
+		if u.Channel != "branch" || !u.hasAnyRole(branchApprovers) || u.BranchID == "" || u.Sub == "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || id <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+			return
+		}
+		var branchID, requestedBy, st string
+		var fresh bool
+		err = pool.QueryRow(r.Context(), `SELECT branch_id, requested_by, status, requested_at > now() - make_interval(secs => $2)
+			FROM accounts.transfer_approvals WHERE id = $1`, id, ttl.Seconds()).Scan(&branchID, &requestedBy, &st, &fresh)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows) || (err == nil && branchID != u.BranchID):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
+			return
+		case err != nil:
+			dbError(w, r, err)
+			return
+		case requestedBy == u.Sub:
+			log.Printf("DÖRT GÖZ İHLALİ onay=%d talep_eden=onaylayan=%q şube=%q", id, u.Sub, u.BranchID)
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "four_eyes_violation"})
+			return
+		case st != "pending":
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "already_" + st})
+			return
+		case !fresh:
+			writeJSON(w, http.StatusGone, map[string]string{"error": "approval_expired"})
+			return
+		}
+		// Koşullar UPDATE'te tekrar: aynı anda iki onay ya da arada değişen durum (yarış) tek kayıtla sonuçlanır
+		var accountID int64
+		var toIBAN, amount string
+		err = pool.QueryRow(r.Context(), `UPDATE accounts.transfer_approvals SET status = 'approved', decided_by = $2, decided_at = now()
+			WHERE id = $1 AND status = 'pending' AND branch_id = $3 AND requested_by <> $2
+			RETURNING account_id, to_iban, amount::text`, id, u.Sub, u.BranchID).Scan(&accountID, &toIBAN, &amount)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "not_pending"})
+			return
+		} else if err != nil {
+			dbError(w, r, err)
+			return
+		}
+		ref := "TRX-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		log.Printf("TRANSFER onaylandı ref=%s onay=%d hesap=%d alici=%s tutar=%s talep_eden=%q onaylayan=%q şube=%q",
+			ref, id, accountID, maskIBAN(toIBAN), amount, requestedBy, u.Sub, u.BranchID)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "approved", "reference": ref, "note": "lab: işlem yapılmaz, yalnızca kaydedilir"})
 	})
 	// Ürün kataloğu (09b): partner yetkisi örneği (products:read). Statik, veritabanı yok.
 	mux.HandleFunc("GET /products", func(w http.ResponseWriter, _ *http.Request) {
@@ -211,6 +333,10 @@ type user struct {
 
 func (u user) hasScope(s string) bool { return slices.Contains(strings.Fields(u.Scope), s) }
 
+func (u user) hasAnyRole(roles []string) bool {
+	return slices.ContainsFunc(u.Roles, func(r string) bool { return slices.Contains(roles, r) })
+}
+
 // levelFresh: kullanıcı bu oturumda en az bu seviyeyle, en fazla maxAge önce doğrulandı mı (step-up tazeliği)
 func (u user) levelFresh(level string, maxAge time.Duration) bool {
 	var m map[string]int64
@@ -230,9 +356,10 @@ func ownership(u user) (string, []any, bool) {
 		return "partner_id = $1", []any{u.PartnerID}, true
 	case (u.Channel == "web" || u.Channel == "mobile") && u.Sub != "":
 		return "owner_sub = $1", []any{u.Sub}, true
-	case u.Channel == "branch" && (slices.Contains(u.Roles, "teller") || slices.Contains(u.Roles, "operations")):
+	case u.Channel == "branch" && u.hasAnyRole(branchStaff) && u.BranchID != "":
+		// Personel yalnızca kendi şubesinin hesapları (09e); şube IdP'deki grup attribute'u, cihaz sertifikasıyla eşleşmiş
 		log.Printf("PERSONEL ERİŞİMİ sub=%q şube=%q roller=%v", u.Sub, u.BranchID, u.Roles)
-		return "true", nil, true
+		return "branch_id = $1", []any{u.BranchID}, true
 	}
 	return "", nil, false
 }

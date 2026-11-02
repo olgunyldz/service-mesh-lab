@@ -40,12 +40,13 @@ kc_logout() {  # kc_logout <realm> <form argümanları...>: IdP oturumunu kapat�
   env -u MSYS_NO_PATHCONV curl -s -o /dev/null --max-time 15 --ssl-no-revoke --cacert "$CA" --resolve "$SSO_HOST:8443:127.0.0.1" \
     "https://$SSO_HOST:8443/realms/$realm/protocol/openid-connect/logout" "$@"
 }
-staff_token() {  # personel: şube ağından, cihaz sertifikasıyla, şube gateway'inin /sso/ yolu üzerinden
+staff_token() {  # staff_token [kullanıcı] [cihaz]: personel; şube ağından, cihaz sertifikasıyla, şube gateway'inin /sso/ yolu üzerinden
+  local user=${1:-teller01} dev=${2:-$BRANCH_DEVICE}
   MSYS_NO_PATHCONV=1 docker run --rm --network "$BRANCH_NETWORK" -v "$ROOT_DIR/certs/branch:/b:ro" "$LOADGEN_IMAGE" sh -c \
-    "curl -s --max-time 15 --cacert /b/ca.pem --cert /b/$BRANCH_DEVICE.crt --key /b/$BRANCH_DEVICE.key \
+    "curl -s --max-time 15 --cacert /b/ca.pem --cert /b/$dev.crt --key /b/$dev.key \
        --resolve $BRANCH_HOST:443:\$(getent hosts branch-fw | cut -d' ' -f1) \
        https://$BRANCH_HOST/sso/realms/staff/protocol/openid-connect/token -d grant_type=password \
-       -d client_id=branch-teller -d username=teller01 --data-urlencode password=$(pwf kc-staff-teller01)" 2>/dev/null \
+       -d client_id=branch-teller -d username=$user --data-urlencode password=$(pwf "kc-staff-$user")" 2>/dev/null \
     | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
 }
 totp() {  # totp <gizli metin>: RFC 6238 (HMAC-SHA1, 30 sn, 6 hane). Keycloak'ın OTP gizi düz metin, anahtar baytları
@@ -267,6 +268,7 @@ branch() {  # branch <sertifika: device|partner|-> <curl argümanları>; şube a
   local cert=""
   case $1 in
     device) cert="--cert /b/$BRANCH_DEVICE.crt --key /b/$BRANCH_DEVICE.key" ;;
+    device2) cert="--cert /b/$BRANCH_DEVICE2.crt --key /b/$BRANCH_DEVICE2.key" ;;   # ikinci şubenin terminali (09e)
     partner) cert="--cert /p/acme.crt --key /p/acme.key" ;;
   esac
   shift
@@ -542,7 +544,7 @@ check "BOLA: mobil hesap listesinde yalnızca kendi hesabı" "yok" \
   "$(mobile /mobile/v1/accounts | grep -qE 'Mehmet|Acme|Zeynep' && echo var || echo yok)"
 check "BOLA: mobil, başka müşterinin hesabı (404)" "404" "$(mobile /mobile/v1/accounts/2 -o /dev/null -w '%{http_code}')"
 check "BOLA: web, başka müşterinin hesabı (404)" "404" "$(edge www /api/accounts/2 -o /dev/null -w '%{http_code}')"
-check "Şube personeli tüm hesapları görüyor (4 hesap, erişim loglanıyor)" "4" \
+check "Şube personeli yalnızca kendi şubesinin hesaplarını görüyor (sube-0001: 2 hesap, erişim loglanıyor)" "2" \
   "$(branch device "https://$BRANCH_HOST/branch/v1/accounts" | grep -o '"id":[0-9]*' | wc -l | tr -d ' ')"
 
 # Doğrulama seviyesi ve step-up: transfer son 5 dk içinde seviye 2 (parola + OTP) ister
@@ -602,6 +604,65 @@ check "DPoP tekrar deposu: yalnızca dpop: önekli anahtarlar, dpop kullanıcıs
 check "device-registry ve mobile-bff imzalı image'larla (digest)" "2" \
   "$( (kubectl --context "$(ctx mgmt)" -n iam get pod -l app=device-registry -o jsonpath='{.items[0].spec.containers[0].image}'; echo; \
        kubectl --context "$(ctx cluster-a)" -n channel-bff get pod -l app=mobile-bff -o jsonpath='{.items[0].spec.containers[0].image}') \
+     | grep -c "^$LAB_REGISTRY/lab/.*@sha256:" || true)"
+
+log "12) Şube kontrolleri: branch-bff, şube kapsamı, dört göz onayı, mesai saati"
+refresh_tokens
+TSUP1=$(staff_token yetkili01)                     # sube-0001 yetkilisi, sube-0001 terminali
+TSUP2=$(staff_token yetkili02 "$BRANCH_DEVICE2")   # sube-0002 yetkilisi, sube-0002 terminali
+BIG='{"to_iban":"TR330006100519786457841326","amount":"25000.00"}'   # limit (10000) üstü
+B="https://$BRANCH_HOST/branch/v1"
+bpost() {  # bpost <sertifika> <yol> [gövde]
+  local body=${3:-'{}'}
+  branch "$1" "-X POST -H 'Content-Type: application/json' -d '$body' $B$2"
+}
+bcode() { branch "$1" "-o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' $B$2"; }
+check "Şube trafiği internal'da branch-bff'e gidiyor (DMZ rotası)" "branch-bff.apps.example.local" \
+  "$(kubectl --context "$(ctx dmz)" -n istio-branch get virtualservice branch -o jsonpath='{.spec.http[1].rewrite.authority}')"
+check "Waypoint: şube kanalı domain servislerine yalnızca branch-bff kimliğinden" "yes" \
+  "$(for ns in account-api api-a; do kubectl --context "$(ctx cluster-a)" -n $ns get authorizationpolicy -o jsonpath='{range .items[*].spec.rules[*]}{.from[0].source.principals[0]} {.when[0].values}{"\n"}{end}'; done \
+     | grep '"branch"' | grep -vq 'sa/branch-bff' && echo "no" || echo yes)"
+check "Personel başka şubenin hesabını göremiyor (sube-0001 -> hesap 3, 404)" "404" \
+  "$(branch device "-o /dev/null -w '%{http_code}' $B/accounts/3")"
+check "Personel başka şubenin hesabından transfer yapamıyor (404)" "404" \
+  "$(branch device "-o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '$TRX' $B/accounts/3/transfers")"
+check "Limit altı transfer doğrudan kabul" '"status":"accepted"' "$(bpost device /accounts/2/transfers "$TRX")"
+p=$(bpost device /accounts/2/transfers "$BIG")
+AID=$(sed -n 's/.*"approval_id":\([0-9]*\).*/\1/p' <<<"$p")
+check "Limit üstü transfer onaya düşüyor (pending_approval)" '"status":"pending_approval"' "$p"
+check "Gişe personeli onay veremiyor (yetkili rolü yok, waypoint 403)" "403" "$(bcode device "/approvals/$AID/approve")"
+check "Yetkili kendi şubesinin bekleyen onaylarını görüyor" "\"id\":$AID," "$(BTOKEN=$TSUP1 branch device "$B/approvals")"
+check "Başka şubenin yetkilisi talebi görmüyor" "yok" \
+  "$(BTOKEN=$TSUP2 branch device2 "$B/approvals" | grep -q "\"id\":$AID," && echo var || echo yok)"
+check "Başka şubenin yetkilisi onaylayamıyor (404)" "404" "$(BTOKEN=$TSUP2 bcode device2 "/approvals/$AID/approve")"
+check "Yetkili başka şubenin terminalinden çalışamıyor (cihaz ↔ şube, 403)" "403" \
+  "$(BTOKEN=$TSUP2 branch device "-o /dev/null -w '%{http_code}' $B/accounts")"
+check "Aynı şubenin yetkilisi onaylıyor (approved + işlem referansı)" '"status":"approved"' \
+  "$(BTOKEN=$TSUP1 bpost device "/approvals/$AID/approve")"
+check "Onaylanmış talep ikinci kez onaylanamıyor (409)" "409" "$(BTOKEN=$TSUP1 bcode device "/approvals/$AID/approve")"
+p=$(BTOKEN=$TSUP1 bpost device /accounts/1/transfers "$BIG")
+AID2=$(sed -n 's/.*"approval_id":\([0-9]*\).*/\1/p' <<<"$p")
+check "Dört göz: talep eden kendi işlemini onaylayamıyor (403 four_eyes_violation)" "four_eyes_violation" \
+  "$(BTOKEN=$TSUP1 bpost device "/approvals/$AID2/approve")"
+check "Veritabanı da talep eden = onaylayan kaydını reddediyor (CHECK kısıtı)" "violates check constraint" \
+  "$(pg account_api pg-account-api "update accounts.transfer_approvals set status='approved', decided_by=requested_by where id=$AID2")"
+check "account-api onay kaydını silemiyor (yalnızca ekleme ve karar güncellemesi)" "permission denied" \
+  "$(pg account_api pg-account-api "delete from accounts.transfer_approvals where id=$AID2")"
+check "account-api onayı talep eden ve onaylayanla logluyor" "TRANSFER onaylandı" \
+  "$(kubectl --context "$(ctx cluster-a)" -n account-api logs deploy/account-api --tail=50 2>/dev/null | grep "onay=$AID ")"
+# Mesai saati: branch-bff'e geçici olarak şu anı dışarıda bırakan bir aralık verilir, sonra geri alınır
+hour=$(( (10#$(date -u +%H) + 3) % 24 ))   # Türkiye saati (UTC+3)
+(( hour < 12 )) && closed="13:00-14:00" || closed="01:00-02:00"
+bset() {
+  kubectl --context "$(ctx cluster-a)" -n channel-bff set env deploy/branch-bff BRANCH_HOURS="$1" >/dev/null
+  kubectl --context "$(ctx cluster-a)" -n channel-bff rollout status deploy/branch-bff --timeout=120s >/dev/null
+}
+bset "$closed"
+check "Mesai dışı istek reddediliyor (403 outside_business_hours)" "outside_business_hours" "$(branch device "$B/accounts")"
+bset "00:00-24:00"
+check "Mesai içinde tekrar kabul (200)" "200" "$(branch device "-o /dev/null -w '%{http_code}' $B/accounts")"
+check "branch-bff imzalı image'la (digest)" "1" \
+  "$(kubectl --context "$(ctx cluster-a)" -n channel-bff get pod -l app=branch-bff -o jsonpath='{.items[0].spec.containers[0].image}' \
      | grep -c "^$LAB_REGISTRY/lab/.*@sha256:" || true)"
 
 log "7) Politika (Kyverno, admission)"

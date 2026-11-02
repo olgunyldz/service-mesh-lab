@@ -1,4 +1,4 @@
-# Kanal BFF'leri (dokümandaki channel-bff namespace'i): web-bff (09a) ve mobile-bff (09c, dosyanın sonunda).
+# Kanal BFF'leri (dokümandaki channel-bff namespace'i): web-bff (09a), mobile-bff (09c) ve branch-bff (09e).
 # web-bff (services/web-bff): web kanalının BFF'i, internal'da. Akış:
 #   DMZ web-token-handler -> dmz-egressgateway -> internal ingress gw -> waypoint (channel-bff) -> web-bff
 #   -> waypoint (api-a / account-api) -> api-a / account-api
@@ -289,3 +289,123 @@ spec:
       when:
         - key: request.auth.claims[channel]
           values: ["mobile"]
+---
+# --- branch-bff (services/branch-bff, 09e · branch-controls): şube kanalının BFF'i ---
+#   şube terminali -> branch-fw -> DMZ branch-gateway (cihaz sertifikası, personel token'ı, cihaz ↔ şube)
+#   -> dmz-egressgateway -> internal ingress gw -> waypoint (channel-bff) -> branch-bff -> account-api / api-a
+# Mesai saati kontrolü burada (kanal kuralı); domain servisleri şube kanalını yalnızca branch-bff'ten kabul eder.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: branch-bff
+  namespace: channel-bff
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: branch-bff
+  namespace: channel-bff
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: branch-bff
+  template:
+    metadata:
+      labels:
+        app: branch-bff
+        version: v1
+    spec:
+      serviceAccountName: branch-bff
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bff
+          image: lab-registry:5000/lab/branch-bff:0.1.0   # build + imza: 03b-publish-images.sh
+          env:
+            - name: API_URL
+              value: http://api-a.api-a.svc.cluster.local
+            - name: ACCOUNTS_URL
+              value: http://account-api.account-api.svc.cluster.local:8080
+            # Mesai saati (Türkiye saati). İş kararı; gerçekte ör. 09:00-17:30. Lab'de yük üreteci ve testler gün boyu
+            # çalıştığı için tüm gün açık; mesai dışı davranışı 08-verify.sh geçici olarak dar bir aralıkla test eder
+            - name: BRANCH_HOURS
+              value: "00:00-24:00"
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: branch-bff
+  namespace: channel-bff
+  labels:
+    istio.io/ingress-use-waypoint: "true"   # ingress gateway trafiği de waypoint'ten geçsin (L7 AuthZ, JWT)
+spec:
+  selector:
+    app: branch-bff
+  ports:
+    - name: http
+      port: 8080
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: branch-bff-allow-waypoint
+  namespace: channel-bff
+spec:
+  selector:
+    matchLabels:
+      app: branch-bff
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/channel-bff/sa/waypoint
+---
+# L7: branch-bff'e yalnızca internal ingress gateway, personel realm'inin iç JWT'siyle ve yalnızca şube kanalından
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: branch-bff-allow-branch-channel
+  namespace: channel-bff
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: branch-bff
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/staff/*"]
+      to:
+        - operation:
+            methods: ["GET", "POST"]
+      when:
+        - key: request.auth.claims[channel]
+          values: ["branch"]

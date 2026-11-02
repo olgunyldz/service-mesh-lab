@@ -35,8 +35,8 @@ spec:
             principals:
               - corp.mesh/ns/api-a/sa/waypoint
 ---
-# L7 (waypoint'te): api-a'ya her kanal yalnızca kendi kapısından (web -> web-bff, mobil -> mobile-bff, şube ve partner ->
-# internal ingress), geçerli iç JWT ile. Partner yalnızca info:read scope'u varsa ve yalnızca GET (09b, 09c).
+# L7 (waypoint'te): api-a'ya her kanal yalnızca kendi kapısından (web -> web-bff, mobil -> mobile-bff, şube -> branch-bff,
+# partner -> internal ingress), geçerli iç JWT ile. Partner yalnızca info:read scope'u varsa ve yalnızca GET (09b, 09c, 09e).
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -78,10 +78,8 @@ spec:
     - from:
         - source:
             principals:
-              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
-            requestPrincipals: ["https://sso.apps.example.local:8443/realms/customers/*",
-                                "https://sso.apps.example.local:8443/realms/partners/*",
-                                "https://sso.apps.example.local:8443/realms/staff/*"]
+              - corp.mesh/ns/channel-bff/sa/branch-bff
+            requestPrincipals: ["https://sso.apps.example.local:8443/realms/staff/*"]
       to:
         - operation:
             methods: ["GET", "POST"]

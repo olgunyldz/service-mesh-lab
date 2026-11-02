@@ -1014,6 +1014,7 @@ Bu mimari, [service-mesh-lab](../README.md) deposunda kind üzerinde küçültü
 | Partner kimlik doğrulaması | mTLS + `private_key_jwt` (FAPI 2.0, CH-10) | Client ID + client secret (kullanıcı kararı); token partner sertifikasına bağlı. Partner yetkisi client başına scope ile (sözleşmedeki işlemler) | Prod'da `private_key_jwt` |
 | Mobil cihaz bağlama (IAM-04) | Token DPoP ile cihaza bağlı (`cnf.jkt`), iç JWT'de `device_id` | DPoP kanıtı her istekte zorunlu, ama bağlamayı DMZ yapıyor: kanıtı imzalayan anahtar device-registry'de kullanıcıya kayıtlı olmalı. Keycloak DPoP'a bağlı token'ı başka client'a exchange ettirmiyor; `device_id` iç JWT'de yok. Attestation lab sağlayıcısıyla simüle (`09c`) | IdP DPoP + exchange'i birlikte desteklerse token'a bağ; gerçek Play Integrity / App Attest |
 | İşlem imzası (CH-08, IAM-08) | `tx-signing-svc`: tutar + alıcı cihaz anahtarıyla imzalı, seviye 3 | **Açık nokta:** yok; transfer seviye 2 (OTP) ile | `09d` atlandı; eşik ve onay kuralları iş kararı |
+| Mesai saati (şube) | Şube gateway'inde (`branch-gw`) | Internal `branch-bff`'te; lab'de tüm gün açık (`09e`) | Şube gateway'i lab'de DMZ'de; iş kuralı DMZ'ye konmadı. Domain servisleri şube kanalını yalnızca branch-bff'ten kabul ettiği için atlanamaz |
 | BFF yeri | Internal `channel-bff` (INT-07, GW-09) | ✅ `web-bff` internal'da (`channel-bff`); DMZ'de `web-token-handler` (cookie oturumu, CSRF), tarayıcıda token yok (`09a`). Oturum deposu mgmt Valkey'de (hedefte kimlik zone'unda `redis-session`) | `mobile-bff`, `branch-bff` sonraki adımlarda |
 | Cluster sayısı ve node | Zone başına cluster, her DC'de, çok node | Tek node'lu kind cluster'ları: `dmz`, `cluster-a`, `mgmt`; `cluster-b` kapalı | `cluster-b` A/B adımında geri gelir; core, PCI ve veri ayrı cluster olarak temsil edilmez (veri `mgmt`'te) |
 | Edge | DDoS / CDN, GSLB, F5 + WAF | Docker konteynerinde HAProxy + ModSecurity (OWASP CRS) | Ürün davranışı temsil edilir, ürün değil |
@@ -1024,6 +1025,7 @@ Bu mimari, [service-mesh-lab](../README.md) deposunda kind üzerinde küçültü
 | --- | --- |
 | Nov 1, 2026 (6) | Kimlik zone'u için ayrı A/B cluster hedefi ve yerleşim sayısı (14) netleştirildi; mobil cihaz kaydı/IdP erişimi edge ve DMZ üzerinden tanımlandı; web OIDC state cookie ve oturum erişimi netleştirildi; iptal yayılımı, token scope sınırı, DB failover/fencing, ağ akışı izinleri ve ek kabul/izlenebilirlik kriterleri eklendi |
 | Oct 31, 2026 | İlk sürüm |
+| Nov 1, 2026 (8) | Lab sapmaları: mesai saati kontrolünün yeri (`09e · branch-controls`) |
 | Nov 1, 2026 (7) | Lab sapmaları: işlem imzası açık nokta (`09d` atlandı) |
 | Nov 1, 2026 (6) | Lab sapmaları: mobil cihaz bağlama (DPoP DMZ'de, Keycloak exchange kısıtı; `09c · mobile-binding`) |
 | Nov 1, 2026 (5) | Dosya adı standarda getirildi (`target-architecture.md`); gereksinim bazında pilot durumu ayrı dokümanda: [Pilot mimari](pilot-architecture.md) |
