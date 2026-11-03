@@ -169,6 +169,7 @@ Kalın oklar mTLS'tir. Kırmızı kesikli kutu **açık noktadır**: hedefte ola
 | Gözlem | Metrik, panolar, mesh görünümü | `istio-system`: Prometheus (merkezde 6 saat; diğer cluster'larda agent), Grafana, Kiali | Prometheus + Thanos, Grafana, Kiali, ELK, Tempo, SIEM |
 | Gözlem | Loglar | `logging/loki` (mgmt, 3.7, kategori başına tenant), Grafana organizasyonları (Apps, Network, Security, DB, Infra; Main Org'da Korelasyon); `logging-agent/fluent-bit` (her cluster); `edge-logs` (Docker) | `fluent-bit` → `logstash` → Elasticsearch + SIEM |
 | Yönetim | Politika, imza, registry | Kyverno 1.19 (her cluster), cosign anahtarı, `lab-registry:5000` | Kyverno / Gatekeeper, Harbor + cosign |
+| Yönetim | Secret yönetimi | `vault/vault` (mgmt, Vault Community 2.1, tek pod Raft); her cluster'da `external-secrets` (namespace başına SecretStore, JWT auth); Database motoru (1 saatlik PostgreSQL kullanıcıları) | Vault Enterprise (HA, DR, HSM ile otomatik unseal), External Secrets / Vault Secrets Operator |
 
 ## Kanal bazında istek yolu (pilot)
 
@@ -482,7 +483,7 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 | IAM-10 | ❌ | – | `09f · consent` |
 | IAM-11 | ✅ | Brute force koruması (müşteri 5, personel 3 deneme) | SIEM'e olay yok |
 | IAM-12 | ❌ | – | Riskli giriş tespiti yok |
-| IAM-13 | 🟡 | Realm imza anahtarları kurulumda üretiliyor, internal'a inline JWKS | HSM yok; rotasyon elle (`13 · secrets`) |
+| IAM-13 | 🟡 | Realm imza anahtarları kurulumda üretiliyor, internal'a inline JWKS; client secret'ları ve parolalar Vault'ta (13) | HSM yok; anahtar rotasyonu elle (`13a · pki`) |
 
 ### Internal ve iş sürekliliği (INT)
 
@@ -511,7 +512,7 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 | DATA-02 | ✅ | Servis başına rol; başka şema ve yazma reddi; Valkey önek bazlı ACL (test) | – |
 | DATA-03 | ➖ | PostgreSQL tek replika | Oracle, MSSQL, replika yok (K-Kaynak) |
 | DATA-04 | 🟡 | Valkey ACL önek bazlı (test) | Kafka, RabbitMQ yok |
-| DATA-05 / 06 / 07 | ❌ | – | TDE, yedek, dinamik kimlik yok (`13 · secrets`) |
+| DATA-05 / 06 / 07 | 🟡 | DATA-07: account-api ve device-registry Vault Database motorunun 1 saatlik kullanıcılarıyla; statik servis kullanıcısı yok (13) | TDE ve yedek yok; Keycloak statik kullanıcıyla |
 | DATA-08 | ➖ | Lab verisi sentetik | – |
 | CARD-01..10 | ➖ | – | `14 · pci-zone` |
 | OUT-01..09 | ➖ | `istio-egressgateway` → internete doğrudan | Dış çıkış zone'u yok (K-Kapsam) |
@@ -593,7 +594,7 @@ Pilotta ortaya çıkan ve hedef dokümanı etkileyebilecek bulgular:
 | ~~Uçtan uca iz~~ | ✅ `11 · tracing` |
 | SIEM'e hazırlık | SIEM ürünü (K-Ürün) |
 | ~~Trafik yönetimi, outlier detection (GW-16'nın bir kısmı)~~ | ✅ `12 · traffic-mgmt` |
-| HSM / Vault, dinamik DB kimlikleri, anahtar rotasyonu (IAM-13, DATA-05..07) | `13 · secrets` |
+| HSM, PKI (Istio CA Vault'ta), anahtar rotasyonu (IAM-13, DATA-05) | `13a · pki` (Vault ve dinamik DB kimlikleri 13'te geldi) |
 | Kart zone'u (CARD) | `14 · pci-zone` |
 | CI güvenlik taramaları (INT-14) | `15 · ci` |
 | GitOps (INT-01) | `16 · gitops` |

@@ -4,7 +4,7 @@ Bu proje, kurumsal bir OpenShift yapısını yerelde **kind** ile simüle eder:
 
 - **DMZ cluster**: dış dünyaya açık tek katman. Edge load balancer ve public Istio ingress gateway burada çalışır.
 - **cluster-a** ve **cluster-b**: internal cluster'lar. API'ler burada çalışır, dışarıdan doğrudan erişilemez.
-- **mgmt**: paylaşılan ürünler. Şu an merkezi gözlemlenebilirlik (tek Kiali, tek Grafana, merkezi Prometheus) ve veri (PostgreSQL, Valkey); ileride Keycloak, Vault.
+- **mgmt**: paylaşılan ürünler: merkezi gözlemlenebilirlik (tek Kiali, tek Grafana, merkezi Prometheus, Loki, Tempo), veri (PostgreSQL, Valkey), kimlik (Keycloak) ve secret yönetimi (Vault, 13 · secrets).
 
 > **Şu an aktif cluster'lar: `dmz`, `cluster-a` ve `mgmt`** (her biri tek node). **cluster-b RAM kısıtı nedeniyle şimdilik kapalı** ve yol haritasının son adımında (17 · `cluster-b`) geri gelecek. Bu README'deki mimari ve akış anlatımları cluster-b dahil hedef tasarımı gösterir; cluster-b'ye bağlı kısımlar *(cluster-b kapalı)* olarak işaretlidir. Bkz. [Kaynak kısıtları](#kaynak-kısıtları).
 - **Istio Ambient Mesh**: sidecar yoktur. L4 mTLS'i **ztunnel**, L7 politikaları **waypoint** üstlenir. Giriş trafiği **ingress gateway**, çıkış trafiği **egress gateway** üzerinden geçer.
@@ -38,6 +38,8 @@ Giriş noktaları (host'ta `--resolve ...:8443:127.0.0.1` ve `certs/edge/ca.pem`
 | – | Merkezi loglama: beş kategori dolu; aynı `request_id` DMZ ve internal access log'larında ve auth-service logunda; WAF engellemesi ve auth-service reddi security'de; edge logları mTLS ile; Kubernetes audit (secret işlemleri, gövdesiz); başarısız DB girişi db'de; loglarda JWT yok; ekipler yalnızca kendi kategorisi (soc01 → apps 403); DMZ'den arama 403 | ✅ |
 | – | Dağıtık iz: zorunlu izlenen web isteği Tempo'da DMZ (web gateway, token handler) ve internal (ingress, web-bff, api-a) hop'larıyla; aynı `trace_id` iki zone'un access log'unda; egress gateway'ler span üretmiyor; soc01 izlere erişemiyor; DMZ'den sorgu 403 | ✅ |
 | – | Trafik yönetimi: canary dağılımı (60 istekte v2 ~%10); GET 503 waypoint'te 3 deneme, POST 1 deneme; art arda 503 veren api-a pod'u havuzdan çıkarılıyor, diğer replika hizmet veriyor; 3 sn'lik yanıt waypoint'te 2 sn'de 504; enjekte hata 503, enjekte gecikme 5 sn, kural kaldırılınca 200 | ✅ |
+| – | Secret yönetimi: Vault mühürsüz, diskte düz parola yok; tüm ExternalSecret'lar senkron; namespace yalnızca kendi Vault yolunu okuyor, başka namespace / cluster / parola deposu `permission denied`; başka namespace'in ve başka cluster'ın token'ı giriş yapamıyor; DMZ'de Vault çıkışı External Secrets dışına kapalı; account-api 1 saatlik Vault kullanıcısıyla, eski kullanıcı iptal edilince oturum kapanıyor ve servis pod yeniden başlamadan yeni kullanıcıyla devam ediyor; Vault audit logu Loki'de | 🔄 Doğrulama sürüyor |
+| – | Edge izolasyonu: edge-waf, branch-fw, edge-logs node portlarına (Grafana, Kiali, Keycloak yönetimi, API sunucusu, kubelet) ve registry'ye ulaşamıyor | 🔄 Doğrulama sürüyor |
 | – | Edge: HTTP → HTTPS (301), HSTS, TLS 1.1 reddi, TLS 1.2/1.3 kabulü | ✅ |
 | – | Edge: WAF XSS ve SQL injection denemelerini engelliyor (403) | ✅ |
 | – | Edge: sahte `X-Forwarded-For` ve `x-user-jwt` içeri geçmiyor | ✅ |
@@ -564,10 +566,10 @@ Gözlemlenebilirlik **mgmt cluster'ında merkezi**dir (`04 · mgmt`). Her cluste
 | Arayüz | Adres | Not |
 |--------|-------|-----|
 | **Kiali** | http://localhost:20001/kiali | Üç cluster tek arayüzde (çoklu cluster), salt okunur (`view_only_mode`) |
-| **Grafana** | http://localhost:3001 | Istio dashboard'ları, merkezi Prometheus. Girişli (10 · logging'den itibaren): `admin` / `certs/data/grafana-admin.pw` |
+| **Grafana** | http://localhost:3001 | Istio dashboard'ları, merkezi Prometheus. Girişli (10 · logging'den itibaren): `admin` / parola Vault'ta (`kv/ops/passwords`, `grafana-admin`; 13 · secrets) |
 | **Grafana: loglar** | http://localhost:3001 (Explore, panolar) | Merkezi loglar (10 · logging): Apps, Network, Security, DB, Infra organizasyonları ve panoları; Main Org'da "Korelasyon" ve **Loglar - Genel bakış** panosu (request_id ile iz). Yönetici `admin` (`certs/data/grafana-admin.pw`), ekip kullanıcıları `dev01`, `netops01`, `soc01`, `dba01`, `platform01` (`certs/data/grafana-<kullanıcı>.pw`). Anonim erişim kapalı |
 | **Grafana: izler** | http://localhost:3001 (Explore → Tempo) | Dağıtık iz (11 · tracing): yönetici ve Network organizasyonu. Loglardaki `trace_id`'den ize, izden loglara tek tık. Bir isteği izletmek için `x-client-trace-id` başlığı |
-| **Keycloak yönetim konsolu** | http://localhost:8081/admin | `admin` / `certs/data/keycloak-admin.pw` (10a). Yalnızca bu makineden (127.0.0.1); internetten ve DMZ'den kapalı |
+| **Keycloak yönetim konsolu** | http://localhost:8081/admin | `admin` / parola Vault'ta (`kv/ops/passwords`, `keycloak-admin`; 10a, 13). Yalnızca bu makineden (127.0.0.1); internetten ve DMZ'den kapalı |
 
 ```mermaid
 flowchart LR
@@ -713,8 +715,9 @@ service-mesh/
 │   ├── 03c-install-kyverno.sh  # Kyverno + politikalar + istisnalar (Istio'dan önce)
 │   ├── 04-install-istio.sh     # base, istiod, cni, ztunnel
 │   ├── 05-install-gateways.sh  # ingress / egress gateway'ler
-│   ├── 05b-create-data-secrets.sh  # veri parolaları (certs/data/) ve Secret'lar
+│   ├── 05b-setup-vault.sh      # Vault (mgmt) + External Secrets + parolalar ve uygulama secret'ları Vault'ta (13)
 │   ├── 06-deploy-manifests.sh
+│   ├── 06a-vault-database.sh   # Vault Database motoru: kısa ömürlü PostgreSQL kullanıcıları (13)
 │   ├── 06b-deploy-edge.sh      # edge-net, edge-waf, edge-lb, loadgen (Docker)
 │   ├── 06c-deploy-branch.sh    # şube WAN'ı: branch-net, branch-fw, branch-terminal (Docker)
 │   ├── 07-install-observability.sh  # merkezi Prometheus + remote_write, tek Grafana, tek Kiali (çoklu cluster)
@@ -802,8 +805,9 @@ bash scripts/03b-publish-images.sh
 bash scripts/03c-install-kyverno.sh   # Audit modu için: ... Audit
 bash scripts/04-install-istio.sh
 bash scripts/05-install-gateways.sh
-bash scripts/05b-create-data-secrets.sh
+bash scripts/05b-setup-vault.sh
 bash scripts/06-deploy-manifests.sh
+bash scripts/06a-vault-database.sh
 bash scripts/06b-deploy-edge.sh
 bash scripts/06c-deploy-branch.sh
 bash scripts/07-install-observability.sh
@@ -1021,7 +1025,8 @@ Her adım ayrı bir branch'te yapılır; her branch bir önceki biten branch'ten
 | 10a | `admin-access` | Keycloak yönetim konsolu komutsuz (http://localhost:8081/admin, yalnızca 127.0.0.1, mgmt ingress gateway'in yönetim dinleyicisi, yalnızca yönetim yolları); Loki panoları (genel bakış + ekip başına). Ayrıntılar: [docs/10a-admin-access.md](docs/10a-admin-access.md) | ✅ |
 | 11 | `tracing` | mgmt'te **Tempo** (2.10); gateway ve waypoint Envoy'ları OpenTelemetry (OTLP/HTTP) ile, kendi egress gateway'leri üzerinden; %10 örnekleme (`x-client-trace-id` ile zorunlu iz); egress / mgmt ingress span üretmez (geri besleme koruması); access log'da `trace_id`, log örneklemesi izle aynı karar; Grafana'da log ↔ iz geçişi, Tempo yalnızca yönetici ve Network. Ayrıntılar: [docs/11-tracing.md](docs/11-tracing.md) | ✅ |
 | 12 | `traffic-mgmt` | account-api canary (v1 %90 / v2 %10, aynı image, yanıtta `release`); zaman aşımı; yeniden deneme yalnızca GET'te (POST transfer tekrarlanmaz); bağlantı havuzu (circuit breaker) ve outlier detection; hata enjeksiyonu yalnızca test sırasında; access log'da deneme sayısı, waypoint'lerde retry / outlier sayaçları. Ayrıntılar: [docs/12-traffic-mgmt.md](docs/12-traffic-mgmt.md) | ✅ Tamamlandı (275/275 test) |
-| 13 | `secrets` | mgmt'te **HashiCorp Vault Community**: PKI (cert-manager + istio-csr ile Istio CA'nın Vault'a taşınması, root CA anahtarı diskten kalkar), KV v2 + External Secrets, Database motoru ile servis başına kısa ömürlü DB kullanıcıları, audit log. Cluster'lar Vault'a JWT/OIDC auth ile bağlanır | ⏳ |
+| 13 | `secrets` | mgmt'te **HashiCorp Vault Community** (Raft, mesh içinde): KV v2 + External Secrets (namespace başına SecretStore ve politika), cluster başına JWT auth (Vault cluster API'sini çağırmaz), Database motoru ile account-api ve device-registry'ye 1 saatlik PostgreSQL kullanıcıları (iptalde oturum da kapanır), audit → Loki. `certs/data` düz parolaları kalktı. Ek: edge izolasyonu (node koruması, registry ayrı ağda) | 🔄 Doğrulama sürüyor |
+| 13a | `pki` | Vault PKI: kök CA Vault'ta, cluster başına intermediate; cert-manager + istio-csr ile Istio CA'nın Vault'a taşınması, `certs/` altındaki CA anahtarları diskten kalkar; Vault TLS | ⏳ |
 | 14 | `pci-zone` | mgmt içinde sıkı izole namespace'ler olarak kart zone'u (CDE): yalnızca belirli servise mTLS ile erişim, default-deny AuthZ + NetworkPolicy, Vault Transit ile PAN tokenizasyonu (Enterprise'daki Transform yerine) | ⏳ |
 | 15 | `ci` | GitHub Actions: Trivy (image + IaC), gitleaks, Semgrep, SBOM; branch protection | ⏳ |
 | 16 | `gitops` | mgmt'te Argo CD; cluster'ların repo'dan yönetimi; isteğe bağlı Argo Rollouts ile otomatik canary | ⏳ |

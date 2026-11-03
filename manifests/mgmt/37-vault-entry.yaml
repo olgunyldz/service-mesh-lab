@@ -1,0 +1,68 @@
+# mgmt girişi: diğer zone'lardan Vault'a (13 · secrets).
+#   dmz / cluster-a: external-secrets --> ns'in waypoint'i --> kendi egress gw'si --mTLS (ISTIO_MUTUAL, SNI vault.mgmt.internal)--> burası --> vault:8200
+# Vault kurulumu ve yapılandırması: infra/vault/vault.yaml, scripts/05b-setup-vault.sh.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: vault-entry
+  namespace: istio-ingress
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 443
+        name: https-vault
+        protocol: HTTPS
+      tls:
+        mode: ISTIO_MUTUAL
+      hosts:
+        - vault.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: vault
+  namespace: istio-ingress
+spec:
+  hosts:
+    - vault.mgmt.internal
+  gateways:
+    - vault-entry
+  http:
+    - route:
+        - destination:
+            host: vault.vault.svc.cluster.local
+            port:
+              number: 8200
+      timeout: 15s
+---
+# Kaynak kimliği zone'u belirler: DMZ'nin egress'i yalnızca DMZ'nin JWT girişi ve kv/dmz/*, cluster-a'nınki yalnızca
+# kendisininkiler (+ account-api veritabanı kullanıcısı). Vault'un yönetim API'si (sys/), başka yollar ve diğer kaynaklar kapalı.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-vault
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-egress/sa/dmz-egressgateway
+      to:
+        - operation:
+            hosts: ["vault.mgmt.internal", "vault.mgmt.internal:*"]
+            paths: ["/v1/auth/jwt-dmz/login", "/v1/auth/token/lookup-self", "/v1/auth/token/revoke-self", "/v1/kv/data/dmz/*"]
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-egress/sa/istio-egressgateway
+      to:
+        - operation:
+            hosts: ["vault.mgmt.internal", "vault.mgmt.internal:*"]
+            paths: ["/v1/auth/jwt-cluster-a/login", "/v1/auth/token/lookup-self", "/v1/auth/token/revoke-self", "/v1/kv/data/cluster-a/*", "/v1/database/creds/account-api"]

@@ -19,6 +19,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -59,6 +62,8 @@ func main() {
 		log.Fatalf("veritabanı yapılandırması: %v", err)
 	}
 	cfg.MaxConns = 4
+	cfg.MaxConnIdleTime = time.Minute
+	dbCredentialFiles(cfg)
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		log.Fatalf("veritabanı havuzu: %v", err)
@@ -203,4 +208,36 @@ func env(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// dbCredentialFiles: kullanıcı adı ve parola DB_CREDENTIALS_DIR'deki dosyalardan, her yeni bağlantıda okunur (13 · secrets).
+// Vault Database motoru kısa ömürlü kullanıcı üretir; External Secrets Secret'ı yeniler, kubelet dosyaları günceller.
+// Bağlantılar en fazla 10 dk yaşar: eski kullanıcının süresi dolmadan yenisine geçilir, pod yeniden başlamaz.
+// Değişken yoksa libpq ortam değişkenleri (PGUSER, PGPASSWORD) kullanılır.
+func dbCredentialFiles(cfg *pgxpool.Config) {
+	dir := os.Getenv("DB_CREDENTIALS_DIR")
+	if dir == "" {
+		return
+	}
+	cfg.MaxConnLifetime = 10 * time.Minute
+	var last string
+	var mu sync.Mutex
+	cfg.BeforeConnect = func(_ context.Context, cc *pgx.ConnConfig) error {
+		u, err := os.ReadFile(filepath.Join(dir, "username"))
+		if err != nil {
+			return err
+		}
+		p, err := os.ReadFile(filepath.Join(dir, "password"))
+		if err != nil {
+			return err
+		}
+		cc.User, cc.Password = strings.TrimSpace(string(u)), strings.TrimSpace(string(p))
+		mu.Lock()
+		if cc.User != last {
+			log.Printf("veritabanı kullanıcısı: %s", cc.User)
+			last = cc.User
+		}
+		mu.Unlock()
+		return nil
+	}
 }

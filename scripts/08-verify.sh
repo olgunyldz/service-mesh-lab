@@ -23,7 +23,7 @@ edge() {
 }
 
 # --- Kimlik (08): token'lar Keycloak'tan, lab'de direct grant (müşteri, personel) ve client credentials (partner) ---
-pwf() { cat "$ROOT_DIR/certs/data/$1.pw" 2>/dev/null; }
+pwf_load   # parolalar Vault'ta (kv/ops/passwords, 13 · secrets)
 kc_token() {  # kc_token <realm> <form argümanları...>: sso host'u üzerinden (edge -> web gateway -> mgmt Keycloak)
   local realm=$1; shift
   env -u MSYS_NO_PATHCONV curl -s --max-time 15 --ssl-no-revoke --cacert "$CA" --resolve "$SSO_HOST:8443:127.0.0.1" \
@@ -381,13 +381,13 @@ check "mgmt girişine mesh sertifikası olmadan erişilemiyor" "000" \
 
 log "8) Veri katmanı (mgmt: PostgreSQL, Valkey; mesh üzerinden)"
 refresh_tokens
-pg() {  # pg <kullanıcı> <parola dosyası> <sql>: mgmt'teki postgres pod'unda, verilen kullanıcıyla
-  kubectl --context "$(ctx mgmt)" -n data exec postgres-0 -- env PGPASSWORD="$(cat "$ROOT_DIR/certs/data/$2.pw")" \
+pg() {  # pg <kullanıcı> <parola> <sql>: mgmt'teki postgres pod'unda, verilen kullanıcıyla
+  kubectl --context "$(ctx mgmt)" -n data exec postgres-0 -- env PGPASSWORD="$2" \
     psql -h 127.0.0.1 -U "$1" -d "$POSTGRES_DB" -tAc "$3" 2>&1 || true
 }
-vk() {  # vk <kullanıcı> <parola dosyası|-> <komut...>: mgmt'teki valkey pod'unda
+vk() {  # vk <kullanıcı> <parola adı (kv/ops/passwords)|-> <komut...>: mgmt'teki valkey pod'unda
   local auth=()
-  [[ $2 != - ]] && auth=(--user "$1" --pass "$(cat "$ROOT_DIR/certs/data/$2.pw")")
+  [[ $2 != - ]] && auth=(--user "$1" --pass "$(pwf "$2")")
   shift 2
   kubectl --context "$(ctx mgmt)" -n data exec deploy/valkey -- valkey-cli "${auth[@]}" --no-auth-warning "$@" 2>&1 || true
 }
@@ -401,12 +401,15 @@ check "IBAN maskeli dönüyor (tam IBAN yanıtta yok)" "yok" \
 check "account-api: tanımsız yazma (POST /accounts) reddediliyor (403, waypoint L7)" "403" \
   "$(mobile /mobile/v1/accounts -X POST -d '{}' -o /dev/null -w '%{http_code}')"
 
-check "PostgreSQL: account_api kendi tablosunu okuyabiliyor" "4" \
-  "$(pg account_api pg-account-api 'select count(*) from accounts.accounts')"
-check "PostgreSQL: account_api başka şemayı okuyamıyor (audit)" "permission denied" \
-  "$(pg account_api pg-account-api 'select * from audit.events')"
-check "PostgreSQL: account_api yazamıyor" "permission denied" \
-  "$(pg account_api pg-account-api "update accounts.accounts set balance = 0 where id = 1")"
+# account-api'nin yetkileri: Vault'tan yeni bir kısa ömürlü kullanıcıyla (account_api rolünün üyesi; 13 · secrets)
+dbc=$(vault_cmd read -format=json database/creds/account-api | python -c "import json,sys; d=json.load(sys.stdin)['data']; print(d['username'], d['password'])" | tr -d '\r')
+DBU=${dbc% *}; DBP=${dbc#* }
+check "PostgreSQL: account-api kullanıcısı kendi tablosunu okuyabiliyor" "4" \
+  "$(pg "$DBU" "$DBP" 'select count(*) from accounts.accounts')"
+check "PostgreSQL: account-api kullanıcısı başka şemayı okuyamıyor (audit)" "permission denied" \
+  "$(pg "$DBU" "$DBP" 'select * from audit.events')"
+check "PostgreSQL: account-api kullanıcısı yazamıyor" "permission denied" \
+  "$(pg "$DBU" "$DBP" "update accounts.accounts set balance = 0 where id = 1")"
 
 check "Valkey: api-a önbelleği (kendi önekinde yaz/oku)" "verify-ok" \
   "$(mobile /mobile/v1/cache/cache:api-a:verify -X POST -d verify-ok -o /dev/null; mobile /mobile/v1/cache/cache:api-a:verify)"
@@ -652,9 +655,9 @@ AID2=$(sed -n 's/.*"approval_id":\([0-9]*\).*/\1/p' <<<"$p")
 check "Dört göz: talep eden kendi işlemini onaylayamıyor (403 four_eyes_violation)" "four_eyes_violation" \
   "$(BTOKEN=$TSUP1 bpost device "/approvals/$AID2/approve")"
 check "Veritabanı da talep eden = onaylayan kaydını reddediyor (CHECK kısıtı)" "violates check constraint" \
-  "$(pg account_api pg-account-api "update accounts.transfer_approvals set status='approved', decided_by=requested_by where id=$AID2")"
+  "$(pg "$DBU" "$DBP" "update accounts.transfer_approvals set status='approved', decided_by=requested_by where id=$AID2")"
 check "account-api onay kaydını silemiyor (yalnızca ekleme ve karar güncellemesi)" "permission denied" \
-  "$(pg account_api pg-account-api "delete from accounts.transfer_approvals where id=$AID2")"
+  "$(pg "$DBU" "$DBP" "delete from accounts.transfer_approvals where id=$AID2")"
 check "account-api onayı talep eden ve onaylayanla logluyor" "TRANSFER onaylandı" \
   "$(kubectl --context "$(ctx cluster-a)" -n account-api logs -l app=account-api --since=5m --tail=-1 2>/dev/null | grep "onay=$AID ")"
 # Mesai saati: branch-bff'e geçici olarak şu anı dışarıda bırakan bir aralık verilir, sonra geri alınır
@@ -702,7 +705,7 @@ check "Grafana: kategori başına organizasyon (Apps, Network, Security, DB, Inf
 RID=$(edge www /api/headers -H "x-log-force: verify" | grep -A1 '"X-Request-Id"' | tail -1 | tr -d ' ",[]')
 wbefore=$(lcount '{category="security", cluster="edge"} |= "ModSecurity: Access denied"')
 edge www "/?q=<script>alert(1)</script>" -o /dev/null -g
-pg account_api pg-device-registry "select 1" >/dev/null
+pg account_api yanlis-parola "select 1" >/dev/null   # bilinçli başarısız giriş (db kategorisi)
 an="audit-test-$(date +%s)"
 kubectl --context "$(ctx cluster-a)" -n default create secret generic "$an" --from-literal=k=v >/dev/null
 kubectl --context "$(ctx cluster-a)" -n default get secret "$an" >/dev/null
@@ -794,7 +797,7 @@ tq() {  # tq <kullanıcı:parola> <Tempo API yolu>: Grafana üzerinden Tempo
 check "Tempo hazır" "ready" \
   "$(kubectl --context "$(ctx mgmt)" get --raw "/api/v1/namespaces/logging/services/tempo:3200/proxy/ready" 2>/dev/null || true)"
 # Envoy'un zorunlu izi: x-client-trace-id başlıklı istek her zaman izlenir; api-a gelen traceparent'ı geri yansıtır
-TP=$(edge www /api/headers -H "x-client-trace-id: verify-$(date +%s)" | grep -A1 -i '"traceparent"' | tail -1 | tr -d ' ",[]')
+TP=$(edge www /api/headers -H "x-client-trace-id: verify-$(date +%s)" | { grep -A1 -i '"traceparent"' || true; } | tail -1 | tr -d ' ",[]')
 TID=$(cut -d- -f2 <<<"$TP")
 check "İz başlığı uygulamaya ulaşıyor ve örneklenmiş (traceparent ...-01)" "-01" "$TP"
 trace=""
@@ -840,7 +843,7 @@ check "account-api v1 ve v2 çalışıyor (canary)" "v1 v2" \
   "$(kubectl --context "$(ctx $CA_)" -n account-api get pod -l app=account-api -o jsonpath='{range .items[*]}{.metadata.labels.version}{" "}{end}' | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 v2=0; v1=0
 for i in $(seq 1 60); do
-  r=$(edge www /api/accounts | grep -o '"release":"v[12]"')
+  r=$(edge www /api/accounts | grep -o '"release":"v[12]"' || true)
   [[ $r == *v2* ]] && v2=$((v2+1)); [[ $r == *v1* ]] && v1=$((v1+1))
 done
 check "Canary dağılımı: 60 istekte v2 payı %10 civarı (1-15 arası; v1=$v1, v2=$v2)" "ok" \
@@ -891,6 +894,104 @@ check "Hata enjeksiyonu kaldırıldı: aynı User-Agent'la istek normal (200)" "
 check "account-api v2 imzalı image'la (digest)" "1" \
   "$(kubectl --context "$(ctx $CA_)" -n account-api get pod -l version=v2 -o jsonpath='{.items[0].spec.containers[0].image}' \
      | grep -c "^$LAB_REGISTRY/lab/.*@sha256:" || true)"
+
+log "17) Secret yönetimi: Vault, External Secrets, JWT auth, kısa ömürlü veritabanı kullanıcıları"
+refresh_tokens
+check "Vault başlatılmış ve mührü açık" "True False" \
+  "$(vault_cmd status -format=json 2>/dev/null | python -c "import json,sys; d=json.load(sys.stdin); print(d['initialized'], d['sealed'])" | tr -d '\r')"
+check "Diskte düz parola dosyası yok (certs/data)" "yok" "$([[ -d $ROOT_DIR/certs/data ]] && echo var || echo yok)"
+for c in $CLUSTERS; do
+  es=$(kubectl --context "$(ctx "$c")" get externalsecrets -A -o json | python -c "import json,sys
+items = json.load(sys.stdin)['items']
+ok = sum(1 for i in items if any(x['type'] == 'Ready' and x['status'] == 'True' for x in i.get('status', {}).get('conditions', [])))
+print(f'{ok}/{len(items)}')" | tr -d '\r')
+  check "$c: tüm ExternalSecret'lar Vault'tan senkron ($es)" "ok" "$([[ ${es%/*} == "${es#*/}" && ${es#*/} -gt 0 ]] && echo ok || echo "$es")"
+done
+check "Uygulama secret'ının sahibi ExternalSecret (elle oluşturulmuyor)" "ExternalSecret" \
+  "$(kubectl --context "$(ctx dmz)" -n auth get secret auth-exchange-clients -o jsonpath='{.metadata.ownerReferences[0].kind}')"
+
+vlogin() {  # vlogin <cluster> <namespace> <mount> <rol>: vault-reader token'ıyla JWT girişi -> Vault token'ı ya da "HATA ..."
+  local t
+  t=$(kubectl --context "$(ctx "$1")" -n "$2" create token vault-reader --audience vault --duration 10m)
+  vault_cmd write -format=json "auth/$3/login" role="$4" jwt="$t" 2>&1 | python -c "import json,sys
+s = sys.stdin.read()
+try:
+    print(json.loads(s)['auth']['client_token'])
+except Exception:
+    print('HATA ' + ' '.join(s.split())[:160])" | tr -d '\r'
+}
+vread() {  # vread <Vault token> <kv yolu>: okunabildiyse "okundu", yoksa Vault'un hatası
+  kubectl --context "$(ctx mgmt)" -n vault exec vault-0 -c vault -- env VAULT_TOKEN="$1" vault kv get -mount=kv -format=json "$2" 2>&1 \
+    | grep -o '"request_id"\|permission denied' | head -1 | sed 's/"request_id"/okundu/'
+}
+T=$(vlogin dmz auth jwt-dmz auth)
+check "JWT auth: dmz/auth kendi yolunu okuyabiliyor" "okundu" "$(vread "$T" dmz/auth/auth-dpop-store)"
+check "JWT auth: dmz/auth başka namespace'in yolunu okuyamıyor (edge-web)" "permission denied" "$(vread "$T" dmz/edge-web/web-token-handler)"
+check "JWT auth: dmz/auth başka cluster'ın yolunu okuyamıyor (cluster-a)" "permission denied" "$(vread "$T" cluster-a/api-a/api-a-cache)"
+check "JWT auth: dmz/auth parola deposunu okuyamıyor (kv/ops)" "permission denied" "$(vread "$T" ops/passwords)"
+check "JWT auth: başka namespace'in token'ı bu rolle giriş yapamıyor" "HATA" "$(vlogin dmz edge-web jwt-dmz auth | cut -c1-4)"
+check "JWT auth: dmz'nin token'ı cluster-a'nın mount'unda geçmiyor" "HATA" "$(vlogin dmz auth jwt-cluster-a api-a | cut -c1-4)"
+
+# Egress: Vault çıkışını yalnızca External Secrets kullanabilir ve yalnızca giriş + kendi yolları (mesh dışı pod: 403)
+vpod="vp-$RANDOM"
+MSYS_NO_PATHCONV=1 kubectl --context "$(ctx dmz)" -n logging-agent run "$vpod" --restart=Never --image="$LAB_REGISTRY/lab/curl:8.11.1" \
+  --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":100,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"c","image":"'"$LAB_REGISTRY"'/lab/curl:8.11.1","command":["sh","-c","curl -s -o /dev/null -w %{http_code} http://vault-mgmt.istio-egress.svc.cluster.local/v1/sys/health; echo; curl -s -o /dev/null -w %{http_code} -X POST -d {} http://vault-mgmt.istio-egress.svc.cluster.local/v1/auth/jwt-dmz/login"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' >/dev/null 2>&1
+kubectl --context "$(ctx dmz)" -n logging-agent wait pod "$vpod" --for=jsonpath='{.status.phase}'=Succeeded --timeout=90s >/dev/null 2>&1
+vq=$(kubectl --context "$(ctx dmz)" -n logging-agent logs "$vpod" 2>/dev/null | tr '\n' ' ')
+kubectl --context "$(ctx dmz)" -n logging-agent delete pod "$vpod" --wait=false >/dev/null 2>&1
+check "DMZ: Vault çıkışı External Secrets dışındaki pod'a kapalı (egress 403)" "403 403" "$(echo $vq)"
+
+# Kısa ömürlü veritabanı kullanıcıları (Database motoru)
+pgsu() { kubectl --context "$(ctx mgmt)" -n data exec postgres-0 -- psql -U postgres -d "$POSTGRES_DB" -tAc "$1" 2>&1 | tr -d '\r' || true; }
+secuser() { kubectl --context "$(ctx cluster-a)" -n account-api get secret account-api-db -o jsonpath='{.data.username}' | base64 -d; }
+old=$(secuser)
+check "account-api'nin veritabanı kullanıcısı Vault'tan (kısa ömürlü: v-...)" "v-" "${old:0:2}"
+check "Statik servis kullanıcısı yok: account_api ve device_registry giriş yapamaz (NOLOGIN)" "f f" \
+  "$(pgsu "select rolcanlogin from pg_roles where rolname in ('account_api','device_registry') order by rolname" | tr '\n' ' ' | sed 's/ $//')"
+check "vault_admin'in ilk parolası geçersiz (Vault döndürdü)" "password authentication failed" \
+  "$(pg vault_admin "$(pwf pg-vault-admin)" 'select 1')"
+check "device-registry de Vault kullanıcısıyla" "v-" \
+  "$(kubectl --context "$(ctx mgmt)" -n iam get secret device-registry-db -o jsonpath='{.data.username}' | base64 -d | cut -c1-2)"
+# Yenileme: External Secrets yeni kullanıcı alır; eski kullanıcı iptal edilince Vault oturumlarını kapatıp rolü siler,
+# account-api yeni bağlantıyı dosyadaki yeni kullanıcıyla açar (pod yeniden başlamaz)
+kubectl --context "$(ctx cluster-a)" -n account-api annotate externalsecret account-api-db force-sync="$(date +%s)" --overwrite >/dev/null
+new=$old
+for i in $(seq 1 30); do new=$(secuser); [[ $new != "$old" ]] && break; sleep 2; done
+check "Yenileme: yeni kullanıcı üretildi" "farklı" "$([[ $new != "$old" && $new == v-* ]] && echo farklı || echo "aynı ($new)")"
+sleep 90   # kubelet bağlı secret dosyasını en geç ~1-2 dk'da günceller
+leases=$(vault_cmd list -format=json sys/leases/lookup/database/creds/account-api 2>/dev/null | python -c "import json,sys; print(' '.join(json.load(sys.stdin)))" | tr -d '\r')
+newest=$(for l in $leases; do printf '%s %s\n' "$(vault_cmd write -format=json sys/leases/lookup lease_id="database/creds/account-api/$l" \
+  | python -c "import json,sys; print(json.load(sys.stdin)['data']['issue_time'])" | tr -d '\r')" "$l"; done | sort | tail -1 | cut -d' ' -f2)
+for l in $leases; do [[ $l == "$newest" ]] || vault_cmd lease revoke "database/creds/account-api/$l" >/dev/null; done
+check "Eski kullanıcı iptal edildi: rol silindi, oturumu kalmadı" "0 0" \
+  "$(pgsu "select (select count(*) from pg_roles where rolname = '$old') || ' ' || (select count(*) from pg_stat_activity where usename = '$old')")"
+code=000
+for i in $(seq 1 40); do code=$(mobile /mobile/v1/accounts -o /dev/null -w '%{http_code}'); [[ $code == 200 ]] && break; sleep 3; done
+check "Eski kullanıcı iptalinden sonra account-api çalışıyor (200, pod yeniden başlamadan)" "200 0" \
+  "$code $(kubectl --context "$(ctx cluster-a)" -n account-api get pod -l app=account-api,version=v1 -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}')"
+check "account-api yeni kullanıcıyla bağlandı (log)" "$new" \
+  "$(kubectl --context "$(ctx cluster-a)" -n account-api logs -l app=account-api --since=10m --tail=-1 2>/dev/null | grep "veritabanı kullanıcısı: $new" | head -1)"
+
+check "Vault audit logu Loki'de (security, kim hangi yolu okudu)" "ok" \
+  "$([[ $(lwait '{category="security", namespace="vault"} |= "database/creds/account-api"') -ge 1 ]] && echo ok || echo yok)"
+check "Vault ve External Secrets imzalı image'larla (digest)" "2" \
+  "$( (kubectl --context "$(ctx mgmt)" -n vault get pod vault-0 -o jsonpath='{.spec.containers[0].image}'; echo; \
+       kubectl --context "$(ctx dmz)" -n external-secrets get pod -l app.kubernetes.io/name=external-secrets -o jsonpath='{.items[0].spec.containers[0].image}') \
+     | grep -c "^$LAB_REGISTRY/lab/.*@sha256:" || true)"
+
+log "18) Edge izolasyonu: edge container'ları node'lara ve registry'ye ulaşamaz"
+nip() { docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' "$1-control-plane" | tr -d '\r'; }
+MIP=$(nip mgmt); AIP=$(nip cluster-a)
+for src in edge-waf branch-fw edge-logs; do
+  r=$(MSYS_NO_PATHCONV=1 docker run --rm --network "container:$src" "$LOADGEN_IMAGE" sh -c \
+      "for t in http://$MIP:30300/api/health http://$MIP:30201/kiali/ http://$MIP:30808/admin/ https://$MIP:6443/ https://$AIP:10250/ http://lab-registry:5000/v2/; do curl -sk -o /dev/null -w '%{http_code} ' --max-time 4 \$t; done" 2>/dev/null | tr -d '\r' | sed 's/ $//')
+  check "$src: node portlarına (Grafana, Kiali, Keycloak yönetimi, API sunucusu, kubelet) ve registry'ye ulaşamıyor" \
+    "000 000 000 000 000 000" "$r"
+done
+check "Her node'da node koruması kuralı var (API sunucusu, kubelet, NodePort)" "$(echo $CLUSTERS | wc -w | tr -d ' ')" \
+  "$(for c in $CLUSTERS; do docker exec "$c-control-plane" iptables -t raw -S PREROUTING 2>/dev/null | grep -c LAB-NODE-GUARD | grep -x 3; done | wc -l | tr -d ' ')"
+check "Registry'ler ayrı ağda (kind ağında değil)" "0" \
+  "$(docker network inspect kind -f '{{range .Containers}}{{.Name}} {{end}}' | tr ' ' '\n' | grep -cE '^(lab-registry|cache-)' || true)"
 
 log "7) Politika (Kyverno, admission)"
 for c in $CLUSTERS; do

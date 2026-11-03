@@ -220,6 +220,7 @@ data:
     local function category(ns, pod, ctr)
       if ctr == "istio-proxy" or pod:find("^ztunnel") or NETWORK[ns] then return "network" end
       if ns == "data" then return "db" end
+      if ns == "vault" then return "security" end   -- Vault audit logu (13 · secrets): kim hangi secret'ı okudu
       if ns == "iam" then
         if pod:find("^device%-registry") then return "apps" end
         return "security"   -- Keycloak: giriş olayları

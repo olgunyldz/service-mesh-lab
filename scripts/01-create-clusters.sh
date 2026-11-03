@@ -17,11 +17,15 @@ done
 
 # kind docker ağı ilk cluster ile oluşur; önbellek container'ları bu ağa bağlanır
 log "Registry önbelleği ve lab registry"
+registry_network
 start_registry_caches
 start_lab_registry
 for c in $CLUSTERS; do
   configure_node_mirrors "$c"
 done
+
+log "Node koruması: API sunucusu, kubelet ve NodePort'lar yalnızca host, node'lar ve pod'lar için"
+guard_nodes
 
 log "Gateway API CRD'leri ($GATEWAY_API_VERSION)"
 for c in $CLUSTERS; do

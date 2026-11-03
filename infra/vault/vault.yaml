@@ -1,0 +1,180 @@
+# Secret yönetimi (13 · secrets): HashiCorp Vault Community, mgmt cluster'ı, ns vault. 05b-setup-vault.sh uygular,
+# başlatır (init), mührünü açar (unseal) ve yapılandırır.
+#   - Depolama: tek node Raft (PVC). Gerçekte 3 / 5 node Raft, DC'ler arası performans replikasyonu (Enterprise) ya da DR.
+#   - Dinleyici: düz HTTP :8200; taşıma şifrelemesi ve kimlik mesh'te (ambient, ztunnel mTLS). Vault TLS'i 13a · pki'de.
+#   - Erişim: yalnızca mgmt ingress gateway'i (diğer cluster'ların External Secrets'ı, vault.mgmt.internal) ve mgmt'in
+#     kendi External Secrets'ı. Kubernetes API'sine gitmez (automountServiceAccountToken: false): cluster'lar JWT auth ile
+#     bağlanır, Vault her cluster'ın service account imza anahtarını sabit olarak bilir.
+#   - Audit: stdout'a JSON (hassas değerler HMAC'li) -> fluent-bit -> Loki (security kategorisi).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vault
+  labels:
+    zone: mgmt
+    istio.io/dataplane-mode: ambient
+    policy.corp.mesh/image-source: lab-registry
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault
+  namespace: vault
+data:
+  vault.hcl: |
+    ui = false
+    disable_mlock = true
+    storage "raft" {
+      path    = "/vault/data"
+      node_id = "vault-0"
+    }
+    listener "tcp" {
+      address         = "0.0.0.0:8200"
+      cluster_address = "0.0.0.0:8201"
+      tls_disable     = true
+    }
+    api_addr     = "http://vault.vault.svc.cluster.local:8200"
+    cluster_addr = "https://vault-0.vault-internal.vault.svc.cluster.local:8201"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault
+  namespace: vault
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vault
+  namespace: vault
+spec:
+  serviceName: vault-internal
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vault
+  template:
+    metadata:
+      labels:
+        app: vault
+    spec:
+      serviceAccountName: vault
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vault
+          image: lab-registry:5000/lab/vault:2.1.2   # 03b-publish-images.sh (LAB_PULLS)
+          command: ["vault", "server", "-config=/vault/config/vault.hcl"]
+          env:
+            - name: VAULT_ADDR   # pod içindeki CLI için (kubectl exec)
+              value: http://127.0.0.1:8200
+            - name: SKIP_SETCAP
+              value: "true"
+            - name: HOME
+              value: /tmp
+          ports:
+            - containerPort: 8200
+              name: http
+            - containerPort: 8201
+              name: cluster
+          readinessProbe:   # mühürlü / başlatılmamış da "hazır": 05b exec ile başlatır ve mührü açar
+            httpGet:
+              path: /v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200
+              port: 8200
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /vault/config
+              readOnly: true
+            - name: data
+              mountPath: /vault/data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: vault
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  namespace: vault
+spec:
+  selector:
+    app: vault
+  ports:
+    - name: http
+      port: 8200
+      targetPort: 8200
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault-internal   # Raft cluster adresi (tek node'da da gerekli)
+  namespace: vault
+spec:
+  clusterIP: None
+  selector:
+    app: vault
+  ports:
+    - name: cluster
+      port: 8201
+      targetPort: 8201
+---
+# Varsayılan: hiçbir şey. Vault'a yalnızca mgmt ingress gateway'i (diğer zone'lardan gelen istekler, yol kuralları orada)
+# ve mgmt'in External Secrets'ı. Vault'un kendi yetki kontrolü (JWT rolü + politika) bunun arkasında ikinci katman.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-nothing
+  namespace: vault
+spec: {}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: vault-allow-clients
+  namespace: vault
+spec:
+  selector:
+    matchLabels:
+      app: vault
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-ingress/sa/istio-ingressgateway
+              - corp.mesh/ns/external-secrets/sa/external-secrets
+      to:
+        - operation:
+            ports: ["8200"]

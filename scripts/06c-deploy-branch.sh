@@ -24,7 +24,7 @@ docker network connect kind branch-fw
 log "branch-terminal ($BRANCH_DEVICE, cihaz sertifikası: Branch CA)"
 docker rm -f branch-terminal >/dev/null 2>&1 || true
 docker run -d --name branch-terminal --restart unless-stopped --network "$BRANCH_NETWORK" \
-  -e HOST="$BRANCH_HOST" -e INTERVAL="$LOADGEN_INTERVAL" -e STAFF_PW="$(cat "$ROOT_DIR/certs/data/kc-staff-teller01.pw" 2>/dev/null || true)" \
+  -e HOST="$BRANCH_HOST" -e INTERVAL="$LOADGEN_INTERVAL" -e STAFF_PW="$(pwf kc-staff-teller01)" \
   -v "$ROOT_DIR/certs/branch/ca.pem:/ca.pem:ro" \
   -v "$ROOT_DIR/certs/branch/$BRANCH_DEVICE.crt:/device.crt:ro" \
   -v "$ROOT_DIR/certs/branch/$BRANCH_DEVICE.key:/device.key:ro" \

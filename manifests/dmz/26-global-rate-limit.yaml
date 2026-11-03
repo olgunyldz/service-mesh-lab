@@ -80,7 +80,7 @@ spec:
               value: "true"
           envFrom:
             - secretRef:
-                name: ratelimit-redis   # REDIS_AUTH=ratelimit:<parola> (05b-create-data-secrets.sh)
+                name: ratelimit-redis   # REDIS_AUTH=ratelimit:<parola> (Vault → External Secrets, 01-secrets.yaml)
           ports:
             - name: grpc
               containerPort: 8081

@@ -1,5 +1,5 @@
 # Keycloak (mgmt, ns iam): kimlik sağlayıcı. Realm'ler ilk açılışta içe aktarılır (keycloak-realms Secret'ı,
-# 05b-create-data-secrets.sh): customers (web, mobil), partners (client credentials), staff (şube personeli).
+# Vault → External Secrets, 01-secrets.yaml): customers (web, mobil), partners (client credentials), staff (şube personeli).
 # Dışarıya yalnızca DMZ üzerinden ve yalnızca OIDC uçları açık (35-keycloak-entry.yaml); yönetim konsolu kapalı.
 apiVersion: v1
 kind: ServiceAccount

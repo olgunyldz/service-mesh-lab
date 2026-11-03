@@ -61,7 +61,7 @@ docker run -d --name edge-lb --restart unless-stopped --label log.name=edge-lb -
 # Web yolları token handler'da /api önekini kaybeder: /api/api/echo -> web-bff /api/echo -> api-a (podinfo) /api/echo.
 extra=""
 has_cluster cluster-b && extra="api-b.${APPS_DOMAIN}"
-pwf() { cat "$ROOT_DIR/certs/data/$1.pw" 2>/dev/null || true; }
+pwf_load   # parolalar Vault'ta (13 · secrets)
 
 log "loadgen (web, partner${extra:+, $extra})"
 docker rm -f loadgen >/dev/null 2>&1 || true

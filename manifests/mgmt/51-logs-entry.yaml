@@ -26,7 +26,7 @@ spec:
         protocol: HTTPS
       tls:
         mode: MUTUAL
-        credentialName: logs-edge-mtls   # sunucu sertifikası + Log CA (05b-create-data-secrets.sh)
+        credentialName: logs-edge-mtls   # sunucu sertifikası + Log CA (Vault → External Secrets, 01-secrets.yaml)
         minProtocolVersion: TLSV1_2
       hosts:
         - logs-edge.mgmt.internal

@@ -1,5 +1,6 @@
 # Veri katmanı (mgmt, ns data): PostgreSQL (kalıcı) ve Valkey (önbellek + rate limit sayaçları, kalıcı değil).
-# Kimlik bilgileri: 05b-create-data-secrets.sh (postgres-admin, postgres-app-users, valkey-acl).
+# Kimlik bilgileri Vault'ta (13 · secrets); Kubernetes Secret'larını External Secrets oluşturur (01-secrets.yaml):
+# postgres-admin, postgres-app-users, valkey-acl. Servis kullanıcıları Vault Database motorundan (06a-vault-database.sh).
 # Erişim yalnızca mgmt ingress gateway üzerinden (25-data-entry.yaml); namespace'te varsayılan reddet.
 apiVersion: v1
 kind: ConfigMap
@@ -17,7 +18,9 @@ data:
       REVOKE ALL ON SCHEMA public FROM PUBLIC;
       REVOKE ALL ON DATABASE "$POSTGRES_DB" FROM PUBLIC;
 
-      CREATE ROLE account_api LOGIN PASSWORD '$ACCOUNT_API_PASSWORD' CONNECTION LIMIT 10;
+      -- account_api ve device_registry giriş yapamaz (NOLOGIN): yetkiler bu rollerde, giriş yapan kullanıcıları
+      -- Vault üretir (13 · secrets, kısa ömürlü, bu rollerin üyesi). Statik servis parolası yok.
+      CREATE ROLE account_api NOLOGIN;
       GRANT CONNECT ON DATABASE "$POSTGRES_DB" TO account_api;
 
       CREATE SCHEMA accounts;
@@ -64,8 +67,17 @@ data:
       CREATE DATABASE keycloak OWNER keycloak;
 
       -- device-registry (09c · mobile-binding): mobil cihaz kayıtları; kendi veritabanı ve sahibi
-      CREATE ROLE device_registry LOGIN PASSWORD '$DEVICE_REGISTRY_PASSWORD' CONNECTION LIMIT 10;
+      CREATE ROLE device_registry NOLOGIN;
       CREATE DATABASE devices OWNER device_registry;
+
+      -- Vault Database motoru: yalnızca kullanıcı üretip silebilir ve iki servis rolüne üyelik verebilir. Rollerin
+      -- yetkilerini kendisi kullanamaz (INHERIT FALSE, SET FALSE). Parolasını Vault ilk bağlantıdan sonra döndürür.
+      CREATE ROLE vault_admin LOGIN CREATEROLE PASSWORD '$VAULT_ADMIN_PASSWORD' CONNECTION LIMIT 5;
+      GRANT CONNECT ON DATABASE "$POSTGRES_DB" TO vault_admin;
+      GRANT account_api TO vault_admin WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
+      GRANT device_registry TO vault_admin WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
+      -- Süresi dolan / iptal edilen kullanıcının açık oturumlarını da kapatabilsin (yoksa oturum ömür boyu sürer)
+      GRANT pg_signal_backend TO vault_admin;
 
       -- Başka bir servisin verisi: account_api erişememeli (08-verify testi)
       CREATE SCHEMA audit;
@@ -121,7 +133,7 @@ spec:
             - secretRef:
                 name: postgres-admin        # POSTGRES_PASSWORD
             - secretRef:
-                name: postgres-app-users    # ACCOUNT_API_PASSWORD, KEYCLOAK_DB_PASSWORD, DEVICE_REGISTRY_PASSWORD (yalnızca init betiği)
+                name: postgres-app-users    # KEYCLOAK_DB_PASSWORD, VAULT_ADMIN_PASSWORD (yalnızca init betiği)
           ports:
             - name: tcp-postgres
               containerPort: 5432
@@ -263,12 +275,13 @@ spec:
       to:
         - operation:
             ports: ["5432"]
-    # Keycloak ve device-registry (mgmt içi, ns iam): kendi veritabanlarına
+    # Keycloak ve device-registry (mgmt içi, ns iam): kendi veritabanlarına; Vault: kullanıcı üretmek için (13 · secrets)
     - from:
         - source:
             principals:
               - corp.mesh/ns/iam/sa/keycloak
               - corp.mesh/ns/iam/sa/device-registry
+              - corp.mesh/ns/vault/sa/vault
       to:
         - operation:
             ports: ["5432"]

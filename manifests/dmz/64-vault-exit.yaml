@@ -1,0 +1,154 @@
+# Vault'a çıkış (13 · secrets). __NET_PREFIX__ scriptte doldurulur.
+#   external-secrets --> ns'in waypoint'i (vault Service, L7) --mTLS (waypoint kimliği)--> dmz-egressgateway:443
+#   --mTLS (SNI vault.mgmt.internal)--> mgmt ingress gw --> vault:8200
+# Kimlik zone geçişinde taşınır: egress yalnızca external-secrets namespace'inin waypoint'ini kabul eder, o da yalnızca
+# External Secrets controller'ını. Yollar: yalnızca bu cluster'ın JWT girişi, kendi KV yolu.
+# Vault'un yönetim API'si (sys/) ve diğer cluster'ların yolları buradan kapalı; Vault'un politikası arkada ikinci katman.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: waypoint-options
+  namespace: external-secrets
+data:
+  deployment: |
+    spec:
+      template:
+        spec:
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: waypoint
+  namespace: external-secrets
+  labels:
+    istio.io/waypoint-for: service
+spec:
+  gatewayClassName: istio-waypoint
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: waypoint-options
+  listeners:
+    - name: mesh
+      port: 15008
+      protocol: HBONE
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  namespace: external-secrets
+spec:
+  ports:
+    - name: http
+      port: 80
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: vault-via-egress
+  namespace: external-secrets
+spec:
+  hosts:
+    - vault.external-secrets.svc.cluster.local
+  http:
+    - rewrite:
+        authority: vault.mgmt.internal   # egress gateway ve mgmt girişi bu adla yönlendirir
+      route:
+        - destination:
+            host: dmz-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443
+      timeout: 15s
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: vault-allow-external-secrets
+  namespace: external-secrets
+spec:
+  targetRefs:
+    - kind: Service
+      group: ""
+      name: vault
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/external-secrets/sa/external-secrets
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: mgmt-vault
+  namespace: istio-egress
+spec:
+  hosts:
+    - vault.mgmt.internal
+  location: MESH_EXTERNAL
+  resolution: STATIC
+  ports:
+    - number: 443
+      name: http-mtls
+      protocol: HTTP
+  endpoints:
+    - address: __NET_PREFIX__.203.10   # mgmt istio-ingressgateway (MetalLB)
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: mgmt-vault
+  namespace: istio-egress
+spec:
+  host: vault.mgmt.internal
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      sni: vault.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: zone-exit-vault
+  namespace: istio-egress
+spec:
+  hosts:
+    - vault.mgmt.internal
+  gateways:
+    - zone-exit
+  http:
+    - route:
+        - destination:
+            host: vault.mgmt.internal
+            port:
+              number: 443
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-vault-exit
+  namespace: istio-egress
+spec:
+  selector:
+    matchLabels:
+      istio: dmz-egressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/external-secrets/sa/waypoint
+      to:
+        - operation:
+            hosts: ["vault.mgmt.internal", "vault.mgmt.internal:*"]
+            ports: ["443"]
+            paths:
+              - "/v1/auth/jwt-dmz/login"
+              - "/v1/auth/token/lookup-self"   # External Secrets kendi token'ını doğrular
+              - "/v1/auth/token/revoke-self"   # ve işi bitince iptal eder
+              - "/v1/kv/data/dmz/*"

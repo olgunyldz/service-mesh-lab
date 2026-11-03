@@ -232,7 +232,7 @@ spec:
       volumes:
         - name: attest
           secret:
-            secretName: attest-public   # yalnızca açık anahtar (05b-create-data-secrets.sh)
+            secretName: attest-public   # yalnızca açık anahtar (Vault → External Secrets, 01-secrets.yaml)
             defaultMode: 0440
 ---
 apiVersion: v1

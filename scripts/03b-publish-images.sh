@@ -8,7 +8,7 @@ KEYS="$ROOT_DIR/certs/cosign"
 
 # cosign kind ağında çalışır: kaynağı registry önbelleğinden çeker, lab registry'ye düz HTTP ile yazar
 cosign() {
-  docker run --rm --network kind -v "$KEYS:/keys:ro" -e COSIGN_PASSWORD= "$COSIGN_IMAGE" "$@"
+  docker run --rm --network "$REGISTRY_NETWORK" -v "$KEYS:/keys:ro" -e COSIGN_PASSWORD= "$COSIGN_IMAGE" "$@"
 }
 
 # docker.io/curlimages/curl:8.11.1 -> cache-docker-io:5000/curlimages/curl:8.11.1

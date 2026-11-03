@@ -55,7 +55,7 @@ spec:
               value: valkey.edge-web.svc.cluster.local:6379
           envFrom:
             - secretRef:
-                name: web-token-handler   # CLIENT_SECRET, VALKEY_USER, VALKEY_PASSWORD (05b-create-data-secrets.sh)
+                name: web-token-handler   # CLIENT_SECRET, VALKEY_USER, VALKEY_PASSWORD (Vault → External Secrets, 01-secrets.yaml)
           ports:
             - name: http
               containerPort: 8080

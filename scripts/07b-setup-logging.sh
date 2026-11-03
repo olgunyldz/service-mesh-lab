@@ -13,7 +13,7 @@
 source "$(dirname "$0")/lib.sh"
 
 M="kubectl --context $(ctx mgmt) -n logging"
-pwf() { cat "$ROOT_DIR/certs/data/$1.pw"; }
+pwf_load   # parolalar Vault'ta (13 · secrets)
 LOKI_URL=http://loki.logging.svc.cluster.local:3100
 GP=$(pwf grafana-admin)
 
@@ -146,6 +146,6 @@ kubectl --context "$(ctx mgmt)" -n iam exec deploy/keycloak -- sh -c \
      --password '$(pwf keycloak-admin)' --config /tmp/kcadm.cfg >/dev/null \
    && /opt/keycloak/bin/kcadm.sh update realms/master -s attributes.frontendUrl=http://localhost:$KEYCLOAK_ADMIN_PORT --config /tmp/kcadm.cfg \
    && rm -f /tmp/kcadm.cfg" >/dev/null
-echo "  http://localhost:$KEYCLOAK_ADMIN_PORT/admin  (admin / certs/data/keycloak-admin.pw; yalnızca bu makineden)"
+echo "  http://localhost:$KEYCLOAK_ADMIN_PORT/admin  (admin / Vault kv/ops/passwords: keycloak-admin; yalnızca bu makineden)"
 
-echo "  Grafana: http://localhost:$GRAFANA_PORT (yönetici: admin / certs/data/grafana-admin.pw; ekipler: certs/data/grafana-<kullanıcı>.pw)"
+echo "  Grafana: http://localhost:$GRAFANA_PORT (yönetici: admin / Vault kv/ops/passwords: grafana-admin; ekipler: grafana-<kullanıcı>)"

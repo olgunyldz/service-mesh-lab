@@ -27,7 +27,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: api
-          image: lab-registry:5000/lab/account-api:0.5.1   # build + imza: 03b-publish-images.sh
+          image: lab-registry:5000/lab/account-api:0.5.2   # build + imza: 03b-publish-images.sh
           env:
             - name: RELEASE
               value: v2
@@ -45,9 +45,12 @@ spec:
               value: corebank
             - name: PGSSLMODE
               value: disable   # taşıma şifrelemesi mesh mTLS'inde
-          envFrom:
-            - secretRef:
-                name: account-api-db   # PGUSER, PGPASSWORD (05b-create-data-secrets.sh)
+            - name: DB_CREDENTIALS_DIR   # kullanıcı adı + parola dosyaları: Vault Database motoru (13 · secrets),
+              value: /var/run/secrets/db   # External Secrets yeniler; servis her yeni bağlantıda dosyadan okur
+          volumeMounts:
+            - name: db
+              mountPath: /var/run/secrets/db
+              readOnly: true
           ports:
             - name: http
               containerPort: 8080
@@ -66,3 +69,7 @@ spec:
               memory: 16Mi
             limits:
               memory: 64Mi
+      volumes:
+        - name: db
+          secret:
+            secretName: account-api-db

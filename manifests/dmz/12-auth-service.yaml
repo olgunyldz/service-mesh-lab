@@ -56,7 +56,7 @@ spec:
               value: /attest/attest.pub
           envFrom:
             - secretRef:
-                name: auth-exchange-clients   # AUTH_{WEB,MOBILE,PARTNER,BRANCH}_SECRET (05b-create-data-secrets.sh)
+                name: auth-exchange-clients   # AUTH_{WEB,MOBILE,PARTNER,BRANCH}_SECRET (Vault → External Secrets, 01-secrets.yaml)
             - secretRef:
                 name: auth-dpop-store         # VALKEY_USER, VALKEY_PASSWORD: DPoP jti tekrar deposu (09c)
           ports:
@@ -84,7 +84,7 @@ spec:
       volumes:
         - name: attest
           secret:
-            secretName: attest-public   # yalnızca açık anahtar (05b-create-data-secrets.sh)
+            secretName: attest-public   # yalnızca açık anahtar (Vault → External Secrets, 01-secrets.yaml)
             defaultMode: 0440
 ---
 apiVersion: v1
