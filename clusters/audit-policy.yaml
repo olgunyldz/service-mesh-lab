@@ -1,0 +1,63 @@
+# Kubernetes audit politikası (10 · logging): kim, neyi, ne zaman değiştirdi / okudu. Tüm cluster'larda aynı.
+# kube-apiserver bunu /var/log/kubernetes/audit/audit.log'a yazar; Fluent Bit (logging-agent) okuyup security
+# kategorisine gönderir. İstek / yanıt gövdesi hiç yazılmaz (secret içeriği sızmasın).
+#
+# Hacim: ilk sürümde Kyverno, istiod, Kiali ve MetalLB'nin rutin işlemleri (rapor, durum, lider seçimi güncellemeleri)
+# kayıtların %90'ından fazlasıydı ve log hattıyla birlikte makineyi CPU'da doyurdu. Platform bileşenlerinin servis
+# hesapları yalnızca secret DEĞİŞİKLİKLERİNDE loglanır; insanların ve uygulamaların her değişikliği ve secret erişimi loglanır.
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages:
+  - RequestReceived   # her istek için yalnızca tamamlanma kaydı
+rules:
+  # Gürültü: lider seçimi, olaylar, sağlık uçları
+  - level: None
+    resources:
+      - group: coordination.k8s.io
+        resources: ["leases"]
+      - group: ""
+        resources: ["events"]
+      - group: events.k8s.io
+        resources: ["events"]
+  - level: None
+    nonResourceURLs: ["/healthz*", "/readyz*", "/livez*", "/version", "/metrics", "/openapi/*", "/api", "/apis", "/apis/*"]
+  - level: None
+    users: ["system:kube-proxy", "system:apiserver", "system:kube-scheduler", "system:kube-controller-manager"]
+  - level: None
+    userGroups: ["system:nodes"]
+  # Secret değişiklikleri: kim yaparsa yapsın (platform bileşenleri dahil)
+  - level: Metadata
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+    resources:
+      - group: ""
+        resources: ["secrets"]
+  # Platform bileşenlerinin servis hesapları (Kyverno, Istio, Kiali, MetalLB, kube-system, gözlemlenebilirlik):
+  # rutin okuma / yazma loglanmaz
+  - level: None
+    userGroups:
+      - system:serviceaccounts:kyverno
+      - system:serviceaccounts:istio-system
+      - system:serviceaccounts:metallb-system
+      - system:serviceaccounts:kube-system
+      - system:serviceaccounts:local-path-storage
+  # Kyverno'nun rapor kaynakları (kim yazarsa yazsın)
+  - level: None
+    resources:
+      - group: wgpolicyk8s.io
+      - group: reports.kyverno.io
+      - group: kyverno.io
+        resources: ["updaterequests", "ephemeralreports", "clusterephemeralreports"]
+  # Hassas okumalar: secret, configmap, token, pod exec / port-forward (kim baktı?)
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["secrets", "configmaps", "serviceaccounts/token"]
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["pods/exec", "pods/attach", "pods/portforward", "pods/proxy"]
+  # Geri kalan okumalar loglanmaz
+  - level: None
+    verbs: ["get", "list", "watch"]
+  # Geri kalan her değişiklik (create, update, patch, delete): kim, ne, sonuç
+  - level: Metadata

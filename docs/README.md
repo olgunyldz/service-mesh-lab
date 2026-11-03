@@ -69,6 +69,11 @@ Ana [README](../README.md) ortamın güncel ve toplu halini anlatır. Bu klasör
 | 09c | [Mobil cihaz bağlama: DPoP, attestation, device-registry, mobile-bff](09c-mobile-binding.md) | `mobile-binding` | ✅ Tamamlandı (191/191 test) |
 | 09d | İşlem imzası (`tx-signing`) | – | ⏭ Atlandı, açık nokta (bkz. [pilot mimari](pilot-architecture.md)) |
 | 09e | [Şube kontrolleri: branch-bff, şube kapsamı, dört göz onayı, mesai saati](09e-branch-controls.md) | `branch-controls` | ✅ Tamamlandı (211/211 test) |
+| 09f | Açık bankacılık rızası (`consent`) | – | ⏸ Ertelendi (cluster-b'den sonra) |
+| 10 | [Merkezi loglama: Loki, Grafana, Fluent Bit, kategoriler, audit log](10-logging.md) | `logging` | ✅ Tamamlandı (240/240 test) |
+| 10a | [Yönetim arayüzleri: Keycloak yönetim konsolu, Loki panoları](10a-admin-access.md) | `admin-access` | ✅ Tamamlandı (250/250 test) |
+| 11 | [Dağıtık iz: Tempo, Envoy (OpenTelemetry), log ↔ iz](11-tracing.md) | `tracing` | ✅ Tamamlandı (263/263 test) |
+| 12 | [Trafik yönetimi: canary, zaman aşımı, yeniden deneme, circuit breaker, hata enjeksiyonu](12-traffic-mgmt.md) | `traffic-mgmt` | ✅ Tamamlandı (275/275 test) |
 
 ## Diğer dokümanlar
 
@@ -76,5 +81,7 @@ Ana [README](../README.md) ortamın güncel ve toplu halini anlatır. Bu klasör
 |---------|--------|
 | [Kurumsal hedef mimari](target-architecture.md) | Prod hedefi: zone ve cluster yapısı, isimlendirme, kanal bazında istek yolları ve login/servis sequence diyagramları, gereksinimler (CH, EDGE, GW, IAM, INT, CORE, DATA, CARD, OUT, NET, SOC), kabul kriterleri, lab sapmaları |
 | [Pilot mimari](pilot-architecture.md) | Hedef mimarinin pilottaki (bu lab) karşılığı: zone eşlemesi, isimlendirme, kanal istek yolları ve sequence diyagramları, her gereksinimin pilottaki durumu ve fark nedenleri, pilot bulguları |
+| [Ayrıntılı prod topolojisi (resim seti)](images/prod-detay/README.md) | Hedef mimari genelden pod içine 10 resimde: genel bakış, giriş katmanı, DMZ / internal cluster ve pod içleri, veri / core / PCI, kimlik ve yönetim, node anatomisi, uçtan uca mobil transfer; lejantlı, giriş / çıkış port'ları işaretli; draw.io dosyası |
+| [Ayrıntılı demo topolojisi (resim seti)](images/demo-detay/README.md) | Bu makinedeki lab ortamı aynı yapıda 10 resimde: genel bakış, Docker ağları (edge, şube, registry), kind-dmz / kind-cluster-a ve pod içleri, kind-mgmt ve giriş tablosu, gözlem hattı, node anatomisi, uçtan uca mobil transfer; gerçek adlar, port'lar, VIP'ler; draw.io dosyası |
 | [Araçlar ve kütüphaneler](tools.md) | Kullanılan her aracın amacı, bizdeki kullanımı ve muadilleri; lab için faydalı yardımcı araçlar |
 | [Güvenlik boşluk analizi](security-gap-analysis.md) | 13 katmanlı derinlemesine savunma gereksinimlerinin mevcut ortamla karşılaştırması ve eylem planı |

@@ -158,6 +158,26 @@ if [[ ! -f attest/attest.pub ]]; then
   openssl pkey -in attest/attest.key -pubout -out attest/attest.pub
 fi
 
+# Log CA (10 · logging): mesh dışındaki edge log toplayıcısı (edge-logs) mgmt ingress gateway'e bu CA'nın verdiği
+# istemci sertifikasıyla bağlanır (mTLS, SNI logs-edge.mgmt.internal). Gerçekte F5 / firewall'ların syslog-TLS'i ve
+# kurumsal iç PKI.
+mkdir -p logs
+if [[ ! -f logs/edge-logs.crt ]]; then
+  log "Log CA, logs-edge sunucu sertifikası ve edge-logs istemci sertifikası"
+  openssl req -x509 -new -nodes -newkey rsa:2048 -sha256 -days 3650 \
+    -keyout logs/ca-key.pem -out logs/ca.pem -subj "/O=${MESH_ID}/CN=Log CA" \
+    -addext "basicConstraints=critical,CA:true" -addext "keyUsage=critical,keyCertSign,cRLSign"
+  openssl req -new -nodes -newkey rsa:2048 -sha256 -keyout logs/server.key -out logs/server.csr -subj "/CN=${LOGS_EDGE_HOST}"
+  printf 'basicConstraints=CA:false\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:%s\n' \
+    "$LOGS_EDGE_HOST" > logs/server-ext.cnf
+  openssl x509 -req -sha256 -days 397 -in logs/server.csr -CA logs/ca.pem -CAkey logs/ca-key.pem -CAcreateserial \
+    -extfile logs/server-ext.cnf -out logs/server.crt
+  openssl req -new -nodes -newkey rsa:2048 -sha256 -keyout logs/edge-logs.key -out logs/edge-logs.csr -subj "/O=edge/CN=edge-logs"
+  printf 'basicConstraints=CA:false\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth\n' > logs/client-ext.cnf
+  openssl x509 -req -sha256 -days 397 -in logs/edge-logs.csr -CA logs/ca.pem -CAkey logs/ca-key.pem -CAcreateserial \
+    -extfile logs/client-ext.cnf -out logs/edge-logs.crt
+fi
+
 # Image imzalama anahtarı (cosign). Gerçekte özel anahtar KMS/HSM'de (ör. Vault Transit) durur ve yalnızca CI kullanır.
 mkdir -p cosign
 if [[ ! -f cosign/cosign.pub ]]; then

@@ -1,0 +1,12 @@
+# Grafana'nın veritabanı (10 · logging): organizasyonlar, ekip kullanıcıları ve log veri kaynakları API ile oluşturulur
+# (07b-setup-logging.sh); Istio addon'u emptyDir kullandığı için yeniden başlatmada kaybolurdu.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana
+  namespace: istio-system
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi

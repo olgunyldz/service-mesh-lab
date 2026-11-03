@@ -12,7 +12,8 @@ docker network inspect "$BRANCH_NETWORK" >/dev/null 2>&1 || docker network creat
 
 log "branch-fw (iç firewall: yalnızca TCP 443 -> $BRANCH_GW)"
 docker rm -f branch-fw >/dev/null 2>&1 || true
-docker run -d --name branch-fw --restart unless-stopped --network "$BRANCH_NETWORK" \
+docker run -d --name branch-fw --restart unless-stopped --label log.name=branch-fw --label log.category=network --log-opt labels=log.name,log.category \
+  --network "$BRANCH_NETWORK" \
   -e BRANCH_GW="$BRANCH_GW" \
   -v "$ROOT_DIR/edge/branch-fw.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
   "$HAPROXY_IMAGE" >/dev/null
@@ -23,7 +24,7 @@ docker network connect kind branch-fw
 log "branch-terminal ($BRANCH_DEVICE, cihaz sertifikası: Branch CA)"
 docker rm -f branch-terminal >/dev/null 2>&1 || true
 docker run -d --name branch-terminal --restart unless-stopped --network "$BRANCH_NETWORK" \
-  -e HOST="$BRANCH_HOST" -e STAFF_PW="$(cat "$ROOT_DIR/certs/data/kc-staff-teller01.pw" 2>/dev/null || true)" \
+  -e HOST="$BRANCH_HOST" -e INTERVAL="$LOADGEN_INTERVAL" -e STAFF_PW="$(cat "$ROOT_DIR/certs/data/kc-staff-teller01.pw" 2>/dev/null || true)" \
   -v "$ROOT_DIR/certs/branch/ca.pem:/ca.pem:ro" \
   -v "$ROOT_DIR/certs/branch/$BRANCH_DEVICE.crt:/device.crt:ro" \
   -v "$ROOT_DIR/certs/branch/$BRANCH_DEVICE.key:/device.key:ro" \
@@ -32,14 +33,14 @@ docker run -d --name branch-terminal --restart unless-stopped --network "$BRANCH
       --resolve "$HOST:443:$(getent hosts branch-fw | cut -d" " -f1)" "$@"; }
     i=0
     while true; do
-      if [ $((i % 240)) -eq 0 ] || [ -z "$T" ]; then
+      if [ $((i % (240 / INTERVAL))) -eq 0 ] || [ -z "$T" ]; then   # token 5 dk: ~4 dakikada bir yenile
         T=$(req "https://$HOST/sso/realms/staff/protocol/openid-connect/token" -d grant_type=password \
               -d client_id=branch-teller -d username=teller01 --data-urlencode "password=$STAFF_PW" \
             | sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p")
       fi
       i=$((i+1))
       req -o /dev/null -H "Authorization: Bearer $T" "https://$HOST/branch/v1/accounts"
-      sleep 1
+      sleep "$INTERVAL"
     done' >/dev/null
 
 log "Şube kanalı hazır mı?"

@@ -10,6 +10,12 @@ data:
   deployment: |
     spec:
       template:
+        metadata:
+          annotations:
+            # 12 · traffic-mgmt: yeniden deneme / zaman aşımı / havuzdan çıkarma sayaçları (Istio varsayılan olarak açmıyor)
+            proxy.istio.io/config: |
+              proxyStatsMatcher:
+                inclusionRegexps: [".*outlier_detection.*", ".*upstream_rq_retry.*", ".*upstream_rq_timeout.*", ".*upstream_rq_pending_overflow.*"]
         spec:
           securityContext:
             seccompProfile:

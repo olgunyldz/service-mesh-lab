@@ -87,3 +87,22 @@ spec:
         object.metadata.?labels['gateway.networking.k8s.io/gateway-class-name'].orValue('') == 'istio-waypoint' &&
         (has(object.spec.template) ? object.spec.template.spec.containers : object.spec.containers)
           .all(c, c.image.startsWith('docker.io/istio/proxyv2:'))
+---
+# Fluent Bit (10 · logging): node'daki container loglarını (/var/log/containers, /var/log/pods) ve kube-apiserver
+# audit log'unu (/var/log/kubernetes/audit) okur. Volume'lar salt okunur; yetki yükseltme yok (privileged istisnası yok).
+# Okuma konumunu (tail offset) tutmak için yazılabilir alan emptyDir.
+apiVersion: policies.kyverno.io/v1
+kind: PolicyException
+metadata:
+  name: fluent-bit
+  namespace: kyverno
+spec:
+  policyRefs:
+    - { kind: ValidatingPolicy, name: disallow-host-path }
+  matchConditions:
+    - name: fluent-bit-daemonset
+      expression: >-
+        object.metadata.namespace == 'logging-agent' &&
+        object.metadata.?labels['app.kubernetes.io/name'].orValue('') == 'fluent-bit' &&
+        (has(object.spec.template) ? object.spec.template.spec : object.spec).volumes
+          .filter(v, has(v.hostPath)).all(v, v.hostPath.path.startsWith('/var/log/'))

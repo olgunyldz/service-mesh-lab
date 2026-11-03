@@ -35,3 +35,27 @@ metadata:
     istio.io/dataplane-mode: ambient
     policy.corp.mesh/image-source: lab-registry
     pod-security.kubernetes.io/enforce: restricted
+---
+# Log toplayıcı (10 · logging): Fluent Bit DaemonSet. Node'daki container ve audit loglarını okumak için hostPath
+# (salt okunur) ister; bu yüzden PSA "privileged" ve Kyverno istisnası (infra/kyverno/exceptions.yaml) yalnızca
+# bu namespace'teki fluent-bit için. Mesh dışında (Prometheus gibi); mgmt'e egress gateway üzerinden gider.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging-agent
+  labels:
+    zone: mgmt
+    policy.corp.mesh/image-source: lab-registry
+    pod-security.kubernetes.io/enforce: privileged
+---
+# Merkezi loglama (10 · logging): Loki. Prometheus / Grafana gibi mesh dışında; diğer cluster'lardan yalnızca mgmt
+# ingress gateway üzerinden (mTLS, yalnızca push) ulaşılır. Okuma Grafana'dan: ekip başına organizasyon, kategori
+# başına tenant.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+  labels:
+    zone: mgmt
+    policy.corp.mesh/image-source: lab-registry
+    pod-security.kubernetes.io/enforce: restricted

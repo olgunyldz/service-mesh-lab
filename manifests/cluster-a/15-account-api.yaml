@@ -16,6 +16,7 @@ spec:
   selector:
     matchLabels:
       app: account-api
+      version: v1
   template:
     metadata:
       labels:
@@ -32,8 +33,10 @@ spec:
           type: RuntimeDefault
       containers:
         - name: api
-          image: lab-registry:5000/lab/account-api:0.5.0   # build + imza: 03b-publish-images.sh
+          image: lab-registry:5000/lab/account-api:0.5.1   # build + imza: 03b-publish-images.sh
           env:
+            - name: RELEASE   # 12 · traffic-mgmt: canary'de v1 / v2 ayrımı (17-account-api-v2.yaml)
+              value: v1
             # Dört göz (09e): bu tutarın üzerindeki şube transferi aynı şubeden başka bir yetkilinin onayını bekler.
             # Değerler iş kararı (lab varsayılanı)
             - name: APPROVAL_LIMIT
@@ -93,6 +96,12 @@ data:
   deployment: |
     spec:
       template:
+        metadata:
+          annotations:
+            # 12 · traffic-mgmt: yeniden deneme / zaman aşımı / havuzdan çıkarma sayaçları (Istio varsayılan olarak açmıyor)
+            proxy.istio.io/config: |
+              proxyStatsMatcher:
+                inclusionRegexps: [".*outlier_detection.*", ".*upstream_rq_retry.*", ".*upstream_rq_timeout.*", ".*upstream_rq_pending_overflow.*"]
         spec:
           securityContext:
             seccompProfile:

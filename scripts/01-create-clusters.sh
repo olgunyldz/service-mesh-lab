@@ -7,7 +7,12 @@ for c in $CLUSTERS; do
     continue
   fi
   log "kind cluster oluşturuluyor: $c"
-  kind create cluster --config "$ROOT_DIR/clusters/$c.yaml" --image "$K8S_NODE_IMAGE"
+  # extraMounts mutlak yol ister: __ROOT_DIR__ doldurulur (Windows'ta C:/... biçimi)
+  root=$(cd "$ROOT_DIR" && (pwd -W 2>/dev/null || pwd))
+  cfg=$(mktemp)
+  sed "s|__ROOT_DIR__|$root|g" "$ROOT_DIR/clusters/$c.yaml" > "$cfg"
+  kind create cluster --config "$(cd "$(dirname "$cfg")" && (pwd -W 2>/dev/null || pwd))/$(basename "$cfg")" --image "$K8S_NODE_IMAGE"
+  rm -f "$cfg"
 done
 
 # kind docker ağı ilk cluster ile oluşur; önbellek container'ları bu ağa bağlanır

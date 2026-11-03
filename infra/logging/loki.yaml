@@ -1,0 +1,152 @@
+# Merkezi loglama (10 · logging): Loki (ns logging, mgmt). İlk tasarımda Elasticsearch + Kibana vardı; bu makinede CPU'ya
+# sığmadı (bkz. docs/10-logging.md). Loki yalnızca etiketleri indeksler, satırları sıkıştırıp saklar: ~0,2-0,3 GB, düşük CPU.
+#
+# Çok tenant'lı (auth_enabled): her log kategorisi ayrı tenant (X-Scope-OrgID: apps | network | security | db | infra).
+# Veriler tenant'lar arasında tamamen ayrı; Grafana'da her ekibin organizasyonu yalnızca kendi tenant'ının veri kaynağını
+# görür. Yönetici "Korelasyon" veri kaynağı tüm tenant'ları birlikte sorgular (multi_tenant_queries_enabled).
+# Tek binary, dosya sistemi depolaması, replika 1; 24 saat saklama (compactor; Loki'nin izin verdiği en kısa süre). 07b-setup-logging.sh uygular.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki
+  namespace: logging
+data:
+  loki.yaml: |
+    auth_enabled: true
+    server:
+      http_listen_port: 3100
+      grpc_listen_port: 9095
+      log_level: warn
+    common:
+      path_prefix: /loki
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+    schema_config:
+      configs:
+        - from: "2026-01-01"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+    limits_config:
+      retention_period: 24h   # Loki'de en kısa süre (index periyodu 24 saat); kullanıcı 2 saat istedi
+      ingestion_rate_mb: 4
+      ingestion_burst_size_mb: 8
+      max_label_names_per_series: 10
+      reject_old_samples: true
+      reject_old_samples_max_age: 24h
+      allow_structured_metadata: true
+      volume_enabled: true
+    compactor:
+      working_directory: /loki/compactor
+      retention_enabled: true
+      delete_request_store: filesystem
+      compaction_interval: 10m
+    querier:
+      multi_tenant_queries_enabled: true
+    analytics:
+      reporting_enabled: false
+    ingester:
+      chunk_idle_period: 5m
+      wal:
+        dir: /loki/wal
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: loki
+  namespace: logging
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: loki
+  namespace: logging
+spec:
+  serviceName: loki
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loki
+  template:
+    metadata:
+      labels:
+        app: loki
+      annotations:
+        config-hash: "__CONFIG_HASH__"
+    spec:
+      serviceAccountName: loki
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: loki
+          image: lab-registry:5000/lab/loki:3.7.8   # 03b-publish-images.sh (LAB_PULLS)
+          args: ["-config.file=/etc/loki/loki.yaml", "-target=all"]
+          ports:
+            - containerPort: 3100
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3100
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/loki
+              readOnly: true
+            - name: data
+              mountPath: /loki
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: loki
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: logging
+spec:
+  selector:
+    app: loki
+  ports:
+    - name: http
+      port: 3100

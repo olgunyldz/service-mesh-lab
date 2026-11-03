@@ -92,10 +92,22 @@ done
 log "Grafana -> mgmt"
 kubectl --context "$(ctx mgmt)" apply -f "$TMP/grafana.yaml"
 kubectl --context "$(ctx mgmt)" apply -f "$ROOT_DIR/infra/observability/grafana-nodeport.yaml"
+# 10 · logging: Grafana girişli ve kalıcı. Anonim admin kapalı (loglar ekip başına organizasyonlarda), yönetici parolası
+# secret'tan; organizasyon / kullanıcı / veri kaynağı yeniden başlatmada kaybolmasın diye veritabanı PVC'de
+kubectl --context "$(ctx mgmt)" apply -f "$ROOT_DIR/infra/observability/grafana-storage.yaml"
+kubectl --context "$(ctx mgmt)" -n istio-system set env deploy/grafana \
+  GF_AUTH_ANONYMOUS_ENABLED=false GF_AUTH_BASIC_ENABLED=true \
+  GF_SECURITY_ADMIN_PASSWORD- GF_SECURITY_ADMIN_USER- >/dev/null
+kubectl --context "$(ctx mgmt)" -n istio-system set env deploy/grafana --from=secret/grafana-admin \
+  --keys=GF_SECURITY_ADMIN_USER,GF_SECURITY_ADMIN_PASSWORD >/dev/null
+kubectl --context "$(ctx mgmt)" -n istio-system patch deploy grafana --type=strategic -p \
+  '{"spec":{"template":{"spec":{"securityContext":{"fsGroup":472},"volumes":[{"name":"storage","emptyDir":null,"persistentVolumeClaim":{"claimName":"grafana"}}]}}}}' >/dev/null
 kubectl --context "$(ctx mgmt)" -n istio-system rollout status deploy/grafana --timeout=300s
 
 log "Kiali ($KIALI_VERSION, çoklu cluster) -> mgmt"
 helm upgrade --install kiali-server kiali/kiali-server -n istio-system --kube-context "$(ctx mgmt)" \
   --version "$KIALI_VERSION" -f "$ROOT_DIR/istio/values/kiali.yaml" \
   --set external_services.grafana.external_url="http://localhost:$GRAFANA_PORT" \
+  --set external_services.grafana.auth.type=basic --set external_services.grafana.auth.username=admin \
+  --set external_services.grafana.auth.password="secret:grafana-admin:password" \
   --wait

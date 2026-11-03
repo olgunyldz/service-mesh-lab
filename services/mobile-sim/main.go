@@ -44,6 +44,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -424,8 +425,16 @@ func loop() {
 			fmt.Fprintln(os.Stderr, "istek:", err, lastStatus, "- yeniden giriş ve cihaz kaydı")
 			ready = false
 		}
-		time.Sleep(time.Second)
+		time.Sleep(loopInterval())
 	}
+}
+
+// loopInterval: yük üreticisinin istek aralığı (LOOP_INTERVAL saniye, varsayılan 1)
+func loopInterval() time.Duration {
+	if n, err := strconv.Atoi(os.Getenv("LOOP_INTERVAL")); err == nil && n > 0 {
+		return time.Duration(n) * time.Second
+	}
+	return time.Second
 }
 
 // --- yardımcılar ---

@@ -40,6 +40,9 @@ import (
 
 var version = "dev" // build sırasında -ldflags ile verilir
 
+// release: dağıtım sürümü (RELEASE ortam değişkeni; 12 · traffic-mgmt canary'si: v1 / v2). Aynı image, farklı dağıtım
+var release = env("RELEASE", "v1")
+
 // Şube rolleri (09e): işlem başlatabilenler ve onaylayabilenler (dört göz)
 var (
 	branchStaff     = []string{"teller", "operations", "supervisor"}
@@ -111,7 +114,7 @@ func main() {
 			dbError(w, r, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"accounts": list, "source": "postgresql", "service": "account-api " + version})
+		writeJSON(w, http.StatusOK, map[string]any{"accounts": list, "source": "postgresql", "service": "account-api " + version, "release": release})
 	})
 	mux.HandleFunc("GET /accounts/{id}", func(w http.ResponseWriter, r *http.Request) {
 		acc, status := findOwned(r, pool)

@@ -1,0 +1,890 @@
+{
+  "uid": "logs-overview",
+  "title": "Loglar - Genel bakış",
+  "description": "Tüm zone'ların logları (Loki, beş kategori). request_id ile bir isteğin izini sürmek için yukarıdaki kutuya kimliği yazın. Başarılı (2xx/3xx) access log'lar request_id'ye göre 1/10 örneklenir; hata, ret ve bayraklı istekler tam.",
+  "tags": [
+    "loki",
+    "10-logging"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "editable": true,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "type": "textbox",
+        "name": "request_id",
+        "label": "request_id",
+        "description": "Bir isteğin kimliği (ör. api-a'nın gördüğü X-Request-Id)",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Hacim",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "apps",
+      "description": "Seçili aralıkta apps kategorisindeki satır sayısı",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({category=\"apps\"} [$__range]))",
+          "queryType": "instant",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "id": 2,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "network",
+      "description": "Seçili aralıkta network kategorisindeki satır sayısı",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({category=\"network\"} [$__range]))",
+          "queryType": "instant",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "purple",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "id": 3,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "security",
+      "description": "Seçili aralıkta security kategorisindeki satır sayısı",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({category=\"security\"} [$__range]))",
+          "queryType": "instant",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "id": 4,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "db",
+      "description": "Seçili aralıkta db kategorisindeki satır sayısı",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({category=\"db\"} [$__range]))",
+          "queryType": "instant",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "id": 5,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "infra",
+      "description": "Seçili aralıkta infra kategorisindeki satır sayısı",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({category=\"infra\"} [$__range]))",
+          "queryType": "instant",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "id": 6,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 1,
+        "w": 8,
+        "h": 4
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Kategoriye göre log hacmi",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (category) (count_over_time({category=~\".+\"} [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{category}}",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 7,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Zone'a göre log hacmi",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (zone) (count_over_time({category=~\".+\"} [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{zone}}",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 8,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Güvenlik ve hatalar",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "WAF engellemesi",
+      "description": "edge-waf'ın engellediği istekler (OWASP CRS)",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({category=\"security\", cluster=\"edge\"} |= \"ModSecurity: Access denied\" [$__range]))",
+          "queryType": "instant",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "id": 10,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "auth-service reddi",
+      "description": "Kanal kimlik kontrolünde reddedilen istekler (token yok, yanlış realm, cihaz, DPoP …)",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({category=\"security\", namespace=\"auth\"} |= \"RED channel=\" [$__range]))",
+          "queryType": "instant",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "id": 11,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 14,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Dört göz ihlali",
+      "description": "Kendi talebini onaylamaya çalışan personel",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({category=\"security\"} |= \"DÖRT GÖZ İHLALİ\" [$__range]))",
+          "queryType": "instant",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "id": 12,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 14,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Secret değişikliği (audit)",
+      "description": "Kubernetes audit: secret oluşturma / güncelleme / silme",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({namespace=\"kube-audit\"} | json | objectRef_resource=\"secrets\" | verb=~\"create|update|patch|delete\" [$__range]))",
+          "queryType": "instant",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "purple",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "id": 13,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 14,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "5xx yanıtlar (cluster'a göre)",
+      "description": "Gateway ve waypoint access log'larında 5xx",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (cluster) (count_over_time({category=\"network\", container=\"istio-proxy\"} | json | response_code >= 500 [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{cluster}}",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 14,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "4xx yanıtlar (cluster'a göre)",
+      "description": "401 / 403 / 404 / 429: kimlik, yetki, kota",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (cluster) (count_over_time({category=\"network\", container=\"istio-proxy\"} | json | response_code >= 400 | response_code < 500 [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{cluster}}",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 15,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "id": 16,
+      "type": "row",
+      "title": "Korelasyon",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "logs",
+      "title": "request_id ile iz (tüm kategoriler, tüm zone'lar)",
+      "description": "Yukarıdaki request_id kutusu boşsa tüm loglar gelir. Aynı kimlik DMZ ve internal access log'larında ve auth-service logunda görünür",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{category=~\".+\"} |= \"$request_id\"",
+          "queryType": "range",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      },
+      "id": 17,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 24,
+        "h": 12
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Son hatalar (5xx ve Envoy bayrakları)",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{category=\"network\", container=\"istio-proxy\"} | json | response_code >= 500 or response_flags != \"-\"",
+          "queryType": "range",
+          "datasource": {
+            "type": "loki",
+            "uid": "logs-all"
+          }
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      },
+      "id": 18,
+      "datasource": {
+        "type": "loki",
+        "uid": "logs-all"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 39,
+        "w": 24,
+        "h": 10
+      }
+    }
+  ]
+}

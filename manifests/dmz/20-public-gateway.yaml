@@ -61,7 +61,9 @@ spec:
       timeout: 10s
       retries:
         attempts: 2
-        perTryTimeout: 4s
+        # token handler'ın IdP zaman aşımından (5 sn) büyük olmalı: Keycloak yavaşken (logout) handler kendi
+        # zaman aşımıyla yerel oturumu yine kapatıp yanıt verir; gateway isteği ondan önce kesmez (504)
+        perTryTimeout: 6s
 ---
 # SSO (08 · token-exchange): müşteri ve partner'ların login/token istekleri Keycloak'a (mgmt).
 # web gateway -> dmz-egressgateway -> mgmt; egress yalnızca bu host için web gateway'i kabul eder.

@@ -3,7 +3,16 @@
 # (includeAdditionalHeadersInCheck); istemcinin gönderdiği değer bunu ezemez. auth-service yalnızca dmz'de.
 # Web için sağlayıcı yok: web-token-handler auth-service'e kendisi sorar (09a).
 meshConfig:
+  # Liste istiod.yaml'dakini ezer (helm listeleri birleştirmez): iz sağlayıcısı burada da tanımlı
   extensionProviders:
+    # Dağıtık iz (11 · tracing): OTLP/HTTP, her cluster'da kendi egress gateway'i üzerinden Tempo'ya
+    - name: otel
+      opentelemetry:
+        service: traces-mgmt.istio-egress.svc.cluster.local
+        port: 80
+        http:
+          path: /v1/traces
+          timeout: 5s
     - name: auth-mobile
       envoyExtAuthzHttp: &authz
         service: auth-service.auth.svc.cluster.local
