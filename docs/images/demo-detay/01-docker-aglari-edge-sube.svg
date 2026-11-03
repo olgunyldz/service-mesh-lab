@@ -1,0 +1,186 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1030" viewBox="0 0 2200 1030">
+<defs><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto"><path d="M0,1 L9,5 L0,9" fill="none" stroke="#b3b3ad" stroke-width="1.4"/></marker><marker id="ab" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2f7bd8"/></marker><marker id="ad" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#b91c1c"/></marker></defs>
+<rect width="2200" height="1030" fill="#ffffff"/>
+<text x="40" y="46" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="25" font-weight="600" fill="#1f1f1f">01 · Docker ağları: istemciler, edge (LB + WAF), şube ağı, registry</text>
+<text x="40" y="78" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="16" fill="#5f5f5a">Kubernetes dışındaki her şey Docker container'ı · üç ayrı ağ · cluster'lara yalnızca edge-waf ve branch-fw köprü kurar</text>
+<g transform="translate(0,40)">
+<path d="M 20,160 L 1180,160 L 1180,548 L 20,548 Z" fill="#fdecec" fill-opacity="0.3" stroke="#e3a1a1" stroke-width="3" stroke-dasharray="14 8"/>
+<path d="M 1210,160 L 2180,160 L 2180,548 L 1210,548 Z" fill="#eef2f7" fill-opacity="0.45" stroke="#94a3b8" stroke-width="3" stroke-dasharray="14 8"/>
+<path d="M 20,610 L 2180,610 L 2180,790 L 20,790 Z" fill="#e4eefc" fill-opacity="0.1" stroke="#6d9fe4" stroke-width="3" stroke-dasharray="14 8"/>
+<rect x="40" y="640" width="380" height="120" rx="6" fill="#fbfbfa" stroke="#55554f" stroke-width="2"/>
+<rect x="40" y="640" width="249.20000000000002" height="26" rx="6" fill="#55554f"/>
+<text x="50" y="658" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#ffffff" text-anchor="start">▣ cluster-a-control-plane</text>
+<rect x="440" y="640" width="380" height="120" rx="6" fill="#fbfbfa" stroke="#55554f" stroke-width="2"/>
+<rect x="440" y="640" width="207.20000000000002" height="26" rx="6" fill="#55554f"/>
+<text x="450" y="658" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#ffffff" text-anchor="start">▣ mgmt-control-plane</text>
+<rect x="840" y="640" width="380" height="120" rx="6" fill="#fbfbfa" stroke="#55554f" stroke-width="2"/>
+<rect x="840" y="640" width="198.8" height="26" rx="6" fill="#55554f"/>
+<text x="850" y="658" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#ffffff" text-anchor="start">▣ dmz-control-plane</text>
+<path d="M 560,136 L 560,160 L 320,160 L 320,196" fill="none" stroke="#2f7bd8" stroke-width="3" marker-end="url(#ab)"/>
+<path d="M 600,300 L 620,300" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M 220,379 L 220,359" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M 600,419 L 600,365" fill="none" stroke="#b3b3ad" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M 1100,359 L 1100,367 L 1170,367 L 1170,640" fill="none" stroke="#2f7bd8" stroke-width="3" marker-end="url(#ab)"/>
+<path d="M 1930,342 L 1930,590 L 1190,590 L 1190,640" fill="none" stroke="#2f7bd8" stroke-width="3" marker-end="url(#ab)"/>
+<path d="M 220,525 L 220,640" fill="none" stroke="#b91c1c" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ad)"/>
+<rect x="40" y="196" width="560" height="163" rx="8" fill="#ffffff" stroke="#e2b04a" stroke-width="1.8"/>
+<text x="50" y="215" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#1f1f1f" text-anchor="start">◼ edge-lb</text>
+<text x="592" y="215" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5f5f5a" text-anchor="end">Docker container · edge-net</text>
+<rect x="48" y="224" width="544" height="124" rx="5" fill="#fff1e0" stroke="#e39b62" stroke-width="1.2"/>
+<text x="56" y="239" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f1f1f" text-anchor="start">haproxy:3.0-alpine</text>
+<text x="56" y="256" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">:8443 TLS 1.2+/1.3 · h2 · HSTS · modern cipher'lar</text>
+<text x="56" y="273" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">IP başına hız (100 / 10 sn) ve bağlantı limiti</text>
+<text x="56" y="290" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">dışarıdan gelen X-Forwarded-*, x-user-jwt, x-channel silinir</text>
+<text x="56" y="307" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">partner-api: Partner CA istemci sertifikası zorunlu</text>
+<text x="56" y="324" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">  sertifika CN'i → x-partner-id</text>
+<text x="56" y="341" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">→ edge-waf:8080</text>
+<rect x="620" y="196" width="540" height="163" rx="8" fill="#ffffff" stroke="#e2b04a" stroke-width="1.8"/>
+<text x="630" y="215" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#1f1f1f" text-anchor="start">◼ edge-waf</text>
+<text x="1152" y="215" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5f5f5a" text-anchor="end">Docker container · edge-net + kind</text>
+<rect x="628" y="224" width="524" height="124" rx="5" fill="#fff1e0" stroke="#e39b62" stroke-width="1.2"/>
+<text x="636" y="239" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f1f1f" text-anchor="start">modsecurity-crs:4.25 (nginx)</text>
+<text x="636" y="256" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">ModSecurity v3 + OWASP CRS (paranoia 1, mod On)</text>
+<text x="636" y="273" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">403'lerde tek tip gövde</text>
+<text x="636" y="290" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">Host → kanal gateway VIP'i (.200.10 – .12) :443</text>
+<text x="636" y="307" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">DMZ'ye istemci sertifikası: Edge-DMZ CA</text>
+<text x="636" y="324" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">kind ağına bağlı tek internet tarafı container'ı</text>
+<text x="636" y="341" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start"></text>
+<rect x="40" y="379" width="360" height="146" rx="8" fill="#ffffff" stroke="#e3a1a1" stroke-width="1.8"/>
+<text x="50" y="398" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#1f1f1f" text-anchor="start">◼ loadgen</text>
+<text x="392" y="398" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5f5f5a" text-anchor="end">Docker · edge-net</text>
+<rect x="48" y="407" width="344" height="107" rx="5" fill="#eaf2fd" stroke="#6d9fe4" stroke-width="1.2"/>
+<text x="56" y="422" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f1f1f" text-anchor="start">curl:8.11.1</text>
+<text x="56" y="439" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">5 sn'de bir: web girişi (PKCE)</text>
+<text x="56" y="456" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">dashboard · echo (CSRF)</text>
+<text x="56" y="473" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">partner acme: client credentials</text>
+<text x="56" y="490" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">  + istemci sertifikası</text>
+<text x="56" y="507" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">10 istekte bir /api/status/500</text>
+<rect x="420" y="379" width="360" height="146" rx="8" fill="#ffffff" stroke="#e3a1a1" stroke-width="1.8"/>
+<text x="430" y="398" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#1f1f1f" text-anchor="start">◼ mobile-loadgen</text>
+<text x="772" y="398" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5f5f5a" text-anchor="end">Docker · edge-net</text>
+<rect x="428" y="407" width="344" height="107" rx="5" fill="#eaf2fd" stroke="#6d9fe4" stroke-width="1.2"/>
+<text x="436" y="422" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f1f1f" text-anchor="start">mobile-sim:0.1.1</text>
+<text x="436" y="439" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">mobil uygulama (kullanıcı mehmet)</text>
+<text x="436" y="456" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">PKCE + OTP (seviye 2)</text>
+<text x="436" y="473" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">cihaz anahtarı kaydı</text>
+<text x="436" y="490" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">her istek: DPoP + attestation</text>
+<text x="436" y="507" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">5 sn'de bir hesap sorgusu</text>
+<rect x="800" y="379" width="360" height="146" rx="8" fill="#ffffff" stroke="#e3a1a1" stroke-width="1.8"/>
+<text x="810" y="398" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#1f1f1f" text-anchor="start">◼ mobile-sim (test)</text>
+<text x="1152" y="398" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5f5f5a" text-anchor="end">docker run --rm</text>
+<rect x="808" y="407" width="344" height="107" rx="5" fill="#eaf2fd" stroke="#6d9fe4" stroke-width="1.2"/>
+<text x="816" y="422" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f1f1f" text-anchor="start">mobile-sim:0.1.1</text>
+<text x="816" y="439" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">08-verify.sh'in mobil istemcisi</text>
+<text x="816" y="456" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">kullanıcı ayse</text>
+<text x="816" y="473" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">çalınan anahtar, tekrar,</text>
+<text x="816" y="490" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">root'lu cihaz, eski sürüm</text>
+<text x="816" y="507" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">senaryoları</text>
+<rect x="1230" y="196" width="450" height="146" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="1240" y="215" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#1f1f1f" text-anchor="start">◼ branch-terminal</text>
+<text x="1672" y="215" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5f5f5a" text-anchor="end">Docker · branch-net</text>
+<rect x="1238" y="224" width="434" height="107" rx="5" fill="#eaf2fd" stroke="#6d9fe4" stroke-width="1.2"/>
+<text x="1246" y="239" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f1f1f" text-anchor="start">curl</text>
+<text x="1246" y="256" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">cihaz sertifikası (Branch CA): sube-0001</text>
+<text x="1246" y="273" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">ikinci şube: sube-0002 (testlerde)</text>
+<text x="1246" y="290" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">personel token'ı: staff realm, teller01</text>
+<text x="1246" y="307" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">  (/sso/realms/staff/* üzerinden)</text>
+<text x="1246" y="324" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">5 sn'de bir /branch/v1/accounts</text>
+<rect x="1700" y="196" width="460" height="146" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="1710" y="215" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#1f1f1f" text-anchor="start">◼ branch-fw</text>
+<text x="2152" y="215" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5f5f5a" text-anchor="end">Docker · branch-net + kind</text>
+<rect x="1708" y="224" width="444" height="107" rx="5" fill="#fff1e0" stroke="#e39b62" stroke-width="1.2"/>
+<text x="1716" y="239" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f1f1f" text-anchor="start">haproxy:3.0-alpine</text>
+<text x="1716" y="256" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">iç firewall'u temsil eder</text>
+<text x="1716" y="273" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">mode tcp · yalnızca :443</text>
+<text x="1716" y="290" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">→ branch-gateway VIP .200.13:443</text>
+<text x="1716" y="307" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">şube ağından başka hedefe yol yok</text>
+<text x="1716" y="324" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">TLS'e dokunmaz (uçtan uca mTLS)</text>
+<rect x="1230" y="364" width="690" height="89.5" rx="8" fill="#fffdf3" stroke="#d8cfa3" stroke-width="1.3"/>
+<text x="1242" y="386" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#1f1f1f" text-anchor="start">Şube kanalı neden ayrı ağda?</text>
+<text x="1242" y="408.0" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2b2b2b" text-anchor="start">Hedefte şube kurum WAN'ından (MPLS) gelir; edge'den geçmez.</text>
+<text x="1242" y="426.5" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2b2b2b" text-anchor="start">Lab'de branch-net ayrı Docker ağı: tek çıkışı branch-fw.</text>
+<text x="1242" y="445.0" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2b2b2b" text-anchor="start">branch-gateway DMZ cluster'ında · bkz. 02.</text>
+<rect x="1250" y="640" width="450" height="95" rx="8" fill="#ffffff" stroke="#6abd6a" stroke-width="1.8"/>
+<text x="1260" y="659" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#1f1f1f" text-anchor="start">◼ lab-registry</text>
+<text x="1692" y="659" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5f5f5a" text-anchor="end">Docker · kind · host :5001</text>
+<rect x="1258" y="668" width="434" height="56" rx="5" fill="#f3ecfb" stroke="#a383e0" stroke-width="1.2"/>
+<text x="1266" y="683" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f1f1f" text-anchor="start">registry:2.8.3</text>
+<text x="1266" y="700" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">lab-registry:5000 · imzalı lab image'ları (cosign)</text>
+<text x="1266" y="717" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">+ docker.io / quay.io / ghcr.io önbellekleri</text>
+<rect x="1720" y="640" width="440" height="112" rx="8" fill="#ffffff" stroke="#6abd6a" stroke-width="1.8"/>
+<text x="1730" y="659" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#1f1f1f" text-anchor="start">◼ edge-logs</text>
+<text x="2152" y="659" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5f5f5a" text-anchor="end">Docker · kind</text>
+<rect x="1728" y="668" width="424" height="73" rx="5" fill="#e8f5e8" stroke="#6abd6a" stroke-width="1.2"/>
+<text x="1736" y="683" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f1f1f" text-anchor="start">fluent-bit</text>
+<text x="1736" y="700" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">/var/lib/docker/containers (salt okunur)</text>
+<text x="1736" y="717" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">log.category etiketli container'lar</text>
+<text x="1736" y="734" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#3a3a3a" text-anchor="start">→ logs-edge.mgmt.internal :443 mTLS</text>
+<rect x="20" y="820" width="2160" height="156" rx="8" fill="#fafaf8" stroke="#c4c4bf" stroke-width="1.2"/>
+<text x="34" y="844" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15" font-weight="700" fill="#1f1f1f" text-anchor="start">Lejant</text>
+<rect x="34.0" y="854" width="30" height="17" rx="4" fill="#fdecec" stroke="#e3a1a1" stroke-width="1.5"/>
+<text x="74.0" y="867" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">internet tarafı</text>
+<rect x="389.3333333333333" y="854" width="30" height="17" rx="4" fill="#fff3d9" stroke="#e2b04a" stroke-width="1.5"/>
+<text x="429.3333333333333" y="867" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">edge</text>
+<rect x="744.6666666666666" y="854" width="30" height="17" rx="4" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="784.6666666666666" y="867" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">şube ağı</text>
+<rect x="1100.0" y="854" width="30" height="17" rx="4" fill="#e4eefc" stroke="#6d9fe4" stroke-width="1.5"/>
+<text x="1140.0" y="867" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">kind ağı</text>
+<rect x="1455.3333333333333" y="854" width="30" height="17" rx="4" fill="#e5f4e5" stroke="#6abd6a" stroke-width="1.5"/>
+<text x="1495.3333333333333" y="867" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">registry / log</text>
+<line x1="1810.6666666666665" y1="862" x2="1840.6666666666665" y2="862" stroke="#6d9fe4" stroke-width="3" stroke-dasharray="9 5"/>
+<text x="1850.6666666666665" y="867" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">güven sınırı (kalın kesikli)</text>
+<rect x="34.0" y="882" width="30" height="17" rx="4" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="74.0" y="895" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">namespace</text>
+<rect x="389.3333333333333" y="882" width="30" height="17" rx="3" fill="#fbfbfa" stroke="#55554f" stroke-width="2"/>
+<text x="429.3333333333333" y="895" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">node (sunucu)</text>
+<rect x="744.6666666666666" y="882" width="30" height="17" rx="4" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.8"/>
+<text x="784.6666666666666" y="895" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">pod (Deployment / StatefulSet)</text>
+<rect x="1100.0" y="882" width="30" height="17" rx="4" fill="#ffffff" stroke="#6d9fe4" stroke-width="1.8" stroke-dasharray="4 3"/>
+<text x="1140.0" y="895" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">DaemonSet pod (her node'da)</text>
+<rect x="1455.3333333333333" y="882" width="30" height="17" rx="3" fill="#eaf2fd" stroke="#6d9fe4" stroke-width="1.2"/>
+<text x="1495.3333333333333" y="895" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">container: uygulama</text>
+<rect x="1810.6666666666665" y="882" width="30" height="17" rx="3" fill="#fff1e0" stroke="#e39b62" stroke-width="1.2"/>
+<text x="1850.6666666666665" y="895" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">container: Envoy proxy</text>
+<rect x="34.0" y="910" width="30" height="17" rx="3" fill="#e8f5e8" stroke="#6abd6a" stroke-width="1.2"/>
+<text x="74.0" y="923" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">container: agent</text>
+<rect x="389.3333333333333" y="910" width="30" height="17" rx="3" fill="#f3ecfb" stroke="#a383e0" stroke-width="1.2"/>
+<text x="429.3333333333333" y="923" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">container: veri</text>
+<line x1="744.6666666666666" y1="918" x2="774.6666666666666" y2="918" stroke="#2f7bd8" stroke-width="3"/>
+<text x="784.6666666666666" y="923" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">ana akış (mTLS)</text>
+<line x1="1100.0" y1="918" x2="1130.0" y2="918" stroke="#b3b3ad" stroke-width="1.8"/>
+<text x="1140.0" y="923" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">istek / bağlantı</text>
+<line x1="1455.3333333333333" y1="918" x2="1485.3333333333333" y2="918" stroke="#b3b3ad" stroke-width="1.8" stroke-dasharray="6 5"/>
+<text x="1495.3333333333333" y="923" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">yardımcı akış (log, metrik, kontrol)</text>
+<line x1="1810.6666666666665" y1="918" x2="1840.6666666666665" y2="918" stroke="#b91c1c" stroke-width="2" stroke-dasharray="5 4"/>
+<text x="1850.6666666666665" y="923" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">yasak yol</text>
+<rect x="34.0" y="937" width="30" height="17" rx="8.5" fill="#ffffff" stroke="#1d7a46" stroke-width="1.5"/>
+<text x="49.0" y="950" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#1d7a46" text-anchor="middle">⇥</text>
+<text x="74.0" y="951" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">giriş: port / protokol</text>
+<rect x="389.3333333333333" y="937" width="30" height="17" rx="8.5" fill="#ffffff" stroke="#c2410c" stroke-width="1.5"/>
+<text x="404.3333333333333" y="950" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#c2410c" text-anchor="middle">↦</text>
+<text x="429.3333333333333" y="951" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">çıkış: hedef port / protokol</text>
+<circle cx="759.6666666666666" cy="946" r="9" fill="#1f1f1f"/>
+<text x="759.6666666666666" y="950" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
+<text x="784.6666666666666" y="951" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#1f1f1f" text-anchor="start">adım / ayrıntı numarası</text>
+<rect x="34" y="143" width="522.1999999999999" height="26" rx="13" fill="#e3a1a1"/>
+<text x="45" y="161" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#ffffff" letter-spacing="0.6">DOCKER AĞI edge-net · İNTERNET TARAFI · cluster'lara erişemez</text>
+<rect x="560" y="113" width="478.3" height="19" rx="9.5" fill="#ffffff" stroke="#1d7a46" stroke-width="1.5"/>
+<text x="568" y="127" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700" fill="#1d7a46">⇥ in ← host: 127.0.0.1:8443 (HTTPS) · :8080 (→ HTTPS'e yönlendirme)</text>
+<rect x="1224" y="143" width="440.2" height="26" rx="13" fill="#94a3b8"/>
+<text x="1235" y="161" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#ffffff" letter-spacing="0.6">DOCKER AĞI branch-net · ŞUBE WAN · internetten ayrı</text>
+<rect x="34" y="593" width="390.99999999999994" height="26" rx="13" fill="#6d9fe4"/>
+<text x="45" y="611" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#ffffff" letter-spacing="0.6">DOCKER AĞI kind · node'lar, VIP'ler, registry</text>
+<text x="52" y="690" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#1f1f1f" text-anchor="start">kindest/node v1.36 · containerd · tek node</text>
+<text x="52" y="712" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1f1f1f" text-anchor="start">VIP .201.10 (istio-ingressgateway)</text>
+<text x="52" y="734" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#5f5f5a" text-anchor="start">ayrıntı: 04 · node içi: 08</text>
+<text x="452" y="690" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#1f1f1f" text-anchor="start">kindest/node v1.36 · containerd · tek node</text>
+<text x="452" y="712" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1f1f1f" text-anchor="start">VIP .203.10 · NodePort 30201/30300/30808</text>
+<text x="452" y="734" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#5f5f5a" text-anchor="start">ayrıntı: 06 · node içi: 08</text>
+<text x="852" y="690" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#1f1f1f" text-anchor="start">kindest/node v1.36 · containerd · tek node</text>
+<text x="852" y="712" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1f1f1f" text-anchor="start">VIP .200.10–.13 (4 kanal gateway'i)</text>
+<text x="852" y="734" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#5f5f5a" text-anchor="start">ayrıntı: 02 · node içi: 08</text>
+<text x="1158" y="584" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f1f1f" text-anchor="end">kanal gateway VIP'leri :443 (mTLS) →</text>
+<text x="1400" y="584" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f1f1f" text-anchor="start">→ .200.13:443 (cihaz mTLS)</text>
+<text x="232" y="584" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#b91c1c" text-anchor="start">edge-net → kind: yol yok (köprü yalnızca edge-waf)</text>
+</g>
+</svg>

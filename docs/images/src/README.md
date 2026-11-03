@@ -10,6 +10,9 @@ Bu klasördeki üreteçler (yalnızca Python standart kütüphanesi):
 | `zone_images.py` | `../zone-{edge,dmz,sube,kimlik,internal}.svg`: zone iç yapısı + kontroller + lab karşılığı |
 | `zone_ozet.py` | `../zone-ozet.svg`: özet zone mimarisi (güven kademeleri, kanalların giriş yolu), 1560 px |
 | `topo_style.py` | ortak stil ve çizim yardımcıları |
+| `prod_detay.py` + `detay_style.py` | `../prod-detay/NN-*.svg`: hedef mimarinin ayrıntılı seti (genel bakış → cluster → pod → node → uçtan uca akış); bkz. [prod-detay/README.md](../prod-detay/README.md) |
+| `demo_detay.py` + `detay_style.py` | `../demo-detay/NN-*.svg`: bu makinedeki demo (lab) ortamının aynı yapıdaki seti (Docker ağları, kind cluster'ları, gerçek adlar ve portlar); bkz. [demo-detay/README.md](../demo-detay/README.md) |
+| `drawio_detay.py` | `../<set>/<set>.drawio`: ayrıntı setini (prod-detay, demo-detay) aynı resim fonksiyonlarından draw.io bileşenleriyle üretir: resim başına sayfa; namespace / node / pod container, oklar şekillere bağlı; `python docs/images/src/drawio_detay.py [prod-detay] [demo-detay]` |
 Stil `../detayli-topoloji.png` ile uyumludur: dikey akış, kesikli zone kutuları, mavi = ana mTLS akışı, kesikli = planlı.
 
 ```bash
