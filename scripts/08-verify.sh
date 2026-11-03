@@ -487,7 +487,7 @@ check "İç JWT (partner): partners realm'i, partner_id IdP'den" '"partner_id":"
 bclaims=$(jwt_payload "$(branch device "https://$BRANCH_HOST/branch/v1/headers" | grep -A1 '"X-User-Jwt"' | tail -1 | tr -d ' "')")
 check "İç JWT (şube): personelin şubesi (branch_id) cihaz sertifikasıyla eşleşiyor" "\"branch_id\":\"$BRANCH_DEVICE\"" "$bclaims"
 check "account-api isteği kullanıcıyla logluyor (sub, kanal, oturum)" 'channel="mobile"' \
-  "$(mobile /mobile/v1/accounts -o /dev/null; kubectl --context "$(ctx cluster-a)" -n account-api logs deploy/account-api --tail=20 2>/dev/null)"
+  "$(mobile /mobile/v1/accounts -o /dev/null; kubectl --context "$(ctx cluster-a)" -n account-api logs -l app=account-api --since=2m --tail=-1 2>/dev/null)"
 check "Internal yalnızca Keycloak realm issuer'larına güveniyor (DMZ issuer'ı yok)" "yok" \
   "$(kubectl --context "$(ctx cluster-a)" get requestauthentication -A -o jsonpath='{..issuer}' | grep -q 'auth.dmz' && echo var || echo yok)"
 check "DMZ'de iç JWT imza anahtarı yok (auth-signing-key hiçbir cluster'da yok)" "yok" \
@@ -574,7 +574,7 @@ check "Step-up sonrası bile başka müşterinin hesabından transfer (404, BOLA
 check "Şube (gişe rolü) transfer kabul (202)" "202" \
   "$(branch device "-o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '$TRX' https://$BRANCH_HOST/branch/v1/accounts/2/transfers")"
 check "account-api transferi kullanıcı ve seviyeyle logluyor" "TRANSFER kabul" \
-  "$(kubectl --context "$(ctx cluster-a)" -n account-api logs deploy/account-api --since=5m 2>/dev/null | grep "TRANSFER kabul")"
+  "$(kubectl --context "$(ctx cluster-a)" -n account-api logs -l app=account-api --since=5m --tail=-1 2>/dev/null | grep "TRANSFER kabul")"
 
 log "11) Mobil cihaz bağlama: DPoP, attestation, kayıtlı cihaz, mobile-bff"
 otp_fresh
@@ -656,7 +656,7 @@ check "Veritabanı da talep eden = onaylayan kaydını reddediyor (CHECK kısıt
 check "account-api onay kaydını silemiyor (yalnızca ekleme ve karar güncellemesi)" "permission denied" \
   "$(pg account_api pg-account-api "delete from accounts.transfer_approvals where id=$AID2")"
 check "account-api onayı talep eden ve onaylayanla logluyor" "TRANSFER onaylandı" \
-  "$(kubectl --context "$(ctx cluster-a)" -n account-api logs deploy/account-api --since=5m 2>/dev/null | grep "onay=$AID ")"
+  "$(kubectl --context "$(ctx cluster-a)" -n account-api logs -l app=account-api --since=5m --tail=-1 2>/dev/null | grep "onay=$AID ")"
 # Mesai saati: branch-bff'e geçici olarak şu anı dışarıda bırakan bir aralık verilir, sonra geri alınır
 hour=$(( (10#$(date -u +%H) + 3) % 24 ))   # Türkiye saati (UTC+3)
 (( hour < 12 )) && closed="13:00-14:00" || closed="01:00-02:00"
@@ -827,6 +827,69 @@ check "DMZ'den Tempo'da sorgu yapılamıyor (egress: 403)" "403" "$(cut -d' ' -f
 check "DMZ'den iz gönderimi Tempo'ya ulaşıyor (OTLP, 200)" "200" "$(cut -d' ' -f2 <<<"$dq")"
 check "Tempo imzalı image'la (digest)" "1" \
   "$(kubectl --context "$(ctx mgmt)" -n logging get pod -l app=tempo -o jsonpath='{.items[0].spec.containers[0].image}' \
+     | grep -c "^$LAB_REGISTRY/lab/.*@sha256:" || true)"
+
+log "16) Trafik yönetimi: canary, zaman aşımı, yeniden deneme, circuit breaker, hata enjeksiyonu"
+refresh_tokens
+CA_=cluster-a
+wstat() {  # wstat <namespace> <istatistik regex>: waypoint Envoy sayacı (toplam)
+  kubectl --context "$(ctx $CA_)" -n "$1" exec deploy/waypoint -- pilot-agent request GET stats 2>/dev/null \
+    | grep -E "$2" | awk -F': ' '{s+=$2} END {print s+0}'
+}
+check "account-api v1 ve v2 çalışıyor (canary)" "v1 v2" \
+  "$(kubectl --context "$(ctx $CA_)" -n account-api get pod -l app=account-api -o jsonpath='{range .items[*]}{.metadata.labels.version}{" "}{end}' | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+v2=0; v1=0
+for i in $(seq 1 60); do
+  r=$(edge www /api/accounts | grep -o '"release":"v[12]"')
+  [[ $r == *v2* ]] && v2=$((v2+1)); [[ $r == *v1* ]] && v1=$((v1+1))
+done
+check "Canary dağılımı: 60 istekte v2 payı %10 civarı (1-15 arası; v1=$v1, v2=$v2)" "ok" \
+  "$( (( v2 >= 1 && v2 <= 15 && v1 + v2 == 60 )) && echo ok || echo "v1=$v1 v2=$v2")"
+check "Transfer (POST) yeniden denenmiyor (yalnızca GET)" "0" \
+  "$(kubectl --context "$(ctx $CA_)" -n account-api get virtualservice account-api -o jsonpath='{.spec.http[?(@.name=="write")].retries.attempts}')"
+# Yeniden deneme: api-a'da GET 503 -> 3 deneme (1 + 2); POST yeniden denenmez
+edge www /api/status/503 -o /dev/null -H "x-log-force: verify"
+edge www /api/status/503 -o /dev/null -X POST -d x -H "x-log-force: verify"
+check "GET 503 waypoint'te yeniden deneniyor (3 deneme, access log)" "ok" \
+  "$([[ $(lwait '{category="network", cluster="cluster-a"} | json | path="/status/503" | method="GET" | upstream_attempts="3"') -ge 1 ]] && echo ok || echo yok)"
+check "POST 503 yeniden denenmiyor (1 deneme)" "ok" \
+  "$([[ $(lwait '{category="network", cluster="cluster-a"} | json | path="/status/503" | method="POST" | upstream_attempts="1"') -ge 1 ]] && echo ok || echo yok)"
+# Circuit breaker / outlier detection: art arda 5xx veren pod havuzdan çıkarılır, diğer replika hizmet verir
+ej0=$(wstat api-a 'api-a\.api-a\.svc\.cluster\.local.*outlier_detection\.ejections_enforced_total:')
+for i in $(seq 1 6); do edge www /api/status/503 -o /dev/null; done
+sleep 6
+ej1=$(wstat api-a 'api-a\.api-a\.svc\.cluster\.local.*outlier_detection\.ejections_enforced_total:')
+check "Outlier detection: art arda 503 veren api-a pod'u havuzdan çıkarıldı ($ej0 -> $ej1)" "ok" "$( (( ej1 > ej0 )) && echo ok || echo yok)"
+check "Bir pod çıkarılmışken api-a hizmet vermeye devam ediyor (200)" "200" \
+  "$(edge www /api/ -o /dev/null -w '%{http_code}')"
+# Zaman aşımı: gerçek yavaş yanıt (podinfo /delay/3). api-a waypoint'inde GET deneme süresi 2 sn: 504, yeniden denenmez
+t0=$(date +%s%N)
+td=$(edge www /api/delay/3 -o /dev/null -w '%{http_code}')
+dt=$(( ($(date +%s%N) - t0) / 1000000 ))
+check "Zaman aşımı: 3 sn'lik yanıt waypoint'te ~2 sn'de kesiliyor (504; ${dt} ms)" "504 ok" "$td $( (( dt < 3000 )) && echo ok || echo uzun)"
+# Hata enjeksiyonu: yalnızca test sırasında, test User-Agent'ıyla (tests/traffic/account-api-fault.yaml)
+# Kuralın waypoint'e yayılması yük altında saniyeler sürebilir: etkin olana (abort -> 503) / kalkana kadar beklenir
+fwait() {  # fwait <beklenen kod>: en fazla ~60 sn
+  local i c
+  for i in $(seq 1 30); do
+    c=$(edge www /api/accounts -A lab-fault-abort -o /dev/null -w '%{http_code}')
+    [[ $c == "$1" ]] && break
+    sleep 2
+  done
+  echo "$c"
+}
+kubectl --context "$(ctx $CA_)" apply -f "$ROOT_DIR/tests/traffic/account-api-fault.yaml" >/dev/null
+check "Enjekte hata (503) istemciye ulaşıyor" "503" "$(fwait 503)"
+t0=$(date +%s%N)
+fd=$(edge www /api/accounts -A lab-fault-delay -o /dev/null -w '%{http_code}')
+dt=$(( ($(date +%s%N) - t0) / 1000000 ))
+check "Enjekte gecikme uygulanıyor (5 sn, istek yine 200; ${dt} ms)" "200 ok" "$fd $( (( dt >= 4800 )) && echo ok || echo kısa)"
+apply_rendered "$(ctx $CA_)" "$ROOT_DIR/manifests/cluster-a/18-traffic-policies.yaml" >/dev/null
+fwait 200 >/dev/null
+check "Hata enjeksiyonu kaldırıldı: aynı User-Agent'la istek normal (200)" "200" \
+  "$(edge www /api/accounts -A lab-fault-delay -o /dev/null -w '%{http_code}')"
+check "account-api v2 imzalı image'la (digest)" "1" \
+  "$(kubectl --context "$(ctx $CA_)" -n account-api get pod -l version=v2 -o jsonpath='{.items[0].spec.containers[0].image}' \
      | grep -c "^$LAB_REGISTRY/lab/.*@sha256:" || true)"
 
 log "7) Politika (Kyverno, admission)"

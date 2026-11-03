@@ -592,7 +592,7 @@ Pilotta ortaya çıkan ve hedef dokümanı etkileyebilecek bulgular:
 | WORM log arşivi (SOC-06) | `10b · log-archive` (ertelendi, consent'ten sonra) |
 | ~~Uçtan uca iz~~ | ✅ `11 · tracing` |
 | SIEM'e hazırlık | SIEM ürünü (K-Ürün) |
-| Trafik yönetimi, outlier detection (GW-16'nın bir kısmı) | `12 · traffic-mgmt` |
+| ~~Trafik yönetimi, outlier detection (GW-16'nın bir kısmı)~~ | ✅ `12 · traffic-mgmt` |
 | HSM / Vault, dinamik DB kimlikleri, anahtar rotasyonu (IAM-13, DATA-05..07) | `13 · secrets` |
 | Kart zone'u (CARD) | `14 · pci-zone` |
 | CI güvenlik taramaları (INT-14) | `15 · ci` |
@@ -607,6 +607,7 @@ Pilotta ortaya çıkan ve hedef dokümanı etkileyebilecek bulgular:
 
 | Tarih | Değişiklik |
 | --- | --- |
+| Nov 3, 2026 (2) | `12 · traffic-mgmt`: canary, zaman aşımı, yeniden deneme (yalnızca GET), circuit breaker, outlier detection |
 | Nov 3, 2026 | `11 · tracing`: AC-10 ✅ (Tempo, log ↔ iz), SOC zone'una Tempo |
 | Nov 2, 2026 | `10 · logging`: SOC zone ve isimlendirme (Loki, Fluent Bit; ELK denendi, CPU'ya sığmadı), EDGE-13, SOC-01..09, AC-10 güncellendi; consent ertelendi |
 | Nov 1, 2026 (4) | `09e · branch-controls`: CH-13, INT-07 güncellendi; şube istek yolu ve sequence diyagramı (branch-bff, dört göz); topolojiye `branch-bff` |

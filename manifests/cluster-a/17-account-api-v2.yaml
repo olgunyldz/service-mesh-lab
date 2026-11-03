@@ -1,0 +1,68 @@
+# account-api v2 (12 · traffic-mgmt): canary. Aynı image, yalnızca dağıtım farklı (version: v2, RELEASE: v2).
+# Trafiğin %10'u (18-traffic-policies.yaml). Service (account-api) iki sürümü de seçer; ağırlığı waypoint belirler.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: account-api-v2
+  namespace: account-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: account-api
+      version: v2
+  template:
+    metadata:
+      labels:
+        app: account-api
+        version: v2
+    spec:
+      serviceAccountName: account-api
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: lab-registry:5000/lab/account-api:0.5.1   # build + imza: 03b-publish-images.sh
+          env:
+            - name: RELEASE
+              value: v2
+            # Dört göz (09e): bu tutarın üzerindeki şube transferi aynı şubeden başka bir yetkilinin onayını bekler.
+            # Değerler iş kararı (lab varsayılanı)
+            - name: APPROVAL_LIMIT
+              value: "10000"
+            - name: APPROVAL_TTL
+              value: 30m
+            - name: PGHOST
+              value: postgres.account-api.svc.cluster.local   # seçicisiz Service (55-data-exit.yaml)
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: corebank
+            - name: PGSSLMODE
+              value: disable   # taşıma şifrelemesi mesh mTLS'inde
+          envFrom:
+            - secretRef:
+                name: account-api-db   # PGUSER, PGPASSWORD (05b-create-data-secrets.sh)
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
