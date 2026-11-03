@@ -1,0 +1,78 @@
+# mgmt girişi: diğer cluster'lardan gelen izler (11 · tracing).
+#   <cluster> egress gw --mTLS (ISTIO_MUTUAL, SNI traces.mgmt.internal)--> mgmt istio-ingressgateway --> tempo:4318
+# Yalnızca POST /v1/traces (OTLP/HTTP): sorgu ve yönetim uçları dışarıya kapalı.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: traces-entry
+  namespace: istio-ingress
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 443
+        name: https-traces
+        protocol: HTTPS
+      tls:
+        mode: ISTIO_MUTUAL
+      hosts:
+        - traces.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: traces-push
+  namespace: istio-ingress
+spec:
+  hosts:
+    - traces.mgmt.internal
+  gateways:
+    - traces-entry
+  http:
+    - match:
+        - uri:
+            exact: /v1/traces
+      route:
+        - destination:
+            host: tempo.logging.svc.cluster.local
+            port:
+              number: 4318
+      timeout: 15s
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-traces
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - corp.mesh/ns/istio-egress/sa/dmz-egressgateway
+              - corp.mesh/ns/istio-egress/sa/istio-egressgateway
+      to:
+        - operation:
+            hosts: ["traces.mgmt.internal", "traces.mgmt.internal:*"]
+            methods: ["POST"]
+            paths: ["/v1/traces"]
+---
+# mgmt ingress gateway span üretmez: girişinin çoğu log / metrik / iz gönderimi (geri besleme olurdu)
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: no-spans
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  tracing:
+    - providers:
+        - name: otel
+      disableSpanReporting: true

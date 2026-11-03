@@ -36,6 +36,7 @@ Giriş noktaları (host'ta `--resolve ...:8443:127.0.0.1` ve `certs/edge/ca.pem`
 | – | Mobil cihaz bağlama: cihaz anahtarıyla DPoP kanıtı her istekte (Bearer, kanıtsız, tekrarlanan, başka adres için kanıt 401); çalınan token başka cihazdan 403 (AC-04); attestation (kanıtsız / bütünlüğü bozuk 403, eski sürüm 426); cihaz kaydı yalnızca seviye 2 ile; silinen cihaz 30 sn içinde 403; tüm mobil trafik mobile-bff'ten | ✅ |
 | – | Şube kontrolleri: tüm şube trafiği branch-bff'ten; personel yalnızca kendi şubesinin hesapları (başka şube 404); limit üstü transfer onaya düşer; dört göz (gişe onaylayamaz 403, talep eden kendi işlemini onaylayamaz 403 + veritabanı CHECK, başka şubenin yetkilisi 404, ikinci onay 409); mesai dışı 403 | ✅ |
 | – | Merkezi loglama: beş kategori dolu; aynı `request_id` DMZ ve internal access log'larında ve auth-service logunda; WAF engellemesi ve auth-service reddi security'de; edge logları mTLS ile; Kubernetes audit (secret işlemleri, gövdesiz); başarısız DB girişi db'de; loglarda JWT yok; ekipler yalnızca kendi kategorisi (soc01 → apps 403); DMZ'den arama 403 | ✅ |
+| – | Dağıtık iz: zorunlu izlenen web isteği Tempo'da DMZ (web gateway, token handler) ve internal (ingress, web-bff, api-a) hop'larıyla; aynı `trace_id` iki zone'un access log'unda; egress gateway'ler span üretmiyor; soc01 izlere erişemiyor; DMZ'den sorgu 403 | ✅ |
 | – | Edge: HTTP → HTTPS (301), HSTS, TLS 1.1 reddi, TLS 1.2/1.3 kabulü | ✅ |
 | – | Edge: WAF XSS ve SQL injection denemelerini engelliyor (403) | ✅ |
 | – | Edge: sahte `X-Forwarded-For` ve `x-user-jwt` içeri geçmiyor | ✅ |
@@ -78,6 +79,7 @@ Kullanılan sürümler:
 | Valkey | 9.0.0 (alpine) | mgmt; Redis uyumlu, BSD lisanslı |
 | Envoy ratelimit | `f4e76690` | DMZ; partner başına global kota |
 | Go servisleri | Go 1.27.1, distroless static | `web-token-handler`, `auth-service`, `web-bff`, `mobile-bff`, `mobile-sim` (yalnızca stdlib), `account-api`, `device-registry` (pgx v5.7.6), `branch-bff` |
+| Tempo | 2.10.8 | mgmt `logging`; tek binary, yerel disk, 24 saat (11 · tracing). Arayüz Grafana |
 | Loki | 3.7.8 | mgmt `logging`; tek binary, dosya sistemi, kategori başına tenant, 24 saat (10 · logging). Arayüz Grafana |
 | Fluent Bit | 5.1.3 | Her cluster'da DaemonSet (`logging-agent`) ve edge'de `edge-logs` container'ı |
 | Keycloak | 26.8.0 (optimize image) | mgmt; standard token exchange (RFC 8693), introspection, lightweight access token |
@@ -563,6 +565,7 @@ Gözlemlenebilirlik **mgmt cluster'ında merkezi**dir (`04 · mgmt`). Her cluste
 | **Kiali** | http://localhost:20001/kiali | Üç cluster tek arayüzde (çoklu cluster), salt okunur (`view_only_mode`) |
 | **Grafana** | http://localhost:3001 | Istio dashboard'ları, merkezi Prometheus. Girişli (10 · logging'den itibaren): `admin` / `certs/data/grafana-admin.pw` |
 | **Grafana: loglar** | http://localhost:3001 (Explore, panolar) | Merkezi loglar (10 · logging): Apps, Network, Security, DB, Infra organizasyonları ve panoları; Main Org'da "Korelasyon" ve **Loglar - Genel bakış** panosu (request_id ile iz). Yönetici `admin` (`certs/data/grafana-admin.pw`), ekip kullanıcıları `dev01`, `netops01`, `soc01`, `dba01`, `platform01` (`certs/data/grafana-<kullanıcı>.pw`). Anonim erişim kapalı |
+| **Grafana: izler** | http://localhost:3001 (Explore → Tempo) | Dağıtık iz (11 · tracing): yönetici ve Network organizasyonu. Loglardaki `trace_id`'den ize, izden loglara tek tık. Bir isteği izletmek için `x-client-trace-id` başlığı |
 | **Keycloak yönetim konsolu** | http://localhost:8081/admin | `admin` / `certs/data/keycloak-admin.pw` (10a). Yalnızca bu makineden (127.0.0.1); internetten ve DMZ'den kapalı |
 
 ```mermaid
@@ -638,6 +641,7 @@ Graph'ı okurken dikkat edilecekler:
 | mgmt ingress / egress gateway | mgmt | istio-ingress / istio-egress | helm `istio/gateway` |
 | Kyverno (admission + reports controller) | hepsi | kyverno | helm `kyverno/kyverno` + `infra/kyverno/` |
 | Loki | mgmt | logging | `infra/logging/loki.yaml`, `scripts/07b-setup-logging.sh` |
+| Tempo | mgmt | logging | `infra/tracing/tempo.yaml`, `scripts/07b-setup-logging.sh` |
 | Fluent Bit (DaemonSet) | hepsi | logging-agent | `infra/logging/fluent-bit.yaml`, `scripts/07b-setup-logging.sh` |
 | edge-logs (Fluent Bit) | – (Docker, `kind`) | – | `infra/logging/edge/`, `scripts/07b-setup-logging.sh` |
 | lab-registry | – (Docker, `kind`) | – | `scripts/lib.sh` (`start_lab_registry`) |
@@ -1014,8 +1018,7 @@ Her adım ayrı bir branch'te yapılır; her branch bir önceki biten branch'ten
 | 09e | `branch-controls` | `branch-bff` (tüm şube trafiği, mesai saati); personel rolleri (gişe, operasyon, yetkili) ve limit üstü transferde dört göz onayı (talep eden ≠ onaylayan, aynı şube; veritabanında da kısıt); personelin kendi şubesinin hesaplarıyla sınırlanması. Limit, onay süresi ve mesai saatleri konfigürasyon. Ayrıntılar: [docs/09e-branch-controls.md](docs/09e-branch-controls.md) | ✅ |
 | 10 | `logging` | mgmt'te **Loki** (ilk tasarım ELK'ydi; bu makinede CPU'ya sığmadı), arayüz Grafana; her cluster'da Fluent Bit; loglar beş kategoride (apps, network, security, db, infra) ayrı Loki tenant'ı ve Grafana organizasyonu, ekip başına kullanıcı; zone'lar arası yalnızca push (mTLS); JSON access log (`request_id`, `channel`, yanıt bayrakları, SPIFFE kimlikleri), başarılı istekler 1/10 örneklenir; Kubernetes audit log; edge logları (mTLS, Log CA); token / JWT maskeleme; yük üreticileri 5 sn aralıkla. Ayrıntılar: [docs/10-logging.md](docs/10-logging.md) | ✅ |
 | 10a | `admin-access` | Keycloak yönetim konsolu komutsuz (http://localhost:8081/admin, yalnızca 127.0.0.1, mgmt ingress gateway'in yönetim dinleyicisi, yalnızca yönetim yolları); Loki panoları (genel bakış + ekip başına). Ayrıntılar: [docs/10a-admin-access.md](docs/10a-admin-access.md) | ✅ |
-| 10b | `log-archive` | WORM arşivi: Fluent Bit'in ikinci çıkışı, Object Lock (compliance) açık S3 uyumlu nesne deposuna (audit, access, WAF, onay kayıtları); nesne deposu ürünü bir denemeyle seçilir (MinIO CE arşivlendi) | ⏳ |
-| 11 | `tracing` | mgmt'te Grafana Tempo + OpenTelemetry; gateway, waypoint ve servis span'leri; Grafana'da log ↔ trace geçişi | ⏳ |
+| 11 | `tracing` | mgmt'te **Tempo** (2.10); gateway ve waypoint Envoy'ları OpenTelemetry (OTLP/HTTP) ile, kendi egress gateway'leri üzerinden; %10 örnekleme (`x-client-trace-id` ile zorunlu iz); egress / mgmt ingress span üretmez (geri besleme koruması); access log'da `trace_id`, log örneklemesi izle aynı karar; Grafana'da log ↔ iz geçişi, Tempo yalnızca yönetici ve Network. Ayrıntılar: [docs/11-tracing.md](docs/11-tracing.md) | ✅ |
 | 12 | `traffic-mgmt` | Canary (v1/v2 ağırlıklı yönlendirme), fault injection (gecikme/hata), circuit breaker, outlier detection; etkiler Kiali ve Tempo'da izlenir | ⏳ |
 | 13 | `secrets` | mgmt'te **HashiCorp Vault Community**: PKI (cert-manager + istio-csr ile Istio CA'nın Vault'a taşınması, root CA anahtarı diskten kalkar), KV v2 + External Secrets, Database motoru ile servis başına kısa ömürlü DB kullanıcıları, audit log. Cluster'lar Vault'a JWT/OIDC auth ile bağlanır | ⏳ |
 | 14 | `pci-zone` | mgmt içinde sıkı izole namespace'ler olarak kart zone'u (CDE): yalnızca belirli servise mTLS ile erişim, default-deny AuthZ + NetworkPolicy, Vault Transit ile PAN tokenizasyonu (Enterprise'daki Transform yerine) | ⏳ |
@@ -1023,6 +1026,7 @@ Her adım ayrı bir branch'te yapılır; her branch bir önceki biten branch'ten
 | 16 | `gitops` | mgmt'te Argo CD; cluster'ların repo'dan yönetimi; isteğe bağlı Argo Rollouts ile otomatik canary | ⏳ |
 | 17 | `cluster-b` | cluster-b'nin geri eklenmesi: `config.env` → `CLUSTERS`'a eklenir, `manifests/*/cluster-b/` otomatik uygulanır (Akış 2 ve 3). Önceki adımlarda cluster-a'ya eklenen her şeyin (hardening, policy, token, logging, tracing vb.) cluster-b'ye de uygulanması. RAM yeterliyse | ⏳ |
 | 09f | `consent` | **Ertelendi** (kullanıcı kararı; cluster-b'den sonra). Açık bankacılık rızası: üçüncü taraf client (ör. `fintech-x`) için authorization code akışında müşteri rızası; rızaları tutan `consent-service` (Go, PostgreSQL): hesap, izin, süre; consent ID'nin iç JWT'ye taşınması, account-api'nin yalnızca rızadaki hesapları döndürmesi; rızanın geri alınması. First-party (web, mobil, şube) ve partner client credentials akışlarında consent yok (bkz. `08`) | ⏸ |
+| 10b | `log-archive` | **Ertelendi** (kullanıcı kararı; consent'ten sonra). WORM arşivi: Fluent Bit'in ikinci çıkışı, Object Lock (compliance) açık S3 uyumlu nesne deposuna (audit, access, WAF, onay kayıtları); nesne deposu ürünü bir denemeyle seçilir (MinIO CE arşivlendi) | ⏸ |
 
 **Tehdit modelleme (sürekli):** `zones` adımından itibaren her adım dokümanına bir STRIDE bölümü eklenir. Mevcut dört akışın STRIDE analizi `zones` dokümanında yapılır.
 

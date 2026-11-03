@@ -61,7 +61,7 @@ Performans, kapasite ve iş sürekliliği pilotun konusu değildir.
 | Core banking zone | Yok (`api-a`, core'u değil genel bir internal servisi temsil eder) | – | K-Kapsam |
 | Veri zone | `kind-mgmt` / `data`: PostgreSQL 18, Valkey 9 | Ayrı zone değil; Oracle, MSSQL, Kafka, RabbitMQ yok | K-Kaynak |
 | Dış çıkış zone | Yok: `cluster-a`'nın egress gateway'i internete (`httpbin.org`) doğrudan çıkar | Proxy, NGFW, izin listesi zone'u yok; çıkış yine tek kapıdan | K-Kapsam |
-| SOC / yönetim zone | `kind-mgmt`: merkezi Prometheus (6 saat), Grafana, Kiali (`istio-system`); Loki (`logging`, 10) | SIEM, korelasyon kuralları, iz yok; Elasticsearch / Logstash yok | K-Ürün (SIEM), K-Kaynak (ELK bu makinede CPU'ya sığmadı), K-Kapsam (`11 · tracing`) |
+| SOC / yönetim zone | `kind-mgmt`: merkezi Prometheus (6 saat), Grafana, Kiali (`istio-system`); Loki, Tempo (`logging`, 10, 11) | SIEM, korelasyon kuralları yok; Elasticsearch / Logstash yok | K-Ürün (SIEM), K-Kaynak (ELK bu makinede CPU'ya sığmadı) |
 
 ## Pilot topolojisi ve isimlendirme
 
@@ -464,7 +464,7 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 | GW-14 | ✅ | `dmz-egressgateway` tek kapı; yalnızca kanal arka uçları (test: web gateway'den doğrudan çıkış 403) | – |
 | GW-15 | 🟡 | DMZ'den yalnızca internal ingress, IdP ve Valkey (oturum, kota) | DMZ'den Valkey'e çıkış hedefte yasak (DMZ → veri zone); pilotta oturum deposu ve kota sayaçları mgmt Valkey'de (K-Kaynak) |
 | GW-16 | ❌ | – | B cluster'ı kapalı (K-Kaynak) |
-| GW-17 | 🟡 | Dış token, parola ve OTP loglanmıyor; IBAN maskeli | Envoy access log'larında maskeleme kuralı yok (log merkezi değil) |
+| GW-17 | ✅ | Dış token, parola ve OTP loglanmıyor; IBAN maskeli; access log formatında Authorization, cookie, `x-user-jwt` ve sorgu dizesi yok; Fluent Bit token / JWT / oturum çerezini maskeliyor (test: loglarda JWT yok) | – |
 
 ### Kimlik ve oturum (IAM)
 
@@ -527,7 +527,7 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 | NET-08 / 09 / 10 | ➖ | – | Kart kanalları yok |
 | NET-11 | ✅ | cluster-a egress → mgmt veri (5432, 6379), mTLS, port + kimlik bazlı | – |
 | NET-12 | ➖ | – | B yok |
-| NET-13 | 🟡 | Metrikler tek yönlü merkeze (remote_write, egress üzerinden) | Log / SIEM yok |
+| NET-13 | ✅ | Metrikler, loglar ve izler tek yönlü merkeze (egress üzerinden, mTLS, yalnızca yazma uçları; test: DMZ'den sorgu 403) | SIEM yok (K-Ürün) |
 | NET-14 | ➖ | Host'tan kubectl | Bastion, PAM yok |
 | NET-15..21 | ➖ | – | Core, dış çıkış, kart yok |
 
@@ -543,7 +543,7 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 | SOC-02 | 🟡 | Her cluster'da Fluent Bit, zone'lar arası mTLS, yalnızca yazma | Log kaybı alarmı yok, disk tamponu yok |
 | SOC-03 | 🟡 | `request_id`, `zone`, `cluster`, `channel`, zaman (UTC) | `sub` hash'i, `action` / `result` ortak şeması yok; edge'de `request_id` yok |
 | SOC-04..05 | ❌ | – | Korelasyon kuralları, SOAR yok (K-Ürün: SIEM; Elastic Security ücretli) |
-| SOC-06 | ❌ | – | WORM yok (`10b · log-archive`) |
+| SOC-06 | ❌ | – | WORM yok (`10b · log-archive`, ertelendi) |
 | SOC-07..08 | ❌ | – | Süreç gereksinimi (K-Kapsam) |
 | SOC-09 | 🟡 | Token, JWT, oturum çerezi maskeleniyor; access log'da sorgu dizesi ve başlıklar yok (test) | TCKN / kart / telefon kuralı yok (servisler loglamıyor) |
 
@@ -560,7 +560,7 @@ ATM ve POS akışlarının pilotta karşılığı yoktur (kart zone'u: `14 · pc
 | AC-07 | Tarayıcıda token arama | ✅ yanıtlarda token yok, yalnızca HttpOnly cookie | ✔ |
 | AC-08 | Adapter sertifikasıyla `/accounts/**` | ➖ kart zone yok. Karşılığı: partner sertifikası + yetkisiz uç → 403 | ✔ |
 | AC-09 | DC1 kapatma tatbikatı | ➖ | – |
-| AC-10 | Bir isteğin uçtan uca izlenmesi | 🟡 aynı `request_id` DMZ ve internal access log'larında ve auth-service logunda (test) | Edge'de kimlik yok; iz (trace) yok (`11`) |
+| AC-10 | Bir isteğin uçtan uca izlenmesi | ✅ aynı `request_id` / `trace_id` DMZ ve internal access log'larında; Tempo'da iz DMZ ve internal hop'larıyla (test) | Edge (HAProxy, WAF) izde yok; uygulama içi span yok |
 | AC-11 | Oturum iptali | 🟡 ≤ 30 sn (hedef ≤ 5 sn) | ✔ |
 
 Pilot doğrulaması her adımda sıfırdan kurulumla yapılır (`99-destroy.sh` → `setup.sh` → `08-verify.sh`). Güncel sonuç ve test listesi: [docs/README.md](README.md).
@@ -589,8 +589,9 @@ Pilotta ortaya çıkan ve hedef dokümanı etkileyebilecek bulgular:
 |------|-------------------------------|
 | Consent (GW-11, IAM-10) | `09f · consent` (ertelendi, cluster-b'den sonra) |
 | ~~Merkezi log (SOC-01..03, EDGE-13, AC-10)~~ | ✅ `10 · logging` |
-| WORM log arşivi (SOC-06) | `10b · log-archive` |
-| Uçtan uca iz, SIEM'e hazırlık | `11 · tracing`; SIEM ürünü (K-Ürün) |
+| WORM log arşivi (SOC-06) | `10b · log-archive` (ertelendi, consent'ten sonra) |
+| ~~Uçtan uca iz~~ | ✅ `11 · tracing` |
+| SIEM'e hazırlık | SIEM ürünü (K-Ürün) |
 | Trafik yönetimi, outlier detection (GW-16'nın bir kısmı) | `12 · traffic-mgmt` |
 | HSM / Vault, dinamik DB kimlikleri, anahtar rotasyonu (IAM-13, DATA-05..07) | `13 · secrets` |
 | Kart zone'u (CARD) | `14 · pci-zone` |
@@ -606,6 +607,7 @@ Pilotta ortaya çıkan ve hedef dokümanı etkileyebilecek bulgular:
 
 | Tarih | Değişiklik |
 | --- | --- |
+| Nov 3, 2026 | `11 · tracing`: AC-10 ✅ (Tempo, log ↔ iz), SOC zone'una Tempo |
 | Nov 2, 2026 | `10 · logging`: SOC zone ve isimlendirme (Loki, Fluent Bit; ELK denendi, CPU'ya sığmadı), EDGE-13, SOC-01..09, AC-10 güncellendi; consent ertelendi |
 | Nov 1, 2026 (4) | `09e · branch-controls`: CH-13, INT-07 güncellendi; şube istek yolu ve sequence diyagramı (branch-bff, dört göz); topolojiye `branch-bff` |
 | Nov 1, 2026 (3) | `09d · tx-signing` atlandı: işlem imzası açık nokta olarak topolojide, isimlendirmede, CH-08 / IAM-08'de; topoloji diyagramına `mobile-bff`, `device-registry` eklendi |

@@ -72,6 +72,7 @@ Ana [README](../README.md) ortamın güncel ve toplu halini anlatır. Bu klasör
 | 09f | Açık bankacılık rızası (`consent`) | – | ⏸ Ertelendi (cluster-b'den sonra) |
 | 10 | [Merkezi loglama: Loki, Grafana, Fluent Bit, kategoriler, audit log](10-logging.md) | `logging` | ✅ Tamamlandı (240/240 test) |
 | 10a | [Yönetim arayüzleri: Keycloak yönetim konsolu, Loki panoları](10a-admin-access.md) | `admin-access` | ✅ Tamamlandı (250/250 test) |
+| 11 | [Dağıtık iz: Tempo, Envoy (OpenTelemetry), log ↔ iz](11-tracing.md) | `tracing` | ✅ Tamamlandı (263/263 test) |
 
 ## Diğer dokümanlar
 

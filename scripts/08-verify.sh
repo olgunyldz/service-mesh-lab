@@ -786,6 +786,49 @@ check "Grafana: soc01 genel bakış ve başka ekiplerin panolarını görmüyor"
 check "Loglarda Türkçe metin aranabiliyor (İZİN, kaçışsız UTF-8)" "ok" \
   "$([[ $(lcount '{category="apps", namespace="auth"} |= "İZİN channel="') -ge 1 ]] && echo ok || echo yok)"
 
+log "15) Dağıtık iz: Tempo, Envoy (OTLP), log ↔ iz"
+GFP=${GFP:-$(pwf grafana-admin)}
+tq() {  # tq <kullanıcı:parola> <Tempo API yolu>: Grafana üzerinden Tempo
+  env -u MSYS_NO_PATHCONV curl -s --max-time 20 -u "$1" "http://localhost:$GRAFANA_PORT/api/datasources/proxy/uid/tempo$2" || true
+}
+check "Tempo hazır" "ready" \
+  "$(kubectl --context "$(ctx mgmt)" get --raw "/api/v1/namespaces/logging/services/tempo:3200/proxy/ready" 2>/dev/null || true)"
+# Envoy'un zorunlu izi: x-client-trace-id başlıklı istek her zaman izlenir; api-a gelen traceparent'ı geri yansıtır
+TP=$(edge www /api/headers -H "x-client-trace-id: verify-$(date +%s)" | grep -A1 -i '"traceparent"' | tail -1 | tr -d ' ",[]')
+TID=$(cut -d- -f2 <<<"$TP")
+check "İz başlığı uygulamaya ulaşıyor ve örneklenmiş (traceparent ...-01)" "-01" "$TP"
+trace=""
+for i in $(seq 1 20); do
+  trace=$(tq "admin:$GFP" "/api/traces/$TID"); [[ $trace == *waypoint.api-a* ]] && break; sleep 3
+done
+check "İz Tempo'da: DMZ hop'u (dmz-ingressgateway, web token handler)" "ok" \
+  "$([[ $trace == *dmz-ingressgateway.istio-ingress* && $trace == *waypoint.edge-web* ]] && echo ok || echo "yok ($TID)")"
+check "Aynı iz internal hop'larını içeriyor (ingress, web-bff, api-a waypoint'leri)" "ok" \
+  "$([[ $trace == *istio-ingressgateway.istio-ingress* && $trace == *waypoint.channel-bff* && $trace == *waypoint.api-a* ]] && echo ok || echo "yok ($TID)")"
+check "Log ↔ iz: aynı trace_id DMZ ve cluster-a access log'larında" "2" \
+  "$(for c in dmz cluster-a; do [[ $(lwait "{category=\"network\", cluster=\"$c\"} | json | trace_id=\"$TID\"") -ge 1 ]] && echo $c; done | wc -l | tr -d ' ')"
+check "Grafana: Loki'den Tempo'ya geçiş (trace_id bağlantısı)" '"datasourceUid":"tempo"' \
+  "$(env -u MSYS_NO_PATHCONV curl -s -u "admin:$GFP" "http://localhost:$GRAFANA_PORT/api/datasources/uid/logs-all")"
+check "Grafana: Tempo'dan loglara geçiş" '"tracesToLogsV2"' \
+  "$(env -u MSYS_NO_PATHCONV curl -s -u "admin:$GFP" "http://localhost:$GRAFANA_PORT/api/datasources/uid/tempo")"
+check "Egress gateway'ler span üretmiyor (log / metrik / iz gönderimi izlenmez)" "0" \
+  "$(tq "admin:$GFP" "/api/search?limit=5&q=%7Bresource.service.name%3D%22dmz-egressgateway.istio-egress%22%7D" | grep -o '"traceID"' | wc -l | tr -d ' ')"
+check "netops01 izleri görebiliyor (Network organizasyonu)" '"traces"' "$(tq "netops01:$(pwf grafana-netops01)" "/api/search?limit=1")"
+check "soc01 izlere erişemiyor (Tempo yalnızca yönetici ve Network)" "yok" \
+  "$(tq "soc01:$(pwf grafana-soc01)" "/api/search?limit=1" | grep -q '"traces"' && echo var || echo yok)"
+# DMZ'den mgmt'e yalnızca iz gönderimi: sorgu uçları egress'te reddedilir
+dpod="tq-$RANDOM"
+MSYS_NO_PATHCONV=1 kubectl --context "$(ctx dmz)" -n logging-agent run "$dpod" --restart=Never --image="$LAB_REGISTRY/lab/curl:8.11.1" \
+  --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":100,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"c","image":"'"$LAB_REGISTRY"'/lab/curl:8.11.1","command":["sh","-c","curl -s -o /dev/null -w %{http_code} http://traces-mgmt.istio-egress.svc.cluster.local/api/search; echo; curl -s -o /dev/null -w %{http_code} -X POST -H Content-Type:application/json -d {} http://traces-mgmt.istio-egress.svc.cluster.local/v1/traces"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' >/dev/null 2>&1
+kubectl --context "$(ctx dmz)" -n logging-agent wait pod "$dpod" --for=jsonpath='{.status.phase}'=Succeeded --timeout=90s >/dev/null 2>&1
+dq=$(kubectl --context "$(ctx dmz)" -n logging-agent logs "$dpod" 2>/dev/null | tr '\n' ' ')
+kubectl --context "$(ctx dmz)" -n logging-agent delete pod "$dpod" --wait=false >/dev/null 2>&1
+check "DMZ'den Tempo'da sorgu yapılamıyor (egress: 403)" "403" "$(cut -d' ' -f1 <<<"$dq")"
+check "DMZ'den iz gönderimi Tempo'ya ulaşıyor (OTLP, 200)" "200" "$(cut -d' ' -f2 <<<"$dq")"
+check "Tempo imzalı image'la (digest)" "1" \
+  "$(kubectl --context "$(ctx mgmt)" -n logging get pod -l app=tempo -o jsonpath='{.items[0].spec.containers[0].image}' \
+     | grep -c "^$LAB_REGISTRY/lab/.*@sha256:" || true)"
+
 log "7) Politika (Kyverno, admission)"
 for c in $CLUSTERS; do
   check "$c: 6 politika hazır ve $POLICY_ACTION modunda" "6/6" \

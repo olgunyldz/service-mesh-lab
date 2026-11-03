@@ -12,9 +12,18 @@ meshConfig:
   # Yol sorgu dizesiz (OIDC code / state gibi değerler loga girmesin); Authorization, cookie, x-user-jwt hiç yazılmaz.
   # zone / cluster alanlarını Fluent Bit ekler. log_force: "x-log-force" başlığı olan istek örneklemeden muaf
   # (Fluent Bit başarılı istekleri 1/10 örnekler; testler ve hata ayıklama için zorunlu loglama).
+  extensionProviders:
+    # Dağıtık iz (11 · tracing): OTLP/HTTP, her cluster'da kendi egress gateway'i üzerinden Tempo'ya
+    - name: otel
+      opentelemetry:
+        service: traces-mgmt.istio-egress.svc.cluster.local
+        port: 80
+        http:
+          path: /v1/traces
+          timeout: 5s
   accessLogEncoding: JSON
   accessLogFormat: |
-    {"start_time":"%START_TIME%","request_id":"%REQ(X-REQUEST-ID)%","channel":"%REQ(X-CHANNEL)%","method":"%REQ(:METHOD)%","authority":"%REQ(:AUTHORITY)%","path":"%REQ_WITHOUT_QUERY(:PATH)%","protocol":"%PROTOCOL%","response_code":"%RESPONSE_CODE%","response_flags":"%RESPONSE_FLAGS%","response_code_details":"%RESPONSE_CODE_DETAILS%","bytes_received":"%BYTES_RECEIVED%","bytes_sent":"%BYTES_SENT%","duration_ms":"%DURATION%","upstream_cluster":"%UPSTREAM_CLUSTER%","upstream_host":"%UPSTREAM_HOST%","downstream_peer":"%DOWNSTREAM_PEER_URI_SAN%","upstream_peer":"%UPSTREAM_PEER_URI_SAN%","downstream_remote":"%DOWNSTREAM_REMOTE_ADDRESS%","user_agent":"%REQ(USER-AGENT)%","partner_id":"%REQ(X-PARTNER-ID)%","log_force":"%REQ(X-LOG-FORCE)%"}
+    {"start_time":"%START_TIME%","request_id":"%REQ(X-REQUEST-ID)%","channel":"%REQ(X-CHANNEL)%","method":"%REQ(:METHOD)%","authority":"%REQ(:AUTHORITY)%","path":"%REQ_WITHOUT_QUERY(:PATH)%","protocol":"%PROTOCOL%","response_code":"%RESPONSE_CODE%","response_flags":"%RESPONSE_FLAGS%","response_code_details":"%RESPONSE_CODE_DETAILS%","bytes_received":"%BYTES_RECEIVED%","bytes_sent":"%BYTES_SENT%","duration_ms":"%DURATION%","upstream_cluster":"%UPSTREAM_CLUSTER%","upstream_host":"%UPSTREAM_HOST%","downstream_peer":"%DOWNSTREAM_PEER_URI_SAN%","upstream_peer":"%UPSTREAM_PEER_URI_SAN%","downstream_remote":"%DOWNSTREAM_REMOTE_ADDRESS%","user_agent":"%REQ(USER-AGENT)%","partner_id":"%REQ(X-PARTNER-ID)%","log_force":"%REQ(X-LOG-FORCE)%","trace_id":"%TRACE_ID%","traceparent":"%REQ(TRACEPARENT)%"}
   # Yalnızca kayıtlı (Service/ServiceEntry) hedeflere çıkış. Dışarıya tek yol: ServiceEntry -> waypoint -> egress gateway
   outboundTrafficPolicy:
     mode: REGISTRY_ONLY

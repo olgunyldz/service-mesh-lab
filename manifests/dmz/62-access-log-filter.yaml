@@ -14,4 +14,11 @@ spec:
         expression: >-
           !(request.host.startsWith('logs-mgmt.') || request.host.startsWith('logs.mgmt.internal') ||
             request.host.startsWith('logs-edge.mgmt.internal') || request.host.startsWith('prometheus-mgmt.') ||
-            request.host.startsWith('prometheus.mgmt.internal'))
+            request.host.startsWith('prometheus.mgmt.internal') || request.host.startsWith('traces-mgmt.') ||
+            request.host.startsWith('traces.mgmt.internal'))
+  # Dağıtık iz (11 · tracing): isteklerin %10'u (TRACE_SAMPLING); "x-client-trace-id" başlığı olan istek her zaman.
+  # Sağlayıcı "otel": istio/values/istiod*.yaml
+  tracing:
+    - providers:
+        - name: otel
+      randomSamplingPercentage: 10

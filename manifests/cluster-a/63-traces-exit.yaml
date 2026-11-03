@@ -1,0 +1,130 @@
+# İzlerin Tempo'ya çıkışı (11 · tracing). __NET_PREFIX__ scriptte doldurulur.
+#   envoy (gateway / waypoint) --HTTP--> egress gw (traces-mgmt:80) --mTLS (SNI traces.mgmt.internal)--> mgmt ingress gw --> tempo
+# Istio'nun iz sağlayıcısı (istio/values/istiod*.yaml, "otel") her cluster'da aynı adı kullanır: traces-mgmt.istio-egress.
+# Log çıkışıyla (61-logs-exit.yaml) aynı desen; yalnızca POST /v1/traces.
+apiVersion: v1
+kind: Service
+metadata:
+  name: traces-mgmt
+  namespace: istio-egress
+spec:
+  selector:
+    istio: egressgateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+# Gönderen Envoy'lar mesh'te: otomatik mTLS egress gateway'in düz HTTP dinleyicisine TLS gönderirdi
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: traces-mgmt
+  namespace: istio-egress
+spec:
+  host: traces-mgmt.istio-egress.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: DISABLE
+---
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: traces-exit
+  namespace: istio-egress
+spec:
+  selector:
+    istio: egressgateway
+  servers:
+    - port:
+        number: 80
+        name: http-traces
+        protocol: HTTP
+      hosts:
+        - traces-mgmt.istio-egress.svc.cluster.local
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: mgmt-traces
+  namespace: istio-egress
+spec:
+  hosts:
+    - traces.mgmt.internal
+  location: MESH_EXTERNAL
+  resolution: STATIC
+  ports:
+    - number: 443
+      name: http-mtls
+      protocol: HTTP
+  endpoints:
+    - address: __NET_PREFIX__.203.10
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: mgmt-traces
+  namespace: istio-egress
+spec:
+  host: traces.mgmt.internal
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      sni: traces.mgmt.internal
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: traces-exit
+  namespace: istio-egress
+spec:
+  hosts:
+    - traces-mgmt.istio-egress.svc.cluster.local
+  gateways:
+    - traces-exit
+  http:
+    - match:
+        - uri:
+            exact: /v1/traces
+      rewrite:
+        authority: traces.mgmt.internal
+      route:
+        - destination:
+            host: traces.mgmt.internal
+            port:
+              number: 443
+      timeout: 15s
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-traces-push
+  namespace: istio-egress
+spec:
+  selector:
+    matchLabels:
+      istio: egressgateway
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            hosts: ["traces-mgmt.istio-egress.svc.cluster.local", "traces-mgmt.istio-egress.svc.cluster.local:*"]
+            ports: ["80"]
+            methods: ["POST"]
+            paths: ["/v1/traces"]
+---
+# Egress gateway'ler span üretmez: log / metrik / iz gönderimini izleyip yeniden gönderirlerdi (geri besleme).
+# Uygulama isteğinin izi bu hop olmadan da bağlı kalır (traceparent egress'ten olduğu gibi geçer)
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: no-spans
+  namespace: istio-egress
+spec:
+  selector:
+    matchLabels:
+      istio: egressgateway
+  tracing:
+    - providers:
+        - name: otel
+      disableSpanReporting: true

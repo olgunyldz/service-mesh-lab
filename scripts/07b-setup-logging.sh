@@ -7,6 +7,8 @@
 #   3) Edge log toplayıcısı (Docker, infra/logging/edge/)
 #   4) Loki panoları (infra/logging/dashboards/): Main Org'a genel bakış, her ekip organizasyonuna kendi kategorisi
 #   5) Keycloak yönetim konsolu (http://localhost:8081/admin): master realm'in giriş adresi
+#   Dağıtık iz (11 · tracing): Tempo (infra/tracing/tempo.yaml); Grafana'da yalnızca yönetici ve Network organizasyonu,
+#   Loki'deki trace_id'den Tempo'ya ve Tempo'dan loglara geçiş
 # Tekrar çalıştırılabilir: her istek "oluştur ya da güncelle".
 source "$(dirname "$0")/lib.sh"
 
@@ -25,18 +27,36 @@ gf() {
     "${org[@]}" "${body[@]}" "http://localhost:$GRAFANA_PORT$2"
 }
 # Loki veri kaynağı: tenant(lar) X-Scope-OrgID başlığıyla (secureJsonData: arayüzde görünmez)
-datasource() {  # datasource <uid> <ad> <tenant(lar)> <org id>
+datasource() {  # datasource <uid> <ad> <tenant(lar)> <org id> [ek jsonData alanları]
   local body
   body="{\"uid\":\"$1\",\"name\":\"$2\",\"type\":\"loki\",\"access\":\"proxy\",\"url\":\"$LOKI_URL\",\"isDefault\":true,
-    \"jsonData\":{\"httpHeaderName1\":\"X-Scope-OrgID\",\"maxLines\":1000},\"secureJsonData\":{\"httpHeaderValue1\":\"$3\"}}"
+    \"jsonData\":{\"httpHeaderName1\":\"X-Scope-OrgID\",\"maxLines\":1000${5:+,$5}},\"secureJsonData\":{\"httpHeaderValue1\":\"$3\"}}"
   gf POST /api/datasources "$body" "$4" | grep -q '"id"' || gf PUT "/api/datasources/uid/$1" "$body" "$4" >/dev/null
 }
+
+# Access log satırındaki trace_id -> Tempo'da iz (11 · tracing)
+DERIVED='"derivedFields":[{"name":"TraceID","matcherType":"regex","matcherRegex":"\"trace_id\":\"([0-9a-f]{32})\"","url":"${__value.raw}","datasourceUid":"tempo","urlDisplayLabel":"Tempo"}]'
+# Tempo veri kaynağı: izden ilgili loglara (aynı organizasyonun Loki veri kaynağı)
+tempo_datasource() {  # tempo_datasource <org id> <loki uid> <log seçici>
+  local body
+  body="{\"uid\":\"tempo\",\"name\":\"Tempo (izler)\",\"type\":\"tempo\",\"access\":\"proxy\",\"url\":\"$TEMPO_URL\",
+    \"jsonData\":{\"nodeGraph\":{\"enabled\":true},\"tracesToLogsV2\":{\"datasourceUid\":\"$2\",\"spanStartTimeShift\":\"-5m\",
+    \"spanEndTimeShift\":\"5m\",\"customQuery\":true,\"query\":\"$3 |= \\\"\${__trace.traceId}\\\"\"}}}"
+  gf POST /api/datasources "$body" "$1" | grep -q '"id"' || gf PUT /api/datasources/uid/tempo "$body" "$1" >/dev/null
+}
+TEMPO_URL=http://tempo.logging.svc.cluster.local:3200
 
 log "Loki -> mgmt/logging"
 rendered=$(cat "$ROOT_DIR/infra/logging/loki.yaml")
 printf '%s' "$rendered" | sed "s|__CONFIG_HASH__|$(printf '%s' "$rendered" | sha256sum | cut -c1-16)|" \
   | kubectl --context "$(ctx mgmt)" apply -f - >/dev/null
 $M rollout status sts/loki --timeout=300s
+
+log "Tempo -> mgmt/logging (11 · tracing)"
+rendered=$(cat "$ROOT_DIR/infra/tracing/tempo.yaml")
+printf '%s' "$rendered" | sed "s|__CONFIG_HASH__|$(printf '%s' "$rendered" | sha256sum | cut -c1-16)|" \
+  | kubectl --context "$(ctx mgmt)" apply -f - >/dev/null
+$M rollout status sts/tempo --timeout=300s
 
 log "Grafana: kategori başına organizasyon, veri kaynağı ve ekip kullanıcısı"
 for i in $(seq 1 60); do
@@ -49,14 +69,20 @@ declare -A USER=([apps]=dev01 [network]=netops01 [security]=soc01 [db]=dba01 [in
 declare -A ORG=()
 ALL=$(echo $LOG_CATEGORIES | tr ' ' '|')
 # Yönetici (Main Org): tüm tenant'lar birlikte; request_id ile bir isteğin tüm zone'lardaki izi
-datasource logs-all "Korelasyon (tüm kategoriler)" "$ALL" 1
-echo "  Main Org: Korelasyon (tenant: $ALL)"
+datasource logs-all "Korelasyon (tüm kategoriler)" "$ALL" 1 "$DERIVED"
+tempo_datasource 1 logs-all '{category=~\".+\"}'
+echo "  Main Org: Korelasyon (tenant: $ALL), Tempo"
 for c in $LOG_CATEGORIES; do
   name="${TITLE[$c]}"
   # Aramalar bulamazsa grep boş döner (pipefail): || true
   org=$(gf GET "/api/orgs/name/$name" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2 || true)
   [[ -z $org ]] && org=$(gf POST /api/orgs "{\"name\":\"$name\"}" | grep -o '"orgId":[0-9]*' | cut -d: -f2 || true)
-  datasource "logs-$c" "$name logları" "$c" "$org"
+  if [[ $c == network ]]; then   # izler tüm kategorileri keser: yalnızca yönetici ve Network
+    datasource "logs-$c" "$name logları" "$c" "$org" "$DERIVED"
+    tempo_datasource "$org" logs-network '{category=\"network\"}'
+  else
+    datasource "logs-$c" "$name logları" "$c" "$org"
+  fi
   u=${USER[$c]}
   uid=$(gf GET "/api/users/lookup?loginOrEmail=$u" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2 || true)
   if [[ -z $uid ]]; then

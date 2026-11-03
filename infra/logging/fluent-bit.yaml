@@ -10,7 +10,9 @@
 #
 # Hacim (ilk sıfırdan kurulumda saniyede ~170 kayıt makineyi CPU'da doyurdu; hedef ~20-30):
 #   - network: hatalı / reddedilen (>= 400), Envoy bayraklı ve "x-log-force" başlıklı istekler hep; başarılı istekler
-#     request_id'ye göre 1/10 (aynı istek tüm proxy'lerde ya hep tutulur ya hep atılır: korelasyon bozulmaz)
+#     yalnızca izi örneklendiyse (traceparent "-01", 11 · tracing: %10). Örnekleme kararı izle birlikte tüm proxy'lere
+#     taşındığı için bir istek her hop'ta ya hep tutulur ya hep atılır; tutulan her başarılı logun Tempo'da izi vardır.
+#     traceparent yoksa request_id'ye göre 1/10
 #   - infra: yalnızca uyarı ve hata satırları
 #   - log / metrik gönderim trafiği access log'a hiç yazılmaz (manifests/*/62-access-log-filter.yaml)
 apiVersion: v1
@@ -200,6 +202,8 @@ data:
       if type(flags) == "string" and flags ~= "-" and flags ~= "" then return true end
       local force = r["log_force"]
       if type(force) == "string" and force ~= "" then return true end
+      local tp = r["traceparent"]
+      if type(tp) == "string" and #tp >= 55 then return tp:sub(-2) == "01" end   -- W3C: ...-<bayraklar>, 01 = izlendi
       return sampled(r["request_id"])
     end
 

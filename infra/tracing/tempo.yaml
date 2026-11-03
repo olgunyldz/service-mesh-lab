@@ -1,0 +1,130 @@
+# Dağıtık iz (11 · tracing): Tempo (ns logging, mgmt). Tek binary, yerel disk, 24 saat. Arayüz Grafana (yönetici ve
+# Network organizasyonu). Gateway ve waypoint'ler izleri OTLP/HTTP (4318) ile gönderir; diğer cluster'lardan yalnızca
+# mgmt ingress gateway üzerinden (mTLS, yalnızca POST /v1/traces). 07b-setup-logging.sh uygular.
+# Sürüm 2.10: 3.x yeni yazma mimarisine geçti (kırıcı değişiklikler); 2.10 serisi bakım görüyor, tek binary oturmuş.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tempo
+  namespace: logging
+data:
+  tempo.yaml: |
+    server:
+      http_listen_port: 3200
+      log_level: warn
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            http:
+              endpoint: 0.0.0.0:4318
+    ingester:
+      max_block_duration: 5m
+    compactor:
+      compaction:
+        block_retention: 24h
+    storage:
+      trace:
+        backend: local
+        wal:
+          path: /var/tempo/wal
+        local:
+          path: /var/tempo/blocks
+    usage_report:
+      reporting_enabled: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tempo
+  namespace: logging
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tempo
+  namespace: logging
+spec:
+  serviceName: tempo
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tempo
+  template:
+    metadata:
+      labels:
+        app: tempo
+      annotations:
+        config-hash: "__CONFIG_HASH__"
+    spec:
+      serviceAccountName: tempo
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tempo
+          image: lab-registry:5000/lab/tempo:2.10.8   # 03b-publish-images.sh (LAB_PULLS)
+          args: ["-config.file=/etc/tempo/tempo.yaml"]
+          ports:
+            - containerPort: 3200
+              name: http
+            - containerPort: 4318
+              name: otlp-http
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3200
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tempo
+              readOnly: true
+            - name: data
+              mountPath: /var/tempo
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: tempo
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tempo
+  namespace: logging
+spec:
+  selector:
+    app: tempo
+  ports:
+    - name: http
+      port: 3200
+    - name: http-otlp
+      port: 4318
